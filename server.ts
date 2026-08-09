@@ -17,14 +17,24 @@ async function startServer() {
   let adminDb: any = null;
   const firebaseAdmin = admin as any;
   try {
-    if (!firebaseAdmin || !firebaseAdmin.apps || !firebaseAdmin.apps.length) {
-      firebaseAdmin.initializeApp({
-        credential: firebaseAdmin.credential.applicationDefault()
-      });
+    if (firebaseAdmin && (!firebaseAdmin.apps || !firebaseAdmin.apps.length)) {
+      if (firebaseAdmin.credential && typeof firebaseAdmin.credential.applicationDefault === 'function') {
+        try {
+          firebaseAdmin.initializeApp({
+            credential: firebaseAdmin.credential.applicationDefault()
+          });
+        } catch {
+          firebaseAdmin.initializeApp();
+        }
+      } else if (typeof firebaseAdmin.initializeApp === 'function') {
+        firebaseAdmin.initializeApp();
+      }
     }
-    adminDb = firebaseAdmin.firestore();
+    if (firebaseAdmin && typeof firebaseAdmin.firestore === 'function' && firebaseAdmin.apps && firebaseAdmin.apps.length) {
+      adminDb = firebaseAdmin.firestore();
+    }
   } catch (err) {
-    console.error("Failed to initialize Firebase Admin (this is expected in some environments):", err);
+    // Graceful fallback if firebase-admin credentials are not present in container
   }
 
   // Let's add a health check endpoint
