@@ -1,0 +1,6 @@
+{
+  "name": "MY BNB লেনদেন",
+  "description": "BNB ম্যানেজমেন্ট কোম্পানি ইনভেস্টর সঞ্চয়, টেলিকম সার্ভিস, করযে হাসানা (সুদমুক্ত ঋণ) এবং ড্যাশবোর্ড প্যানেল পরিচালনা মডিউল",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
