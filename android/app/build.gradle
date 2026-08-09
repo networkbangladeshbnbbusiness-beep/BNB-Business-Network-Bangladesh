@@ -18,7 +18,7 @@ android {
     }
     signingConfigs {
         release {
-            if (System.getenv("RELEASE_KEYSTORE_PASSWORD")) {
+            if (file('release.keystore').exists() && System.getenv("RELEASE_KEYSTORE_PASSWORD")) {
                 storeFile file('release.keystore')
                 storePassword System.getenv("RELEASE_KEYSTORE_PASSWORD")
                 keyAlias System.getenv("RELEASE_KEY_ALIAS")
@@ -30,7 +30,7 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-            if (System.getenv("RELEASE_KEYSTORE_PASSWORD")) {
+            if (file('release.keystore').exists() && System.getenv("RELEASE_KEYSTORE_PASSWORD")) {
                 signingConfig signingConfigs.release
             }
         }

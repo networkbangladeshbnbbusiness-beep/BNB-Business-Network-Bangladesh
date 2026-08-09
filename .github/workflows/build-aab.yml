@@ -35,11 +35,16 @@ jobs:
         run: npx cap sync android
 
       - name: Decode Keystore from Secrets
-        if: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' }}
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
         run: |
-          echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
+          if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
+            echo "Decoding release keystore..."
+            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
+            echo "Keystore decoded successfully."
+          else
+            echo "No RELEASE_KEYSTORE_BASE64 secret provided. Proceeding with standard build."
+          fi
 
       - name: Build Release AAB
         env:
@@ -55,5 +60,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bnb-mobile-banking-aab
-          path: android/app/build/outputs/bundle/release/app-release.aab
+          path: android/app/build/outputs/bundle/release/*.aab
           if-no-files-found: error
