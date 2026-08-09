@@ -4899,7 +4899,13 @@ export default function Dashboard({
                   >
                     {(
                       (liveUser.role === 'admin' || liveUser.role === 'sub_admin') ||
-                      ((liveUser.samityStatus === 'approved' || liveUser.samityApproved === true) && hasCompletedSamityProfile(liveUser))
+                      liveUser.samityStatus === 'approved' ||
+                      liveUser.samityApproved === true ||
+                      liveUser.isSamityMember === true ||
+                      (Number(liveUser.savings) || 0) > 0 ||
+                      (Number(liveUser.dpsBalance) || 0) > 0 ||
+                      (Number(liveUser.monthlySavingsTarget) || 0) > 0 ||
+                      hasCompletedSamityProfile(liveUser)
                     ) ? (
                       <SamityScreen
                         user={liveUser}
@@ -4911,7 +4917,7 @@ export default function Dashboard({
                         appConfig={appConfig}
                         allNotices={allNotices}
                       />
-                    ) : (liveUser.samityStatus === 'pending' && !isReapplyingSamity) ? (
+                    ) : ((liveUser.samityStatus === 'pending' || Boolean(liveUser.samityAppliedAt)) && !isReapplyingSamity) ? (
                       <div className="p-4 sm:p-6 max-w-2xl mx-auto">
                         <div className="bg-white rounded-3xl border border-slate-150 overflow-hidden shadow-xl mt-6 text-left">
                           <div className="bg-gradient-to-r from-amber-500 to-amber-600 p-6 text-white relative overflow-hidden">

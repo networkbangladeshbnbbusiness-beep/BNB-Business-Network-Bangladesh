@@ -19,11 +19,11 @@ jobs:
           node-version: 22
           cache: 'npm'
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
@@ -39,6 +39,9 @@ jobs:
       - name: Sync Capacitor Android
         run: npx cap sync android
 
+      - name: Make Gradlew Executable
+        run: chmod +x android/gradlew
+
       - name: Setup Keystore
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
@@ -52,6 +55,7 @@ jobs:
               -keystore android/app/release.keystore \
               -alias bnbkey \
               -keyalg RSA -keysize 2048 -validity 10000 \
+              -storetype PKCS12 \
               -storepass android -keypass android \
               -dname "CN=BNB Bangladesh, OU=BNB, O=BNB, L=Dhaka, ST=Dhaka, C=BD"
           fi
@@ -63,7 +67,7 @@ jobs:
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD || 'android' }}
         run: |
           cd android
-          gradle bundleRelease --stacktrace
+          ./gradlew bundleRelease --stacktrace
 
       - name: Upload AAB Artifact
         uses: actions/upload-artifact@v4

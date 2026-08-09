@@ -16,25 +16,23 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
     signingConfigs {
         release {
-            if (file('release.keystore').exists() && file('release.keystore').length() > 0) {
-                storeFile file('release.keystore')
-                storePassword(System.getenv("RELEASE_KEYSTORE_PASSWORD") ?: "android")
-                keyAlias(System.getenv("RELEASE_KEY_ALIAS") ?: "bnbkey")
-                keyPassword(System.getenv("RELEASE_KEY_PASSWORD") ?: "android")
-            }
+            storeFile file('release.keystore')
+            storePassword(System.getenv("RELEASE_KEYSTORE_PASSWORD") ?: "android")
+            keyAlias(System.getenv("RELEASE_KEY_ALIAS") ?: "bnbkey")
+            keyPassword(System.getenv("RELEASE_KEY_PASSWORD") ?: "android")
         }
     }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-            if (file('release.keystore').exists() && file('release.keystore').length() > 0) {
-                signingConfig signingConfigs.release
-            } else {
-                signingConfig signingConfigs.debug
-            }
+            signingConfig signingConfigs.release
         }
     }
     lint {

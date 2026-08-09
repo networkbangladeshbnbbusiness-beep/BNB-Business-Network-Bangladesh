@@ -874,7 +874,7 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
                       ? 'CORPORATE ADMIN (ডিরেক্টর)' 
                       : user.role === 'sub_admin'
                       ? 'SUB ADMIN (সহকারী এডমিন)'
-                      : (user.samityStatus === 'approved' || user.samityApproved === true) && hasCompletedSamityProfile(user)
+                      : (user.samityStatus === 'approved' || user.samityApproved === true || user.isSamityMember === true)
                       ? 'COOPERATIVE INVESTOR MEMBER (সমবায় ইনভেস্টর সদস্য)'
                       : user.samityStatus === 'pending'
                       ? 'GENERAL MEMBER (সমবায় আবেদন পেন্ডিং)'

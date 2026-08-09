@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously } from 'firebase/auth';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore';
+import { initializeFirestore } from 'firebase/firestore';
 import { getMessaging } from 'firebase/messaging';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -9,7 +9,6 @@ const app = initializeApp(firebaseConfig);
 const TARGET_DATABASE_ID = "ai-studio-120ec6e1-2db5-45d2-b1b1-46493400c959";
 
 export const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
   experimentalAutoDetectLongPolling: true
 }, TARGET_DATABASE_ID); /* CRITICAL: The app will break without this line */
 

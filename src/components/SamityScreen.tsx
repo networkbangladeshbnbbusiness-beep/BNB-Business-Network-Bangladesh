@@ -151,6 +151,7 @@ export default function SamityScreen({
   }, [activeSubView, bottomTab]);
 
   // Ledger lists fetched from db
+  const [liveDbUsers, setLiveDbUsers] = useState<User[]>([]);
   const [userTxHistory, setUserTxHistory] = useState<Transaction[]>([]);
   const [loadingTx, setLoadingTx] = useState(false);
   const [showSectionTxHistory, setShowSectionTxHistory] = useState(false);
@@ -162,6 +163,80 @@ export default function SamityScreen({
   const [samityAutoSavingsActive, setSamityAutoSavingsActive] = useState<boolean>(
     user.samityAutoSavingsActive !== undefined ? user.samityAutoSavingsActive : true
   );
+
+  useEffect(() => {
+    let rawUsersList: User[] = [];
+    let rawSamityAppsList: any[] = [];
+
+    const syncCombined = () => {
+      const usersMap = new Map<string, User>();
+      rawUsersList.forEach(u => {
+        const key = u.uid || (u as any).id;
+        if (key) {
+          usersMap.set(key, { ...u });
+        }
+      });
+
+      rawSamityAppsList.forEach(app => {
+        const key = app.userId || app.uid || app.id || app.docId;
+        if (key) {
+          if (usersMap.has(key)) {
+            const existing = usersMap.get(key)!;
+            if (app.savings) existing.savings = Math.max(Number(existing.savings) || 0, Number(app.savings) || 0);
+            if (app.dpsBalance) existing.dpsBalance = Math.max(Number(existing.dpsBalance) || 0, Number(app.dpsBalance) || 0);
+            if (app.nomineeName) existing.nomineeName = app.nomineeName;
+            if (app.nomineePhone) existing.nomineePhone = app.nomineePhone;
+            if (app.monthlySavingsTarget) existing.monthlySavingsTarget = app.monthlySavingsTarget;
+            if (app.samityStatus === 'approved' || app.status === 'approved' || app.approved === true) {
+              existing.samityStatus = 'approved';
+              existing.samityApproved = true;
+            }
+          } else {
+            const isApproved = app.approved === true || app.status === 'approved' || app.samityStatus === 'approved';
+            const newUser: User = {
+              uid: key,
+              name: app.name || 'সদস্য আবেদনকারী',
+              phone: app.phone || '',
+              memberId: app.memberId || '',
+              pin: app.pin || '1234',
+              role: 'user',
+              balance: app.balance || 0,
+              savings: app.savings || 0,
+              dpsBalance: app.dpsBalance || 0,
+              dueLoan: app.dueLoan || 0,
+              createdAt: app.createdAt || new Date().toISOString(),
+              samityStatus: isApproved ? 'approved' : (app.status || 'pending'),
+              samityApproved: isApproved,
+              approved: isApproved,
+              status: isApproved ? 'active' : 'inactive'
+            };
+            usersMap.set(key, newUser);
+          }
+        }
+      });
+
+      setLiveDbUsers(Array.from(usersMap.values()));
+    };
+
+    const unsubUsers = onSnapshot(collection(db, 'users'), (snap) => {
+      rawUsersList = snap.docs.map(doc => ({ uid: doc.id, ...doc.data() } as User));
+      syncCombined();
+    }, (err) => {
+      console.error("Error fetching live users for Samity summary:", err);
+    });
+
+    const unsubSamityApps = onSnapshot(collection(db, 'samity_applications'), (snap) => {
+      rawSamityAppsList = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      syncCombined();
+    }, (err) => {
+      console.error("Error fetching live samity applications for Samity summary:", err);
+    });
+
+    return () => {
+      unsubUsers();
+      unsubSamityApps();
+    };
+  }, []);
 
   useEffect(() => {
     if (user.samityAutoSavingsActive !== undefined) {
@@ -2307,29 +2382,45 @@ export default function SamityScreen({
   const filteredUsers = searchTerm.trim() ? dbSearchResults : allUsers;
 
   // Dynamic values computation specifically for Samity investors, Samity deposits, and Samity profits
-  const isCapped = allUsers.length >= 150;
-  
-  // Filter members who are active Samity investors (pay monthly savings / have savings/DPS balance / active auto-savings)
-  const samityInvestorsList = allUsers.filter(u => 
-    (u.savings && u.savings > 0) || 
-    (u.dpsBalance && u.dpsBalance > 0) || 
-    u.samityAutoSavingsActive || 
-    (u.monthlySavingsTarget && u.monthlySavingsTarget > 0)
+  const membersToUse = liveDbUsers.length > 0 ? liveDbUsers : (allUsers.length > 0 ? allUsers : [user]);
+
+  // Unified helper matching Admin Panel Samity user definition
+  const isSamityMemberUser = (u: any) => Boolean(
+    u.samityApproved === true ||
+    u.samityStatus === 'approved' ||
+    u.samitySchemeActive === true ||
+    u.samityAutoSavingsActive === true ||
+    u.isSamityMember === true ||
+    (Number(u.savings) || 0) > 0 ||
+    (Number(u.dpsBalance) || 0) > 0 ||
+    (Number(u.shares) || 0) > 0 ||
+    (Number(u.monthlySavingsTarget) || 0) > 0
   );
-  const rawSamityInvestorCount = samityInvestorsList.length > 0 ? samityInvestorsList.length : allUsers.length;
-  const activeMembersNum = isCapped ? Math.max(54320, rawSamityInvestorCount * 362) : rawSamityInvestorCount;
 
-  // Total deposits in Samity across all members (savings + dpsBalance)
-  const rawSamityDeposits = allUsers.reduce((sum, u) => sum + (u.savings || 0) + (u.dpsBalance || 0), 0);
-  const totalCompanyDeposits = isCapped 
-    ? Math.max(12450300, rawSamityDeposits * 362) 
-    : rawSamityDeposits;
+  // Filter members who are registered / enrolled in Samity
+  const samityMembersList = membersToUse.filter(isSamityMemberUser);
 
-  // Total profits generated/distributed in Samity across all members (profitsBalance)
-  const rawSamityProfits = allUsers.reduce((sum, u) => sum + (u.profitsBalance || 0), 0);
-  const totalCompanyProfits = isCapped 
-    ? Math.max(3452100, rawSamityProfits * 362) 
-    : rawSamityProfits;
+  // Real Samity member count (fallback to membersToUse if filter hasn't flagged users yet)
+  const activeMembersNum = samityMembersList.length > 0 ? samityMembersList.length : membersToUse.length;
+
+  // Calculated deposits in Samity across members (savings + dpsBalance ONLY - main balance excluded)
+  const calculatedDeposits = membersToUse.reduce((sum, u) => {
+    const isSelf = u.uid === user.uid;
+    const s = isSelf ? Math.max(Number(u.savings) || 0, Number(user.savings) || 0) : (Number(u.savings) || 0);
+    const d = isSelf ? Math.max(Number(u.dpsBalance) || 0, Number(user.dpsBalance) || 0) : (Number(u.dpsBalance) || 0);
+    return sum + s + d;
+  }, 0);
+
+  // Sync with manual override from Admin Panel appConfig if set
+  const manualFundVal = appConfig?.manualFundAdjustments?.['samity_fund'];
+  const totalCompanyDeposits = (manualFundVal !== undefined && manualFundVal !== null && typeof manualFundVal === 'number' && !isNaN(manualFundVal))
+    ? manualFundVal
+    : calculatedDeposits;
+
+  // Real total profits generated/distributed in Samity across all members (profitsBalance)
+  const totalCompanyProfits = membersToUse.reduce((sum, u) => {
+    return sum + (Number(u.profitsBalance) || 0);
+  }, 0);
 
   // Render format helpers
   const renderBalanceValue = (val: number) => {
@@ -3341,57 +3432,6 @@ export default function SamityScreen({
               </div>
             </div>
 
-            {/* 7. Recent Activities (৭. সাম্প্রতিক কার্যক্রম) */}
-            <div className="bg-white border border-slate-150 rounded-3xl p-4 text-left space-y-3.5 shadow-2xs relative">
-              <div className="flex justify-between items-center pb-2 border-b border-slate-100">
-                <h4 className="text-[12.5px] font-black text-slate-800 flex items-center gap-1.5 leading-none">
-                  <Clock className="w-4 h-4 text-slate-500" />
-                  সাম্প্রতিক কার্যক্রম
-                </h4>
-                
-                <button 
-                  onClick={() => setBottomTab('report')}
-                  className="text-[10px] text-teal-700 font-extrabold hover:text-teal-800 transition"
-                >
-                  সব দেখুন
-                </button>
-              </div>
-
-              {/* Transactions logs */}
-              {loadingTx ? (
-                <div className="py-7 text-center text-xs text-slate-400 flex items-center justify-center gap-1.5 font-bold">
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" /> লোড হচ্ছে...
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {/* Dynamic user transaction rows or fallback blueprint replicas if history is empty */}
-                  {userTxHistory.length > 0 ? (
-                    userTxHistory.slice(0, 5).map((tx, idx) => (
-                      <div key={`${tx.id}-${idx}`} className="p-2.5 bg-slate-50 border border-slate-100 rounded-2xl flex justify-between items-center text-xs shadow-4xs">
-                        <div className="flex items-center gap-2">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                            tx.type === 'deposit' ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'
-                          }`}>
-                            {tx.type === 'deposit' ? <Plus className="w-4 h-4 stroke-[3]" /> : <ArrowDown className="w-4 h-4" />}
-                          </div>
-                          <div>
-                            <span className="font-black text-slate-800 block text-[11px] leading-tight">{tx.typeLabel || 'বিকাশ ডিপিএস'}</span>
-                            <span className="text-[9.5px] text-slate-400 block mt-0.5 italic">{(tx.status === 'success' || tx.status === 'approved') ? 'সফল' : 'রিভিউ অপেক্ষারত'} • {new Date(tx.createdAt).toLocaleDateString('bn-BD')}</span>
-                          </div>
-                        </div>
-                        <span className="font-sans font-black text-slate-800 text-xs text-right">৳{tx.amount.toLocaleString('bn-BD')}</span>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="py-7 text-center text-xs text-slate-400 font-bold">
-                      কোনো সাম্প্রতিক কার্যক্রম পাওয়া যায়নি।
-                    </div>
-                  )}
-
-                </div>
-              )}
-            </div>
-
             {/* 8. Samity Summary (৮. সমিতি সারাংশ) - Horizontal 3-column Samity replica cards */}
             <div className="bg-white border border-slate-150 rounded-2xl p-3 text-left shadow-2xs space-y-2.5 w-full">
               <h4 className="text-[10px] font-black text-emerald-800 tracking-wider uppercase leading-none flex items-center gap-1">
@@ -3406,7 +3446,7 @@ export default function SamityScreen({
                   <span className="block text-[8px] text-emerald-800 font-extrabold mb-0.5 uppercase truncate w-full">সমিতি সদস্য</span>
                   <div className="flex items-center justify-center gap-1">
                     <Users className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                    <strong className="text-[11px] font-black text-slate-900 truncate">{activeMembersNum.toLocaleString('bn-BD')} জন</strong>
+                    <strong className="text-[11px] font-black text-slate-900 truncate">{Math.round(activeMembersNum).toLocaleString('bn-BD')} জন</strong>
                   </div>
                   <span className="text-[7.5px] text-emerald-700 font-bold block mt-0.5 truncate">মাসিক ইনভেস্টার</span>
                 </div>

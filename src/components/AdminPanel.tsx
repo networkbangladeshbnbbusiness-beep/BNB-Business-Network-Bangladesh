@@ -58,6 +58,8 @@ import {
   AlertTriangle,
   AlertCircle,
   UserCheck,
+  ChevronDown,
+  SlidersHorizontal,
   CheckSquare,
   Save,
   Zap,
@@ -2231,7 +2233,10 @@ export default function AdminPanel({
   const [showHeaderMembersModal, setShowHeaderMembersModal] = useState(false);
   const [headerMembersSearch, setHeaderMembersSearch] = useState('');
   const [headerMembersRoleFilter, setHeaderMembersRoleFilter] = useState<'all' | 'member' | 'admin'>('all');
-  const [headerMembersSortOrder, setHeaderMembersSortOrder] = useState<'balance_desc' | 'balance_asc' | 'id_asc' | 'id_desc' | 'newest'>('id_asc');
+  const [headerMembersSortOrder, setHeaderMembersSortOrder] = useState<
+    'main_balance_desc' | 'samity_balance_desc' | 'telecom_balance_desc' | 'balance_desc' | 'balance_asc' | 'id_asc' | 'id_desc' | 'newest'
+  >('id_asc');
+  const [showSortPickerModal, setShowSortPickerModal] = useState(false);
 
   const [showHeaderPendingModal, setShowHeaderPendingModal] = useState(false);
   const [headerPendingTab, setHeaderPendingTab] = useState<'all' | 'add_money' | 'withdraw' | 'telecom' | 'loan' | 'other'>('all');
@@ -10295,8 +10300,19 @@ export default function AdminPanel({
 
             {/* Quick Statistics Row */}
             {(() => {
-              const samityRegisteredUsers = users.filter(u => u.samityStatus === 'approved' || u.samitySchemeActive === true || (u.savings && u.savings > 0) || (u.shares && u.shares > 0));
-              const generalAppUsers = users.filter(u => !(u.samityStatus === 'approved' || u.samitySchemeActive === true || (u.savings && u.savings > 0) || (u.shares && u.shares > 0)) && u.samityStatus !== 'pending' && u.approved !== false);
+              const isSamityMemberUser = (u: any) => Boolean(
+                u.samityApproved === true ||
+                u.samityStatus === 'approved' ||
+                u.samitySchemeActive === true ||
+                u.samityAutoSavingsActive === true ||
+                u.isSamityMember === true ||
+                (Number(u.savings) || 0) > 0 ||
+                (Number(u.dpsBalance) || 0) > 0 ||
+                (Number(u.shares) || 0) > 0 ||
+                (Number(u.monthlySavingsTarget) || 0) > 0
+              );
+              const samityRegisteredUsers = users.filter(isSamityMemberUser);
+              const generalAppUsers = users.filter(u => !isSamityMemberUser(u) && u.samityStatus !== 'pending' && u.approved !== false);
               const samityPendingUsers = users.filter(u => u.samityStatus === 'pending' || u.approved === false);
 
               return (
@@ -10726,8 +10742,20 @@ export default function AdminPanel({
 
             {/* Filter and Search Section for Directory */}
             {(() => {
-              const samityRegisteredCount = users.filter(u => u.samityStatus === 'approved' || u.samitySchemeActive === true || (u.savings && u.savings > 0) || (u.shares && u.shares > 0)).length;
-              const generalAppCount = users.filter(u => !(u.samityStatus === 'approved' || u.samitySchemeActive === true || (u.savings && u.savings > 0) || (u.shares && u.shares > 0)) && u.samityStatus !== 'pending' && u.approved !== false).length;
+              const isSamityMemberUser = (u: any) => Boolean(
+                u.samityApproved === true ||
+                u.samityStatus === 'approved' ||
+                u.samitySchemeActive === true ||
+                u.samityAutoSavingsActive === true ||
+                u.isSamityMember === true ||
+                (Number(u.savings) || 0) > 0 ||
+                (Number(u.dpsBalance) || 0) > 0 ||
+                (Number(u.shares) || 0) > 0 ||
+                (Number(u.monthlySavingsTarget) || 0) > 0
+              );
+
+              const samityRegisteredCount = users.filter(isSamityMemberUser).length;
+              const generalAppCount = users.filter(u => !isSamityMemberUser(u) && u.samityStatus !== 'pending' && u.approved !== false).length;
               const samityPendingCount = users.filter(u => u.samityStatus === 'pending' || u.approved === false).length;
 
               return (
@@ -10779,7 +10807,7 @@ export default function AdminPanel({
                     {(() => {
                       const filtered = users
                         .filter((u) => {
-                          const isSamity = u.samityStatus === 'approved' || u.samitySchemeActive === true || (u.savings && u.savings > 0) || (u.shares && u.shares > 0);
+                          const isSamity = isSamityMemberUser(u);
                           const isPending = u.samityStatus === 'pending' || u.approved === false;
 
                           if (generalMemberFilterTab === 'samity' && !isSamity) return false;
@@ -10827,7 +10855,7 @@ export default function AdminPanel({
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 sm:gap-3">
                           {filtered.map((u, idx) => {
                             const isAgentUser = Boolean(u.role === 'agent' || (u as any).isAgent || (u as any).agentApproved || adminAgentRequests.some(r => r.phone === u.phone && r.status === 'approved'));
-                            const isSamityUser = u.samityStatus === 'approved' || u.samitySchemeActive === true || (u.savings && u.savings > 0) || (u.shares && u.shares > 0);
+                            const isSamityUser = isSamityMemberUser(u);
                             const isPendingUser = u.samityStatus === 'pending' || u.approved === false;
 
                             let cardTheme = 'bg-sky-50/60 hover:bg-sky-50/90 border-sky-200 hover:border-sky-400 border-l-4 border-l-sky-600 shadow-2xs';
@@ -19602,8 +19630,8 @@ export default function AdminPanel({
                         required
                       >
                         <option value="">-- সদস্য নির্বাচন করুন --</option>
-                        {users.map(u => (
-                          <option key={u.uid} value={u.uid}>
+                        {users.map((u, idx) => (
+                          <option key={`${u.uid || u.id}-${idx}`} value={u.uid}>
                             {u.name} ({u.memberId || u.phone}) - ওয়ালেট ৳{(u.balance || 0).toLocaleString()}
                           </option>
                         ))}
@@ -19710,8 +19738,8 @@ export default function AdminPanel({
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-800 outline-none focus:ring-1 focus:ring-rose-500"
                       >
                         <option value="">-- নগদ/বাহ্যিক দাতা (অজ্ঞাত) --</option>
-                        {users.map(u => (
-                          <option key={u.uid} value={u.uid}>
+                        {users.map((u, idx) => (
+                          <option key={`${u.uid || u.id}-${idx}`} value={u.uid}>
                             {u.name} ({u.memberId || u.phone})
                           </option>
                         ))}
@@ -25050,7 +25078,7 @@ export default function AdminPanel({
 
                           return (
                             <div 
-                              key={tx.id || `mtx-${idx}`}
+                              key={`${tx.id || 'mtx'}-${idx}`}
                               className="bg-slate-950/80 border border-slate-800 hover:border-slate-700 p-3.5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs transition"
                             >
                               <div className="space-y-1 min-w-0 flex-1">
@@ -29081,7 +29109,7 @@ export default function AdminPanel({
 
       {/* 1. HEADER TOTAL MEMBERS LIST MODAL (FULL SCREEN) */}
       {showHeaderMembersModal && (
-        <div className="fixed inset-0 z-[1300] bg-slate-950 flex flex-col w-full h-full text-left overflow-hidden animate-fade-in font-sans">
+        <div className="fixed inset-0 z-[100000] bg-slate-900 flex flex-col w-screen h-screen min-h-screen text-left overflow-hidden animate-fade-in font-sans p-0 m-0">
           <div className="bg-slate-50 w-full h-full flex flex-col overflow-hidden font-sans">
             
             {/* Modal Top Banner */}
@@ -29171,21 +29199,25 @@ export default function AdminPanel({
                     </button>
                   </div>
 
-                  {/* Sort Order Selector */}
-                  <div className="flex items-center gap-1.5 bg-slate-100 px-2 py-1 rounded-xl">
-                    <span className="text-[11px] font-black text-slate-600 shrink-0">সাজান:</span>
-                    <select
-                      value={headerMembersSortOrder}
-                      onChange={(e: any) => setHeaderMembersSortOrder(e.target.value)}
-                      className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold text-slate-800 outline-none focus:ring-1 focus:ring-[#009273] cursor-pointer shadow-2xs"
-                    >
-                      <option value="balance_desc">💰 টাকা বেশি ➔ কম (সর্বোচ্চ টাকা উপরে)</option>
-                      <option value="balance_asc">💸 টাকা কম ➔ বেশি</option>
-                      <option value="id_asc">🔢 সিরিয়াল নম্বর (১ ➔ N)</option>
-                      <option value="id_desc">🔢 উল্টো সিরিয়াল (N ➔ ১)</option>
-                      <option value="newest">🕒 নতুন সদস্য প্রথমে</option>
-                    </select>
-                  </div>
+                  {/* Sort Order Selector Button (Opens Full Screen / Bottom Sheet Picker) */}
+                  <button
+                    type="button"
+                    onClick={() => setShowSortPickerModal(true)}
+                    className="flex items-center gap-1.5 bg-[#009273]/10 hover:bg-[#009273]/20 border border-[#009273]/30 px-3 py-1.5 rounded-xl text-xs font-black text-slate-800 transition cursor-pointer shadow-2xs"
+                  >
+                    <span className="text-slate-600 font-bold">সাজান:</span>
+                    <span className="text-[#009273] font-extrabold flex items-center gap-1">
+                      {headerMembersSortOrder === 'main_balance_desc' && '💵 মেইন ব্যালেন্স (বেশি ➔ কম)'}
+                      {headerMembersSortOrder === 'samity_balance_desc' && '🏦 সমবায় সমিতি ব্যালেন্স (বেশি ➔ কম)'}
+                      {headerMembersSortOrder === 'telecom_balance_desc' && '📱 রিচার্জ ব্যালেন্স (বেশি ➔ কম)'}
+                      {headerMembersSortOrder === 'balance_desc' && '💰 সর্বমোট টাকা (বেশি ➔ কম)'}
+                      {headerMembersSortOrder === 'balance_asc' && '💸 সর্বমোট টাকা (কম ➔ বেশি)'}
+                      {headerMembersSortOrder === 'id_asc' && '🔢 সিরিয়াল নম্বর (১ ➔ N)'}
+                      {headerMembersSortOrder === 'id_desc' && '🔢 উল্টো সিরিয়াল (N ➔ ১)'}
+                      {headerMembersSortOrder === 'newest' && '🕒 নতুন সদস্য প্রথমে'}
+                      <ChevronDown className="w-3.5 h-3.5 text-[#009273]" />
+                    </span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -29208,19 +29240,28 @@ export default function AdminPanel({
                 });
 
                 const sorted = [...filtered].sort((a, b) => {
-                  const totA = (Number(a.balance) || 0) + (Number(a.savings) || 0) + (Number(a.telecomBalance) || 0) + (Number(a.superShopBalance) || 0);
-                  const totB = (Number(b.balance) || 0) + (Number(b.savings) || 0) + (Number(b.telecomBalance) || 0) + (Number(b.superShopBalance) || 0);
+                  const mainA = Number(a.balance) || 0;
+                  const mainB = Number(b.balance) || 0;
 
-                  if (headerMembersSortOrder === 'balance_desc') {
+                  const samityA = (Number(a.savings) || 0) + (Number(a.dpsBalance) || 0);
+                  const samityB = (Number(b.savings) || 0) + (Number(b.dpsBalance) || 0);
+
+                  const telecomA = Number(a.telecomBalance) || 0;
+                  const telecomB = Number(b.telecomBalance) || 0;
+
+                  const totA = mainA + samityA + telecomA + (Number(a.superShopBalance) || 0);
+                  const totB = mainB + samityB + telecomB + (Number(b.superShopBalance) || 0);
+
+                  if (headerMembersSortOrder === 'main_balance_desc') {
+                    if (mainB !== mainA) return mainB - mainA;
+                  } else if (headerMembersSortOrder === 'samity_balance_desc') {
+                    if (samityB !== samityA) return samityB - samityA;
+                  } else if (headerMembersSortOrder === 'telecom_balance_desc') {
+                    if (telecomB !== telecomA) return telecomB - telecomA;
+                  } else if (headerMembersSortOrder === 'balance_desc') {
                     if (totB !== totA) return totB - totA;
-                    const numA = parseInt((a.memberId || '').replace(/\D/g, ''), 10) || 0;
-                    const numB = parseInt((b.memberId || '').replace(/\D/g, ''), 10) || 0;
-                    return numA - numB;
                   } else if (headerMembersSortOrder === 'balance_asc') {
                     if (totA !== totB) return totA - totB;
-                    const numA = parseInt((a.memberId || '').replace(/\D/g, ''), 10) || 0;
-                    const numB = parseInt((b.memberId || '').replace(/\D/g, ''), 10) || 0;
-                    return numA - numB;
                   } else if (headerMembersSortOrder === 'id_asc') {
                     const isMainAdminA = a.uid === 'admin_master' || a.phone === '+8800011112222' || a.memberId === 'MAIN_ADMIN';
                     const isMainAdminB = b.uid === 'admin_master' || b.phone === '+8800011112222' || b.memberId === 'MAIN_ADMIN';
@@ -29413,13 +29454,78 @@ export default function AdminPanel({
               </button>
             </div>
 
+            {/* Sort Picker Selection Bottom Sheet Modal */}
+            {showSortPickerModal && (
+              <div className="fixed inset-0 z-[100001] bg-black/70 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-fade-in font-sans">
+                <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-4 sm:p-5 text-left space-y-3.5 shadow-2xl border border-slate-100 max-h-[85vh] flex flex-col">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3 shrink-0">
+                    <h4 className="text-sm font-black text-slate-800 flex items-center gap-2">
+                      <SlidersHorizontal className="w-4 h-4 text-[#009273]" />
+                      <span>সদস্যদের তালিকা ফিল্টার ও ক্রমানুসারে সাজান</span>
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => setShowSortPickerModal(false)}
+                      className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-sm cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  <p className="text-xs text-slate-500 font-bold leading-relaxed">
+                    কোন ক্রমানুসারে মেম্বারদের ফিল্টার করতে চান তা নির্বাচন করুন:
+                  </p>
+
+                  <div className="space-y-2 overflow-y-auto flex-1 pr-1">
+                    {[
+                      { id: 'main_balance_desc', label: '💵 মেইন ব্যালেন্স (বেশি ➔ কম)', sub: 'সর্বোচ্চ মেইন ব্যালেন্স উপরে থাকবে' },
+                      { id: 'samity_balance_desc', label: '🏦 সমবায় সমিতি ব্যালেন্স (বেশি ➔ কম)', sub: 'সর্বোচ্চ সমবায় সঞ্চয়ী ব্যালেন্স উপরে থাকবে' },
+                      { id: 'telecom_balance_desc', label: '📱 রিচার্জ ব্যালেন্স (বেশি ➔ কম)', sub: 'সর্বোচ্চ রিচার্জ/টেলিকম ব্যালেন্স উপরে থাকবে' },
+                      { id: 'balance_desc', label: '💰 সর্বমোট টাকা (বেশি ➔ কম)', sub: 'সকল ব্যালেন্স মিলিয়ে সর্বোচ্চ টাকা উপরে' },
+                      { id: 'balance_asc', label: '💸 সর্বমোট টাকা (কম ➔ বেশি)', sub: 'কম টাকা হতে বেশি টাকা ক্রমানুসারে' },
+                      { id: 'id_asc', label: '🔢 সিরিয়াল নম্বর (১ ➔ N)', sub: 'মেম্বার আইডি সিরিয়াল অনুযায়ী' },
+                      { id: 'id_desc', label: '🔢 উল্টো সিরিয়াল (N ➔ ১)', sub: 'সর্বশেষ বা সর্বোচ্চ আইডি উপরে' },
+                      { id: 'newest', label: '🕒 নতুন সদস্য প্রথমে', sub: 'সর্বশেষ নিবন্ধিত নতুন মেম্বার প্রথমে' },
+                    ].map((opt) => {
+                      const isSelected = headerMembersSortOrder === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => {
+                            setHeaderMembersSortOrder(opt.id as any);
+                            setShowSortPickerModal(false);
+                          }}
+                          className={`w-full text-left p-3.5 rounded-2xl border text-xs font-black flex items-center justify-between transition cursor-pointer ${
+                            isSelected
+                              ? 'bg-emerald-50/80 border-[#009273] text-emerald-950 shadow-xs'
+                              : 'bg-slate-50 border-slate-200/80 text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          <div>
+                            <span className="block text-xs font-black">{opt.label}</span>
+                            <span className="block text-[10px] text-slate-400 font-bold mt-0.5">{opt.sub}</span>
+                          </div>
+                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                            isSelected ? 'border-[#009273] bg-[#009273]' : 'border-slate-300'
+                          }`}>
+                            {isSelected && <div className="w-2 h-2 rounded-full bg-white" />}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
           </div>
         </div>
       )}
 
       {/* 2. HEADER TRANSACTIONS & REQUESTS PROCESSING CENTER MODAL (FULL SCREEN) */}
       {showHeaderPendingModal && (
-        <div className="fixed inset-0 z-[1300] bg-slate-950 flex flex-col w-full h-full text-left overflow-hidden animate-fade-in font-sans">
+        <div className="fixed inset-0 z-[100000] bg-slate-900 flex flex-col w-screen h-screen min-h-screen text-left overflow-hidden animate-fade-in font-sans p-0 m-0">
           <div className="bg-slate-50 w-full h-full flex flex-col overflow-hidden font-sans">
             
             {/* Modal Top Banner */}

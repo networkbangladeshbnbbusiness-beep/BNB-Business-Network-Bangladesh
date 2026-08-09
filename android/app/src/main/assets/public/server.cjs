@@ -36,14 +36,23 @@ async function startServer() {
   let adminDb = null;
   const firebaseAdmin = import_firebase_admin.default;
   try {
-    if (!firebaseAdmin || !firebaseAdmin.apps || !firebaseAdmin.apps.length) {
-      firebaseAdmin.initializeApp({
-        credential: firebaseAdmin.credential.applicationDefault()
-      });
+    if (firebaseAdmin && (!firebaseAdmin.apps || !firebaseAdmin.apps.length)) {
+      if (firebaseAdmin.credential && typeof firebaseAdmin.credential.applicationDefault === "function") {
+        try {
+          firebaseAdmin.initializeApp({
+            credential: firebaseAdmin.credential.applicationDefault()
+          });
+        } catch {
+          firebaseAdmin.initializeApp();
+        }
+      } else if (typeof firebaseAdmin.initializeApp === "function") {
+        firebaseAdmin.initializeApp();
+      }
     }
-    adminDb = firebaseAdmin.firestore();
+    if (firebaseAdmin && typeof firebaseAdmin.firestore === "function" && firebaseAdmin.apps && firebaseAdmin.apps.length) {
+      adminDb = firebaseAdmin.firestore();
+    }
   } catch (err) {
-    console.error("Failed to initialize Firebase Admin (this is expected in some environments):", err);
   }
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", appName: "BNB Business Network Bangladesh" });
