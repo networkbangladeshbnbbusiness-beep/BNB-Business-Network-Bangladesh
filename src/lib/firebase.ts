@@ -9,7 +9,7 @@ const app = initializeApp(firebaseConfig);
 const TARGET_DATABASE_ID = "ai-studio-120ec6e1-2db5-45d2-b1b1-46493400c959";
 
 export const db = initializeFirestore(app, {
-  experimentalAutoDetectLongPolling: true
+  experimentalForceLongPolling: true
 }, TARGET_DATABASE_ID); /* CRITICAL: The app will break without this line */
 
 export const auth = getAuth(app);
