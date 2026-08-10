@@ -67,6 +67,7 @@ jobs:
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD || 'android' }}
         run: |
           cd android
+          gradle wrapper --gradle-version 8.11.1
           ./gradlew bundleRelease --stacktrace
 
       - name: Upload AAB Artifact
