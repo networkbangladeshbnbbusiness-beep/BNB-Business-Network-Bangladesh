@@ -1,19 +1,17 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously } from 'firebase/auth';
-import { initializeFirestore } from 'firebase/firestore';
+import { getFirestore } from 'firebase/firestore';
 import { getMessaging } from 'firebase/messaging';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
-const TARGET_DATABASE_ID = "ai-studio-120ec6e1-2db5-45d2-b1b1-46493400c959";
+const TARGET_DATABASE_ID = firebaseConfig.firestoreDatabaseId || "ai-studio-120ec6e1-2db5-45d2-b1b1-46493400c959";
 
-export const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true
-}, TARGET_DATABASE_ID); /* CRITICAL: The app will break without this line */
+export const db = getFirestore(app, TARGET_DATABASE_ID); /* CRITICAL: The app will break without this line */
 
 export const auth = getAuth(app);
-export const messaging = getMessaging(app);
+export const messaging = typeof window !== 'undefined' ? getMessaging(app) : null;
 
 // Sign in anonymously to bootstrap Auth UID so security rules resolve correctly
 let fallbackUid: string | null = null;

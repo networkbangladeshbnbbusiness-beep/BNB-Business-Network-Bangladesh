@@ -2404,7 +2404,7 @@ export default function Dashboard({
               }
 
               senderNewBal = currentBalanceSender - amt;
-              transaction.update(senderRef, { balance: senderNewBal });
+              transaction.update(senderRef, { balance: senderNewBal, mainBalance: senderNewBal });
 
               if (isSamityVirtualTarget) {
                 // Credit to Receiver's SAMITY / SAVINGS balance!
@@ -2412,12 +2412,12 @@ export default function Dashboard({
                 receiverNewBal = currentSavingsReceiver + amt;
                 const existingPaidMonths: string[] = rData.samityPaidMonths || [];
                 const updatedPaidMonths = Array.from(new Set([...existingPaidMonths, ...sendMoneySelectedMonths]));
-                transaction.update(receiverRef, { savings: receiverNewBal, samityPaidMonths: updatedPaidMonths });
+                transaction.update(receiverRef, { savings: receiverNewBal, dpsBalance: receiverNewBal, samityPaidMonths: updatedPaidMonths });
               } else {
                 // Credit to Receiver's MAIN balance!
                 const currentBalanceReceiver = rData.balance || 0;
                 receiverNewBal = currentBalanceReceiver + amt;
-                transaction.update(receiverRef, { balance: receiverNewBal });
+                transaction.update(receiverRef, { balance: receiverNewBal, mainBalance: receiverNewBal });
               }
 
               const txIdSender = `tx-transfer-out-${Date.now()}`;
@@ -3913,10 +3913,17 @@ export default function Dashboard({
                               </div>
                               <span className="text-[9px] font-black bg-emerald-600 text-white px-2 py-0.5 rounded-full font-mono shadow-3xs">
                                 {SAMITY_MONTHS.filter((m, idx) => {
-                                  const targetMonthly = searchedMember.monthlySavingsTarget || 1000;
-                                  const monthIndexFromStart = (sendMoneySelectedYear - 2026) * 12 + idx;
-                                  const totalMonthsPaidBySavings = Math.floor((searchedMember.savings || 0) / targetMonthly);
-                                  return monthIndexFromStart < totalMonthsPaidBySavings;
+                                  const paidList: string[] = Array.isArray(searchedMember.samityPaidMonths) ? searchedMember.samityPaidMonths : [];
+                                  const yearKey = `${sendMoneySelectedYear}-${m.id}`;
+                                  const yearKeyAlt = `${sendMoneySelectedYear}_${m.id}`;
+                                  if (paidList.includes(yearKey) || paidList.includes(yearKeyAlt)) return true;
+                                  if (sendMoneySelectedYear === 2026 && paidList.includes(m.id)) return true;
+                                  if (paidList.length === 0 && (searchedMember.savings || 0) > 0) {
+                                    const targetMonthly = searchedMember.monthlySavingsTarget || 1000;
+                                    const monthIndexFromStart = (sendMoneySelectedYear - 2026) * 12 + idx;
+                                    return monthIndexFromStart < Math.floor((searchedMember.savings || 0) / targetMonthly);
+                                  }
+                                  return false;
                                 }).length} / ১২ মাস ({sendMoneySelectedYear})
                               </span>
                             </div>
@@ -3927,11 +3934,18 @@ export default function Dashboard({
                                 {SAMITY_YEARS.map(yr => {
                                   const isCurrent = yr === new Date().getFullYear();
                                   const isSelected = yr === sendMoneySelectedYear;
-                                  const targetMonthly = searchedMember.monthlySavingsTarget || 1000;
-                                  const totalMonthsPaidBySavings = Math.floor((searchedMember.savings || 0) / targetMonthly);
                                   const yrPaid = SAMITY_MONTHS.filter((m, idx) => {
-                                    const idxStart = (yr - 2026) * 12 + idx;
-                                    return idxStart < totalMonthsPaidBySavings;
+                                    const paidList: string[] = Array.isArray(searchedMember.samityPaidMonths) ? searchedMember.samityPaidMonths : [];
+                                    const yearKey = `${yr}-${m.id}`;
+                                    const yearKeyAlt = `${yr}_${m.id}`;
+                                    if (paidList.includes(yearKey) || paidList.includes(yearKeyAlt)) return true;
+                                    if (yr === 2026 && paidList.includes(m.id)) return true;
+                                    if (paidList.length === 0 && (searchedMember.savings || 0) > 0) {
+                                      const targetMonthly = searchedMember.monthlySavingsTarget || 1000;
+                                      const monthIndexFromStart = (yr - 2026) * 12 + idx;
+                                      return monthIndexFromStart < Math.floor((searchedMember.savings || 0) / targetMonthly);
+                                    }
+                                    return false;
                                   }).length;
 
                                   return (
@@ -3971,10 +3985,10 @@ export default function Dashboard({
                             {/* Months Grid */}
                             <div className="grid grid-cols-4 gap-1.5 pt-1">
                               {SAMITY_MONTHS.map((m, idx) => {
-                                const targetMonthly = searchedMember.monthlySavingsTarget || 1000;
-                                const monthIndexFromStart = (sendMoneySelectedYear - 2026) * 12 + idx;
-                                const totalMonthsPaidBySavings = Math.floor((searchedMember.savings || 0) / targetMonthly);
-                                const isPaid = monthIndexFromStart < totalMonthsPaidBySavings;
+                                const paidList: string[] = Array.isArray(searchedMember.samityPaidMonths) ? searchedMember.samityPaidMonths : [];
+                                const yearKey = `${sendMoneySelectedYear}-${m.id}`;
+                                const yearKeyAlt = `${sendMoneySelectedYear}_${m.id}`;
+                                const isPaid = paidList.includes(yearKey) || paidList.includes(yearKeyAlt) || (sendMoneySelectedYear === 2026 && paidList.includes(m.id)) || (paidList.length === 0 && (searchedMember.savings || 0) > 0 && ((sendMoneySelectedYear - 2026) * 12 + idx) < Math.floor((searchedMember.savings || 0) / (searchedMember.monthlySavingsTarget || 1000)));
 
                                 const uniqueMonthKey = `${sendMoneySelectedYear}-${m.id}`;
                                 const isSelected = sendMoneySelectedMonths.includes(uniqueMonthKey) || (sendMoneySelectedYear === 2026 && sendMoneySelectedMonths.includes(m.id));
@@ -3994,6 +4008,7 @@ export default function Dashboard({
                                       setSendMoneySelectedMonths(updated);
 
                                       if (updated.length > 0) {
+                                        const targetMonthly = searchedMember.monthlySavingsTarget || 1000;
                                         setTransferAmountInput(String(updated.length * targetMonthly));
                                       } else {
                                         setTransferAmountInput('');
@@ -4902,9 +4917,6 @@ export default function Dashboard({
                       liveUser.samityStatus === 'approved' ||
                       liveUser.samityApproved === true ||
                       liveUser.isSamityMember === true ||
-                      (Number(liveUser.savings) || 0) > 0 ||
-                      (Number(liveUser.dpsBalance) || 0) > 0 ||
-                      (Number(liveUser.monthlySavingsTarget) || 0) > 0 ||
                       hasCompletedSamityProfile(liveUser)
                     ) ? (
                       <SamityScreen

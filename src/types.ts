@@ -11,8 +11,9 @@ export interface User {
   role: 'user' | 'admin' | 'sub_admin';
   subAdminPermissions?: string[]; // Array of permitted section IDs in Admin Panel
   balance: number; // Deposit-able wallet balance (Samity)
-  lockedBalance: number; // Escrow locked balance
-  pendingBalance: number; // Escrow pending balance
+  mainBalance?: number; // Primary main balance
+  lockedBalance?: number; // Escrow locked balance
+  pendingBalance?: number; // Escrow pending balance
   telecomBalance?: number; // BNB Telecom balance
   superShopBalance?: number; // BNB Super Shop balance
   savings: number; // Accumulated savings
@@ -144,7 +145,7 @@ export interface Transaction {
   userId: string;
   userName: string;
   memberId: string;
-  type: 'deposit' | 'add_money' | 'loan_repayment' | 'loan_disbursment' | 'coop_loan_apply' | 'interest' | 'telecom_recharge' | 'shop_purchase' | 'utility' | 'fee_payment' | 'balance_transfer' | 'received_transfer' | 'withdraw' | 'qard_donation' | 'qard_loan_request' | 'qard_loan_disbursment' | 'qard_loan_repayment' | 'money_exchange' | 'qard_withdrawal' | 'coop_savings_deposit';
+  type: 'deposit' | 'add_money' | 'loan_repayment' | 'loan_disbursment' | 'coop_loan_apply' | 'interest' | 'telecom_recharge' | 'shop_purchase' | 'utility' | 'fee_payment' | 'balance_transfer' | 'received_transfer' | 'withdraw' | 'qard_donation' | 'qard_loan_request' | 'qard_loan_disbursment' | 'qard_loan_repayment' | 'money_exchange' | 'qard_withdrawal' | 'coop_savings_deposit' | 'samity_deposit';
   typeLabel: string; // Bengali label of type
   amount: number;
   status: 'pending' | 'success' | 'failed';

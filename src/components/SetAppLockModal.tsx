@@ -97,22 +97,22 @@ export default function SetAppLockModal({
             </div>
             <div>
               <h3 className="text-base font-black text-slate-800 flex items-center gap-1.5">
-                {isMandatoryOnLogout ? '🔒 বাধ্যতামূলক অ্যাপ লক সেটআপ' : '🔒 গোপন অ্যাপ লক সেটআপ'}
+                {isMandatoryOnLogout ? '🔒 লগআউট ও গোপন অ্যাপ লক সেটআপ' : '🔒 গোপন অ্যাপ লক সেটআপ'}
               </h3>
               <p className="text-xs text-slate-500 font-medium mt-0.5">
-                সিকিউরিটি লক (৪ - ১২ ডিজিট/অক্ষর)
+                সিকিউরিটি লক পাসওয়ার্ড (৪ - ১২ ডিজিট/অক্ষর)
               </p>
             </div>
           </div>
 
           {/* Warning / Instructions Box */}
-          <div className={`${isMandatoryOnLogout ? 'bg-rose-50 border-rose-200 text-rose-900' : 'bg-amber-50 border-amber-200/70 text-amber-900'} border p-3 rounded-2xl text-[11px] leading-relaxed mb-4 flex items-start gap-2.5`}>
-            <AlertTriangle className={`w-4 h-4 ${isMandatoryOnLogout ? 'text-rose-600' : 'text-amber-600'} shrink-0 mt-0.5`} />
+          <div className={`${isMandatoryOnLogout ? 'bg-rose-50 border-rose-200 text-rose-900' : 'bg-amber-50 border-amber-200/70 text-amber-900'} border p-3.5 rounded-2xl text-[11px] leading-relaxed mb-4 flex items-start gap-2.5 shadow-xs`}>
+            <AlertTriangle className={`w-4.5 h-4.5 ${isMandatoryOnLogout ? 'text-rose-600' : 'text-amber-600'} shrink-0 mt-0.5`} />
             <div>
               {isMandatoryOnLogout ? (
-                <span><strong>বাধ্যতামূলক সিকিউরিটি নিয়ম:</strong> আপনার একাউন্টের নিরাপত্তার স্বার্থে অ্যাপস লক করা ছাড়া লগআউট করা যাবে না। অনুগ্রহ করে ৪ থেকে ১২ অক্ষরের বা সংখ্যার একটি গোপন পাসওয়ার্ড দিন।</span>
+                <span><strong>লগআউট ও অ্যাপ লক নিয়ম:</strong> অ্যাপ থেকে নিরাপদ লগআউট হতে ৪ থেকে ১২ অক্ষরের/সংখ্যার একটি সিক্রেট পাসওয়ার্ড দুইবার লিখে সেট করুন। পরবর্তীতে অ্যাপে প্রবেশ করতে বা আনলক করতে পিন কোড দিলে খুলবে না, হুবহু এই সেট করা পাসওয়ার্ড দিতে হবে।</span>
               ) : (
-                <span><strong>গুরুত্বপূর্ণ নিয়ম:</strong> ৪ থেকে ১২ অক্ষরের বা সংখ্যার একটি সিক্রেট লকিং পাসওয়ার্ড দিন। অ্যাপ লক করার পর সেম পাসওয়ার্ড দিয়ে আনলক করতে হবে।</span>
+                <span><strong>গুরুত্বপূর্ণ নিয়ম:</strong> ৪ থেকে ১২ অক্ষরের বা সংখ্যার একটি সিক্রেট লকিং পাসওয়ার্ড দুইবার দিন। অ্যাপ লক করার পর পিন কোড দিলে খুলবে না, সেম পাসওয়ার্ড দিয়ে আনলক করতে হবে।</span>
               )}
             </div>
           </div>
@@ -195,14 +195,14 @@ export default function SetAppLockModal({
               <button
                 type="submit"
                 disabled={loading}
-                className="w-2/3 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-xs shadow-md shadow-emerald-600/20 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                className={`w-2/3 py-2.5 px-4 ${isMandatoryOnLogout ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/20' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'} text-white font-extrabold rounded-xl text-xs shadow-md transition-all cursor-pointer flex items-center justify-center gap-1.5`}
               >
                 {loading ? (
                   <span className="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
                 ) : (
                   <>
                     <Lock className="w-4 h-4" />
-                    অ্যাপ লক করুন (Lock App)
+                    {isMandatoryOnLogout ? 'পাসওয়ার্ড দিয়ে লগআউট করুন' : 'অ্যাপ লক করুন (Lock App)'}
                   </>
                 )}
               </button>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -35,7 +35,9 @@ import {
   Check,
   X,
   Sparkles,
-  MapPinned
+  MapPinned,
+  Radio,
+  Compass
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { db } from '../lib/firebase';
@@ -44,6 +46,17 @@ import LeafletActiveMap from './LeafletActiveMap';
 import AgentProfileCard from './AgentProfileCard';
 import AgentReportModal from './AgentReportModal';
 import AgentDashboardPanel from './AgentDashboardPanel';
+import {
+  getHighPrecisionPosition,
+  startWatchingHighPrecisionLocation,
+  stopSharingAgentLocation,
+  syncAgentLocationToFirestore,
+  calculateHaversineDistance,
+  formatDistance,
+  formatRelativeTime,
+  getOnlinePresenceStatus,
+  toBanglaDigits
+} from '../lib/locationService';
 
 interface AgentScreenProps {
   user: {
@@ -71,6 +84,13 @@ interface Agent {
   realLat?: number;
   realLng?: number;
   hasRealGPS?: boolean;
+  accuracy?: number;
+  altitude?: number;
+  heading?: number;
+  speed?: number;
+  lastUpdatedTs?: number;
+  distanceKm?: number;
+  isSharingLocation?: boolean;
   shopMapLink?: string;
   locationNumber?: string;
   bdX?: number;  // Percent X on Bangladesh map
@@ -95,6 +115,7 @@ export default function AgentScreen({ user, onBack, appConfig }: AgentScreenProp
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedCountryFilter, setSelectedCountryFilter] = useState<string>('all');
   const [selectedCityFilter, setSelectedCityFilter] = useState<string>('all');
+  const [selectedRadiusKm, setSelectedRadiusKm] = useState<number | 'all'>('all');
   const [filterOnline, setFilterOnline] = useState<boolean>(false);
   const [filterNearby, setFilterNearby] = useState<boolean>(false);
   const [filterVerified, setFilterVerified] = useState<boolean>(false);
@@ -108,9 +129,15 @@ export default function AgentScreen({ user, onBack, appConfig }: AgentScreenProp
   );
 
   // User Geolocation States
-  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number; accuracy?: number } | null>(null);
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
+
+  // Privacy: Share My Location toggle
+  const [isSharingLocation, setIsSharingLocation] = useState<boolean>(() => {
+    return localStorage.getItem('bnb_share_location') !== 'false';
+  });
 
   // Favorites state
   const [favorites, setFavorites] = useState<string[]>([]);
@@ -911,6 +938,62 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
         console.error('Error loading users collection:', e);
       }
 
+      // 5. Query 'agentLocations' collection (High precision real-time GPS coordinates)
+      try {
+        const snapLocs = await getDocs(collection(db, 'agentLocations'));
+        snapLocs.forEach((docSnap) => {
+          const loc = docSnap.data();
+          if (loc && loc.userId) {
+            const existing = agentsMap.get(loc.userId) || Array.from(agentsMap.values()).find((a: Agent) => a.phone === loc.phone);
+            if (existing) {
+              existing.lat = loc.latitude;
+              existing.lng = loc.longitude;
+              existing.realLat = loc.latitude;
+              existing.realLng = loc.longitude;
+              existing.hasRealGPS = true;
+              existing.accuracy = loc.accuracy;
+              existing.altitude = loc.altitude;
+              existing.heading = loc.heading;
+              existing.speed = loc.speed;
+              existing.lastUpdatedTs = loc.lastUpdatedTs;
+              if (loc.isOnline !== undefined) {
+                existing.status = loc.isOnline ? 'Available' : 'Offline';
+              }
+              if (loc.isSharingLocation !== undefined) {
+                existing.isSharingLocation = loc.isSharingLocation;
+              }
+            } else {
+              const newFromLoc: Agent = {
+                id: loc.userId,
+                name: loc.name || 'এজেন্ট',
+                role: loc.role || 'অফিসিয়াল এজেন্ট',
+                country: loc.country || 'Bangladesh',
+                flag: '🇧🇩',
+                city: loc.city || 'ঢাকা',
+                phone: loc.phone || '',
+                lat: loc.latitude,
+                lng: loc.longitude,
+                realLat: loc.latitude,
+                realLng: loc.longitude,
+                hasRealGPS: true,
+                accuracy: loc.accuracy,
+                altitude: loc.altitude,
+                heading: loc.heading,
+                speed: loc.speed,
+                lastUpdatedTs: loc.lastUpdatedTs,
+                img: loc.profileImage || `https://ui-avatars.com/api/?name=${encodeURIComponent(loc.name || 'Agent')}&background=0D9488&color=fff`,
+                verified: true,
+                status: loc.isOnline ? 'Available' : 'Offline',
+                isSharingLocation: loc.isSharingLocation
+              };
+              agentsMap.set(loc.userId, newFromLoc);
+            }
+          }
+        });
+      } catch (e) {
+        console.error('Error loading agentLocations collection:', e);
+      }
+
       let fetchedAgentsList: Agent[] = Array.from(agentsMap.values());
 
       // Filter out demo keywords if explicitly named "demo" or "test"
@@ -969,7 +1052,25 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
 
   useEffect(() => {
     fetchAgents();
-    detectUserLocation(); // Auto-detect user GPS on mount for instant distance calculation
+    detectUserLocation();
+
+    // High precision watcher for continuous background sync
+    let stopWatcher: (() => void) | null = null;
+    if (user.uid && isSharingLocation) {
+      stopWatcher = startWatchingHighPrecisionLocation(
+        user.uid,
+        {
+          name: user.name || 'সদস্য',
+          phone: user.phone || '',
+          role: user.role === 'agent' ? 'অফিসিয়াল এজেন্ট' : 'মেম্বার',
+          profileImage: resolveAgentAvatar(user, user.name || 'User')
+        },
+        (coords) => {
+          setUserLocation(coords);
+          setGpsAccuracy(coords.accuracy || null);
+        }
+      );
+    }
 
     // Subscribe to system settings / app_config for real-time manual vs auto location setting
     const unsubConfig = onSnapshot(doc(db, 'system_settings', 'app_config'), (snap) => {
@@ -981,20 +1082,23 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
       }
     });
 
-    // Subscribe to real-time updates for agents, requests, and users
+    // Subscribe to real-time updates for agents, requests, users, and high precision agentLocations
     const unsub1 = onSnapshot(collection(db, 'agents'), () => fetchAgents(), err => console.error(err));
     const unsub2 = onSnapshot(collection(db, 'bap_agents'), () => fetchAgents(), err => console.error(err));
     const unsub3 = onSnapshot(collection(db, 'agent_requests'), () => fetchAgents(), err => console.error(err));
     const unsub4 = onSnapshot(collection(db, 'users'), () => fetchAgents(), err => console.error(err));
+    const unsub5 = onSnapshot(collection(db, 'agentLocations'), () => fetchAgents(), err => console.error(err));
 
     return () => {
+      if (stopWatcher) stopWatcher();
       unsubConfig();
       unsub1();
       unsub2();
       unsub3();
       unsub4();
+      unsub5();
     };
-  }, []);
+  }, [user.uid, isSharingLocation]);
 
   // Auto fetch address when applicant opens application tab
   useEffect(() => {
@@ -1473,7 +1577,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
       await updateDoc(doc(db, 'bap_agents', myAgentProfile.id), updateData).catch(() => {});
       
       setMyAgentProfile(prev => prev ? { ...prev, ...updateData } : null);
-      setAgentsList(prev => prev.map(a => a.id === myAgentProfile.id ? { ...a, ...updateData } : a));
+      setAgentsList(prev => prev.map((a, _idx) => a.id === myAgentProfile.id ? { ...a, ...updateData } : a));
     } catch (e: any) {
       alert('Error updating status: ' + e.message);
     }
@@ -1487,7 +1591,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
       await updateDoc(doc(db, 'bap_agents', myAgentProfile.id), updateData).catch(() => {});
       
       setMyAgentProfile(prev => prev ? { ...prev, ...updateData } : null);
-      setAgentsList(prev => prev.map(a => a.id === myAgentProfile.id ? { ...a, ...updateData } : a));
+      setAgentsList(prev => prev.map((a, _idx) => a.id === myAgentProfile.id ? { ...a, ...updateData } : a));
     } catch (e: any) {
       alert('Error toggling location broadcast: ' + e.message);
     }
@@ -1524,7 +1628,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
           }
           
           setMyAgentProfile(prev => prev ? { ...prev, ...updateData, hasRealGPS: true } : null);
-          setAgentsList(prev => prev.map(a => a.id === myAgentProfile.id ? { ...a, ...updateData, hasRealGPS: true } : a));
+          setAgentsList(prev => prev.map((a, _idx) => a.id === myAgentProfile.id ? { ...a, ...updateData, hasRealGPS: true } : a));
           alert('আপনার লাইভ জিপিএস অবস্থান সফলভাবে ডাটাবেসে আপডেট করা হয়েছে!');
         } catch (err: any) {
           alert('Failed to update coordinates in database: ' + err.message);
@@ -1549,7 +1653,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
       
       const updatedProfile = { ...myAgentProfile, ...profileData };
       setMyAgentProfile(updatedProfile);
-      setAgentsList(prev => prev.map(a => a.id === myAgentProfile.id ? updatedProfile : a));
+      setAgentsList(prev => prev.map((a, _idx) => a.id === myAgentProfile.id ? updatedProfile : a));
       alert('প্রোফাইল তথ্য সফলভাবে সেভ করা হয়েছে!');
     } catch (err: any) {
       alert('Failed to save profile: ' + err.message);
@@ -1597,7 +1701,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
 
   // Extract unique cities for filtering options
   const uniqueCities = useMemo(() => {
-    const cities = new Set(agentsList.map(a => a.city));
+    const cities = new Set(agentsList.map((a, _idx) => a.city));
     return Array.from(cities);
   }, [agentsList]);
 
@@ -1622,10 +1726,10 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
     });
   }, [agentsList, searchQuery, selectedCountryFilter, selectedCityFilter, filterOnline, filterVerified]);
 
-  // Sort filteredAgents by distance if userLocation is available
+  // Sort filteredAgents by distance if userLocation is available & apply radius filter
   const processedAgents = useMemo(() => {
-    let mapped = filteredAgents.map((agent, idx) => {
-      let distance: number | null = null;
+    let mapped = filteredAgents.map((agent, _idx) => {
+      let distanceKm: number | null = null;
       let estTime: string | null = null;
       let travelType: string | null = null;
       
@@ -1633,29 +1737,42 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
       const lng = agent.realLng !== undefined ? agent.realLng : agent.lng;
 
       if (userLocation && lat && lng) {
-        distance = getDistanceInKm(userLocation.lat, userLocation.lng, lat, lng);
-        const { time, type } = getEstimatedTime(distance);
+        distanceKm = calculateHaversineDistance(userLocation.lat, userLocation.lng, lat, lng);
+        const { time, type } = getEstimatedTime(distanceKm);
         estTime = `${toBanglaDigits(time)} মিনিট`;
         travelType = type;
       }
       return {
         ...agent,
-        distance,
+        distance: distanceKm,
+        distanceKm,
         estTime,
         travelType
       };
     });
 
-    if (filterNearby && userLocation) {
-      mapped = mapped.filter(a => a.distance !== null && a.distance <= 50);
+    if (selectedRadiusKm !== 'all' && userLocation) {
+      mapped = mapped.filter(a => a.distanceKm !== null && a.distanceKm <= (selectedRadiusKm as number));
+    } else if (filterNearby && userLocation) {
+      mapped = mapped.filter(a => a.distanceKm !== null && a.distanceKm <= 50);
     }
 
     if (userLocation) {
       // Sort ascending by distance (nearest first)
-      mapped.sort((a, b) => (a.distance || 0) - (b.distance || 0));
+      mapped.sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
     }
     return mapped;
-  }, [filteredAgents, userLocation, filterNearby]);
+  }, [filteredAgents, userLocation, filterNearby, selectedRadiusKm]);
+
+  // Handle toggling location sharing
+  const handleToggleSharing = async () => {
+    const nextState = !isSharingLocation;
+    setIsSharingLocation(nextState);
+    localStorage.setItem('bnb_share_location', nextState ? 'true' : 'false');
+    if (!nextState && user?.uid) {
+      await stopSharingAgentLocation(user.uid);
+    }
+  };
 
   // Nearest agent summary ticker
   const nearestAgentsSummary = useMemo(() => {
@@ -1729,41 +1846,80 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
               </button>
             </div>
 
-            {/* GPS Location status bar */}
-            <div className="bg-white border border-slate-150 p-3 rounded-2.5xl shadow-3xs flex items-center justify-between gap-3 text-left">
-              <div className="flex items-center gap-2">
-                <span className="text-base shrink-0">🛰️</span>
-                <div className="min-w-0">
-                  <h4 className="text-[11px] font-black text-slate-800 leading-tight">জিপিএস ডিস্টেন্স জোন</h4>
-                  {isLocating ? (
-                    <p className="text-[9.5px] text-amber-600 font-extrabold flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                      আপনার বর্তমান অবস্থান স্ক্যান করা হচ্ছে...
-                    </p>
-                  ) : userLocation ? (
-                    <p className="text-[9.5px] text-emerald-600 font-extrabold">
-                      সফলভাবে অবস্থান সনাক্ত করা হয়েছে!
-                    </p>
-                  ) : locationError ? (
-                    <p className="text-[9.5px] text-rose-600 font-extrabold truncate max-w-[200px]">
-                      {locationError}
-                    </p>
-                  ) : (
-                    <p className="text-[9.5px] text-slate-400 font-extrabold">
-                      নিকটবর্তী এজেন্টদের দূরত্ব দেখতে অবস্থান সনাক্ত করুন।
-                    </p>
-                  )}
+            {/* High Precision GPS Location status & Privacy toggle bar */}
+            <div className="bg-white border border-slate-150 p-3.5 rounded-2.5xl shadow-3xs space-y-2.5 text-left">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="p-2 bg-emerald-50 rounded-2xl text-emerald-600 shrink-0">
+                    <Compass className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <div className="min-w-0">
+                    <h4 className="text-[11px] font-black text-slate-900 leading-tight flex items-center gap-1.5">
+                      <span>উচ্চ-নির্ভুল জিপিএস নেটওয়ার্ক</span>
+                      <span className="text-[8px] bg-emerald-100 text-emerald-800 font-extrabold px-1.5 py-0.2 rounded-full border border-emerald-200">
+                        GPS Live
+                      </span>
+                    </h4>
+                    {isLocating ? (
+                      <p className="text-[9.5px] text-amber-600 font-extrabold flex items-center gap-1 mt-0.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping"></span>
+                        উচ্চ-নির্ভুল জিপিএস সিগন্যাল লোড হচ্ছে...
+                      </p>
+                    ) : userLocation ? (
+                      <p className="text-[9.5px] text-emerald-700 font-bold mt-0.5 flex items-center gap-1">
+                        <span>জিপিএস পাওয়া গেছে</span>
+                        {userLocation.accuracy && (
+                          <span className="text-[9px] text-emerald-600 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-150 font-mono">
+                            ± {toBanglaDigits(userLocation.accuracy.toFixed(0))} মি.
+                          </span>
+                        )}
+                      </p>
+                    ) : locationError ? (
+                      <p className="text-[9.5px] text-rose-600 font-extrabold truncate max-w-[190px] mt-0.5">
+                        {locationError}
+                      </p>
+                    ) : (
+                      <p className="text-[9.5px] text-slate-400 font-extrabold mt-0.5">
+                        নিকটবর্তী এজেন্টদের নিখুঁত দূরত্ব দেখতে অবস্থান সনাক্ত করুন।
+                      </p>
+                    )}
+                  </div>
                 </div>
+
+                <button 
+                  type="button"
+                  onClick={detectUserLocation}
+                  disabled={isLocating}
+                  className={`px-3 py-1.5 rounded-xl text-[9.5px] font-black transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                    isLocating 
+                      ? 'bg-slate-100 text-slate-400' 
+                      : 'bg-[#0D9488] hover:bg-[#0B7A70] text-white shadow-xs'
+                  }`}
+                >
+                  {isLocating ? 'খোঁজা হচ্ছে...' : 'জিপিএস রিফ্রেশ 📍'}
+                </button>
               </div>
 
-              <button 
-                type="button"
-                onClick={detectUserLocation}
-                disabled={isLocating}
-                className={`px-3 py-1.5 rounded-xl text-[9px] font-black transition-all ${isLocating ? 'bg-slate-100 text-slate-400' : 'bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-100'}`}
-              >
-                {isLocating ? 'খোঁজা হচ্ছে...' : userLocation ? 'লোকেশন আপডেট করুন' : 'লোকেশন সনাক্ত করুন 📍'}
-              </button>
+              {/* Privacy: Share My Location Toggle Switch */}
+              <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs font-sans">
+                <div className="flex items-center gap-1.5">
+                  <Radio className={`w-3.5 h-3.5 ${isSharingLocation ? 'text-emerald-600 animate-pulse' : 'text-slate-400'}`} />
+                  <span className="text-[10px] font-black text-slate-700">আমার জিপিএস লোকেশন ম্যাপে শেয়ার করুন</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleToggleSharing}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    isSharingLocation ? 'bg-emerald-600' : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                      isSharingLocation ? 'translate-x-4' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
             </div>
 
             {/* MAP STAGE CONTAINER */}
@@ -2210,9 +2366,9 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                       { key: 'United Kingdom', label: '🇬🇧 গ্রেট ব্রিটেন (UK)' },
                       { key: 'Singapore', label: '🇸🇬 সিঙ্গাপুর' },
                       { key: 'Malaysia', label: '🇲🇾 মালয়েশিয়া' }
-                    ].map(opt => (
+                    ].map((opt, _idx) => (
                       <button 
-                        key={opt.key}
+                        key={`${opt.key}-${_idx}`}
                         onClick={() => {
                           setSelectedCountryFilter(opt.key);
                           setShowFilterDropdown(false);
@@ -2451,7 +2607,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                 <div className="w-7 h-7 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-1">
                   <Globe className="w-4 h-4" />
                 </div>
-                <h4 className="text-xs font-black text-sky-850 leading-none">{toBanglaDigits(new Set(agentsList.map(a => a.country?.trim().toLowerCase()).filter(Boolean)).size || 1)} টি</h4>
+                <h4 className="text-xs font-black text-sky-850 leading-none">{toBanglaDigits(new Set(agentsList.map((a, _idx) => a.country?.trim().toLowerCase()).filter(Boolean)).size || 1)} টি</h4>
                 <p className="text-[7.5px] text-slate-400 font-extrabold leading-none truncate block">সক্রিয় দেশ</p>
                 <p className="text-[7.5px] text-slate-400 font-extrabold leading-none truncate block">বিশ্বজুড়ে</p>
               </div>
@@ -2460,7 +2616,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                 <div className="w-7 h-7 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-1">
                   <MapPin className="w-4 h-4" />
                 </div>
-                <h4 className="text-xs font-black text-slate-800 leading-none">{toBanglaDigits(new Set(agentsList.map(a => a.city?.trim().toLowerCase()).filter(Boolean)).size || 1)} টি</h4>
+                <h4 className="text-xs font-black text-slate-800 leading-none">{toBanglaDigits(new Set(agentsList.map((a, _idx) => a.city?.trim().toLowerCase()).filter(Boolean)).size || 1)} টি</h4>
                 <p className="text-[7.5px] text-slate-400 font-extrabold leading-none truncate block">শহর কভারেজ</p>
                 <p className="text-[7.5px] text-slate-400 font-extrabold leading-none truncate block">সেবা সর্বত্র</p>
               </div>

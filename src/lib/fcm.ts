@@ -3,6 +3,7 @@ import { getToken, onMessage } from 'firebase/messaging';
 import { doc, setDoc } from 'firebase/firestore';
 
 export const setupFCM = async (userId: string, onNotification: (notification: { title: string; body: string }) => void) => {
+  if (!messaging) return;
   try {
     const permission = await Notification.requestPermission();
     if (permission === 'granted') {
@@ -20,10 +21,12 @@ export const setupFCM = async (userId: string, onNotification: (notification: { 
     console.error('Error setting up FCM:', error);
   }
 
-  onMessage(messaging, (payload) => {
-    onNotification({
-      title: payload.notification?.title || 'New Notification',
-      body: payload.notification?.body || ''
+  if (messaging) {
+    onMessage(messaging, (payload) => {
+      onNotification({
+        title: payload.notification?.title || 'New Notification',
+        body: payload.notification?.body || ''
+      });
     });
-  });
+  }
 };

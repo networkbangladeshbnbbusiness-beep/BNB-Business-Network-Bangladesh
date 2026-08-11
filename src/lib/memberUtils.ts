@@ -473,7 +473,13 @@ export async function findUserInFirestoreByPhone(
       const userDoc = snap.docs[0];
       const uData = userDoc.data() as User;
       if ((uData as any).deleted === true || (uData as any).isDeleted === true) continue;
-      const userObj = { ...uData, uid: userDoc.id };
+      const effectiveBal = Number(uData.balance !== undefined ? uData.balance : (uData as any).mainBalance) || Number((uData as any).mainBalance) || 0;
+      const userObj: User = { 
+        ...uData, 
+        uid: userDoc.id,
+        balance: effectiveBal,
+        mainBalance: effectiveBal
+      };
       saveUserToLocalBackup(userObj);
       return { docId: userDoc.id, user: userObj };
     }
@@ -497,7 +503,13 @@ export async function findUserInFirestoreByPhone(
       );
 
       if (isMatch) {
-        const userObj: User = { ...uData, uid: userDoc.id };
+        const effectiveBal = Number(uData.balance !== undefined ? uData.balance : (uData as any).mainBalance) || Number((uData as any).mainBalance) || 0;
+        const userObj: User = { 
+          ...uData, 
+          uid: userDoc.id,
+          balance: effectiveBal,
+          mainBalance: effectiveBal
+        };
         saveUserToLocalBackup(userObj);
         return { docId: userDoc.id, user: userObj };
       }

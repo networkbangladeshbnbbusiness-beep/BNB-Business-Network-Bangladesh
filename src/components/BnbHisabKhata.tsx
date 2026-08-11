@@ -945,7 +945,7 @@ export default function BnbHisabKhata({ user, onBack, syncLiveProfile, appConfig
     };
 
     const convertToBngNumerals = (str: string) => {
-      return str.split('').map(char => numerals[char] || char).join('');
+      return str.split('').map((char, _idx) => numerals[char] || char).join('');
     };
 
     const dateObj = new Date(dateStr);
@@ -1264,7 +1264,7 @@ export default function BnbHisabKhata({ user, onBack, syncLiveProfile, appConfig
                     .filter(c => c.name.toLowerCase().includes(txCategory.toLowerCase()))
                     .map((c, idx) => (
                       <button
-                        key={`${c.id}-${idx}`}
+                        key={`${c.id || idx}-${idx}`}
                         type="button"
                         onClick={() => setTxCategory(c.name)}
                         className="w-full text-left px-4 py-2 hover:bg-slate-50 text-xs font-black text-slate-700 border-b border-slate-100 last:border-0"
@@ -1629,9 +1629,9 @@ export default function BnbHisabKhata({ user, onBack, syncLiveProfile, appConfig
                 </div>
                 {/* Timeframe Toggles */}
                 <div className="grid grid-cols-4 gap-1 border-t border-slate-50 pt-1.5 pb-0.5">
-                  {(['all_time', 'today', 'this_week', 'this_month'] as const).map((tf) => (
+                  {(['all_time', 'today', 'this_week', 'this_month'] as const).map((tf, _idx) => (
                     <button
-                      key={tf}
+                      key={`tf-_idx`}
                       type="button"
                       onClick={() => setReportTimeframe(tf)}
                       className={`py-1 rounded text-[10px] font-black tracking-tight transition text-center ${
@@ -1804,9 +1804,9 @@ export default function BnbHisabKhata({ user, onBack, syncLiveProfile, appConfig
               </div>
 
               <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                {['all', 'income', 'expense', 'receivable', 'payable'].map((type) => (
+                {['all', 'income', 'expense', 'receivable', 'payable'].map((type, _idx) => (
                   <button
-                    key={type}
+                    key={`type-_idx`}
                     onClick={() => setTxFilterType(type)}
                     className={`text-[10px] font-black px-3 py-1.5 rounded-xl border transition shrink-0 ${
                       txFilterType === type 
@@ -1840,7 +1840,7 @@ export default function BnbHisabKhata({ user, onBack, syncLiveProfile, appConfig
                     return matchesSearch && matchesFilter;
                   })
                   .map((tx, idx) => (
-                    <div key={`${tx.id}-${idx}`} className="p-3 border border-slate-100 bg-[#fbfbfb] hover:bg-slate-50 rounded-xl transition flex justify-between items-center">
+                    <div key={`${tx.id || idx}-${idx}`} className="p-3 border border-slate-100 bg-[#fbfbfb] hover:bg-slate-50 rounded-xl transition flex justify-between items-center">
                       <div className="flex items-center gap-2.5 min-w-0">
                         <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${
                           tx.type === 'income' ? 'bg-emerald-50 text-emerald-600' :
@@ -2021,7 +2021,7 @@ export default function BnbHisabKhata({ user, onBack, syncLiveProfile, appConfig
               ) : (
                 notes.map((note, idx) => (
                   <div 
-                    key={`${note.id}-${idx}`} 
+                    key={`${note.id || idx}-${idx}`} 
                     className={`p-4 rounded-2xl border flex flex-col justify-between min-h-[170px] relative shadow-3xs transition-all duration-200 hover:scale-[1.02] ${getNoteCardStyles(note)}`}
                   >
                     {/* Stickpin */}
@@ -2372,9 +2372,9 @@ export default function BnbHisabKhata({ user, onBack, syncLiveProfile, appConfig
                 <div className="space-y-1">
                   <label className="text-slate-550">চিরকুটের ব্যাকগ্রাউন্ড রঙ নির্বাচন করুন:</label>
                   <div className="flex gap-3 pt-1">
-                    {['yellow', 'green', 'blue'].map((col) => (
+                    {['yellow', 'green', 'blue'].map((col, _idx) => (
                       <button
-                        key={col}
+                        key={`col-_idx`}
                         type="button"
                         onClick={() => setNoteColor(col as any)}
                         className={`w-7 h-7 rounded-full border-2 transition ${
@@ -2499,7 +2499,7 @@ export default function BnbHisabKhata({ user, onBack, syncLiveProfile, appConfig
                   <div className="text-center py-10 text-slate-400 text-xs">কোনো বকেয়া পাওনা রিমাইন্ডার পাওয়া যায়নি।</div>
                 ) : (
                   transactions.filter(t => t.type === 'receivable').map((rem, idx) => (
-                    <div key={`${rem.id}-${idx}`} className="p-3 border border-slate-100 bg-[#fbfbfb] rounded-xl flex justify-between items-center text-xs font-black">
+                    <div key={`${rem.id || idx}-${idx}`} className="p-3 border border-slate-100 bg-[#fbfbfb] rounded-xl flex justify-between items-center text-xs font-black">
                       <div>
                         <h4 className="text-slate-900">{rem.title}</h4>
                         <span className="text-[10px] text-slate-400 block">{rem.phone || "ফোন নম্বর নেই"}</span>

@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const file = path.join(__dirname, 'components', 'Dashboard.tsx');
+const file = path.join(__dirname, 'components', 'AdminPanel.tsx');
 let data = fs.readFileSync(file, 'utf8');
 
 // Let's parse tag openers and closers

@@ -5,7 +5,7 @@ import { doc, getDoc, collection, query, where, getDocs, updateDoc, setDoc, limi
 import { User, AppConfig } from './types';
 import { loadAppConfig, DEFAULT_CONFIG } from './lib/config';
 import { executeHistoryRetentionCleanup } from './lib/retentionCleanup';
-import { normalizeMemberId, findUserInFirestoreByPhone } from './lib/memberUtils';
+import { normalizeMemberId, findUserInFirestoreByPhone, convertBengaliToEnglishDigits } from './lib/memberUtils';
 import { restoreAndSeedDatabase } from './lib/databaseSeeder';
 import LoginScreen from './components/LoginScreen';
 import LockScreen from './components/LockScreen';
@@ -24,7 +24,7 @@ import { NotificationBanner } from './components/NotificationBanner';
 import { LocationPermissionModal } from './components/LocationPermissionModal';
 import { syncUserLocationNow } from './lib/locationUtils';
 import { setupFCM } from './lib/fcm';
-import { ShieldCheck, ShieldAlert, X, RefreshCw } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, X, RefreshCw, Lock, LogOut, Eye, EyeOff, AlertCircle, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 export default function App() {
@@ -441,18 +441,20 @@ export default function App() {
       changed = true;
     }
 
-    // Initial balance for new Admin accounts (9,99,000 BDT) if undefined
-    if (updatedUser.role === 'admin') {
-      if (updatedUser.balance === undefined) { updatedUser.balance = 999000; changed = true; }
-    } else {
-      if (updatedUser.balance === undefined) { updatedUser.balance = 0; changed = true; }
+    // Always determine true effective balance from balance or mainBalance without defaulting to zero if valid
+    const effectiveBal = Number(updatedUser.balance !== undefined && updatedUser.balance !== null ? updatedUser.balance : (updatedUser as any).mainBalance) || Number((updatedUser as any).mainBalance) || 0;
+    if (updatedUser.balance !== effectiveBal || (updatedUser as any).mainBalance !== effectiveBal) {
+      updatedUser.balance = effectiveBal;
+      (updatedUser as any).mainBalance = effectiveBal;
+      changed = true;
     }
-    if (updatedUser.savings === 250000 || updatedUser.savings === undefined) { updatedUser.savings = 0; changed = true; }
-    if (updatedUser.telecomBalance === 500000 || updatedUser.telecomBalance === undefined) { updatedUser.telecomBalance = 0; changed = true; }
-    if (updatedUser.superShopBalance === 500000 || updatedUser.superShopBalance === undefined) { updatedUser.superShopBalance = 0; changed = true; }
-    if (updatedUser.dpsBalance === 1000 || updatedUser.dpsBalance === undefined) { updatedUser.dpsBalance = 0; changed = true; }
-    if (updatedUser.profitsBalance === 1500 || updatedUser.profitsBalance === undefined) { updatedUser.profitsBalance = 0; changed = true; }
-    if (updatedUser.dueLoan === undefined) { updatedUser.dueLoan = 0; changed = true; }
+
+    if (updatedUser.savings === undefined || updatedUser.savings === null) { updatedUser.savings = 0; changed = true; }
+    if (updatedUser.telecomBalance === undefined || updatedUser.telecomBalance === null) { updatedUser.telecomBalance = 0; changed = true; }
+    if (updatedUser.superShopBalance === undefined || updatedUser.superShopBalance === null) { updatedUser.superShopBalance = 0; changed = true; }
+    if (updatedUser.dpsBalance === undefined || updatedUser.dpsBalance === null) { updatedUser.dpsBalance = 0; changed = true; }
+    if (updatedUser.profitsBalance === undefined || updatedUser.profitsBalance === null) { updatedUser.profitsBalance = 0; changed = true; }
+    if (updatedUser.dueLoan === undefined || updatedUser.dueLoan === null) { updatedUser.dueLoan = 0; changed = true; }
 
     const cleanPhone = updatedUser.phone?.replace(/\D/g, '') || '';
     const isDeveloper = cleanPhone.endsWith('00011112222') || cleanPhone.endsWith('11112222') || updatedUser.phone === '+8800011112222' || updatedUser.uid === 'admin_master';
@@ -491,6 +493,7 @@ export default function App() {
           role: updatedUser.role || 'user',
           memberId: updatedUser.memberId,
           balance: updatedUser.balance,
+          mainBalance: updatedUser.balance,
           savings: updatedUser.savings,
           telecomBalance: updatedUser.telecomBalance,
           superShopBalance: updatedUser.superShopBalance,
@@ -499,9 +502,9 @@ export default function App() {
           dueLoan: updatedUser.dueLoan,
           isDemo: updatedUser.isDemo ?? false
         });
-        console.log("Successfully cleaned legacy demo balances and normalized memberId in Firestore for user:", user.uid);
+        console.log("Successfully synchronized user profile and balances in Firestore for user:", user.uid);
       } catch (e) {
-        console.error("Clean legacy balances in Firestore failed:", e);
+        console.error("User profile balance update in Firestore failed:", e);
       }
     }
     return updatedUser;
@@ -619,18 +622,23 @@ export default function App() {
 
         // ⚡ Real-time Instant Force Logout & Zero Device Check (< 1s execution)
         const isForceLoggedOut = 
-          currentUser.role !== 'admin' && (
+          currentUser.role !== 'admin' && !currentUser.deviceLockBypassed && (
             uData.isLoggedIn === false ||
             (uData.currentDeviceId === '' && currentUser.currentDeviceId !== '') ||
+            (uData.currentDeviceId && uData.currentDeviceId !== '' && currentUser.currentDeviceId && uData.currentDeviceId !== currentUser.currentDeviceId) ||
             (uData.forceLogoutAt && (!currentUser.sessionLoggedInAt || new Date(uData.forceLogoutAt).getTime() >= new Date(currentUser.sessionLoggedInAt).getTime()))
           );
 
         if (isForceLoggedOut) {
-          console.log("⚡ Admin triggered instant zero device force logout for user:", currentUser.uid);
+          console.log("⚡ Real-time single-device / zero-device force logout triggered for user:", currentUser.uid);
           handleDirectLogout();
-          alert("⚠️ অ্যাডমিন প্যানেল থেকে আপনার একাউন্টটি জিরো ডিভাইস (Device Release) ও ইনস্ট্যান্ট লগআউট করা হয়েছে! আপনি এখন যেকোনো ডিভাইস থেকে পুনরায় সচলভাবে লগইন করতে পারবেন।");
+          alert("⚠️ এই একাউন্টটি অন্য একটি ডিভাইসে সক্রিয় করা হয়েছে অথবা এডমিন প্যানেল থেকে ডিভাইস জিরো (Release) করা হয়েছে! একই সাথে একাধিক ডিভাইসে একাউন্ট চালানো নিষেধ। নিরাপত্তা স্বার্থে এই ডিভাইসটি লগআউট করা হলো।");
           return;
         }
+
+        const effectiveBal = Number(uData.balance !== undefined && uData.balance !== null ? uData.balance : (uData as any).mainBalance) || Number((uData as any).mainBalance) || 0;
+        uData.balance = effectiveBal;
+        (uData as any).mainBalance = effectiveBal;
 
         setCurrentUser((prev) => {
           if (!prev) return null;
@@ -838,6 +846,7 @@ export default function App() {
 
   const [isMandatoryLockOnLogout, setIsMandatoryLockOnLogout] = useState(false);
   const [isLoggingOutLock, setIsLoggingOutLock] = useState(false);
+  const [logoutTargetToRegister, setLogoutTargetToRegister] = useState(false);
 
   const handleLogout = (toRegister = false) => {
     if (!currentUser) {
@@ -845,18 +854,10 @@ export default function App() {
       return;
     }
 
-    if (currentUser.isAppLocked && currentUser.appLockCode) {
-      if (currentUser.uid) {
-        updateDoc(doc(db, 'users', currentUser.uid), { isAppLocked: true }).catch(() => {});
-      }
-      setIsLoggingOutLock(true);
-      setIsLocked(true);
-      setDrawerOpen(false);
-    } else {
-      setIsMandatoryLockOnLogout(true);
-      setShowSetLockModal(true);
-      setDrawerOpen(false);
-    }
+    setLogoutTargetToRegister(toRegister);
+    setIsMandatoryLockOnLogout(true);
+    setShowSetLockModal(true);
+    setDrawerOpen(false);
   };
 
   const handleDirectLogout = (toRegister = false) => {
@@ -1144,6 +1145,8 @@ export default function App() {
               />
             </div>
           )}
+
+          {/* Mandatory Logout uses SetAppLockModal directly with 2-step password confirmation */}
 
           {showAdminPinModal && (
             <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-55 p-4 backdrop-blur-xs font-sans text-slate-800">

@@ -490,7 +490,7 @@ export default function BnbEducationCenter({ user, onBack, appConfig }: BnbEduca
                     
                     return (
                       <div 
-                        key={`${post.id}-${idx}`}
+                      key={`${post.id || idx}-${idx}`}
                         className="bg-white rounded-2xl p-3 border border-slate-100 shadow-3xs flex gap-3 hover:shadow-2xs transition-shadow duration-150 cursor-pointer"
                         onClick={() => handlePostClick(post.id || '')}
                       >
@@ -617,7 +617,7 @@ export default function BnbEducationCenter({ user, onBack, appConfig }: BnbEduca
                   const isBookmarked = bookmarks.includes(post.id || '');
                   return (
                     <div 
-                      key={`${post.id}-${idx}`}
+                      key={`${post.id || idx}-${idx}`}
                       className="bg-white rounded-2xl p-3 border border-slate-100 shadow-3xs flex gap-3 hover:shadow-2xs transition-shadow duration-150 cursor-pointer"
                       onClick={() => handlePostClick(post.id || '')}
                     >
@@ -683,7 +683,7 @@ export default function BnbEducationCenter({ user, onBack, appConfig }: BnbEduca
               ) : (
                 posts.filter(p => bookmarks.includes(p.id || '')).map((post, idx) => (
                   <div 
-                    key={`${post.id}-${idx}`}
+                    key={`${post.id || idx}-${idx}`}
                     className="bg-white rounded-2xl p-3 border border-slate-100 shadow-3xs flex gap-3 hover:shadow-2xs transition-shadow duration-150 cursor-pointer"
                     onClick={() => handlePostClick(post.id || '')}
                   >

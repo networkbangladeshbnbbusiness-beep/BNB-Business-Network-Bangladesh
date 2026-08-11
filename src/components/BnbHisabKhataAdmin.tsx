@@ -381,9 +381,9 @@ export default function BnbHisabKhataAdmin({ onBack }: BnbHisabKhataAdminProps) 
             <p className="text-[10px] text-slate-400 font-bold">ফিল্টারকৃত সময়ের উপর ভিত্তি করে পরিসংখ্যান পরিবর্তিত হবে</p>
           </div>
           <div className="grid grid-cols-4 md:flex gap-1 bg-slate-50 p-1 rounded-xl">
-            {(['all_time', 'today', 'this_week', 'this_month'] as const).map((tf) => (
+            {(['all_time', 'today', 'this_week', 'this_month'] as const).map((tf, _idx) => (
               <button
-                key={tf}
+                key={`tf-_idx`}
                 onClick={() => setReportTimeframe(tf)}
                 className={`px-4 py-1.5 rounded-lg text-xs font-black transition text-center whitespace-nowrap ${
                   reportTimeframe === tf 
@@ -495,7 +495,7 @@ export default function BnbHisabKhataAdmin({ onBack }: BnbHisabKhataAdminProps) 
               >
                 <option value="all">সকল সদস্য (সবাই)</option>
                 {users.map((u, idx) => (
-                  <option key={`${u.uid}-${idx}`} value={u.uid}>{u.name} ({u.phone})</option>
+                  <option key={`${u.uid || idx}-${idx}`} value={u.uid}>{u.name} ({u.phone})</option>
                 ))}
               </select>
             </div>
@@ -569,7 +569,7 @@ export default function BnbHisabKhataAdmin({ onBack }: BnbHisabKhataAdminProps) 
                     {filteredTx.map((tx, idx) => {
                       const userMeta = getUserMeta(tx.userId);
                       return (
-                        <tr key={`${tx.id}-${idx}`} className="hover:bg-slate-50/50 transition">
+                        <tr key={`${tx.id || idx}-${idx}`} className="hover:bg-slate-50/50 transition">
                           <td className="p-4">
                             <div className="font-black text-slate-900">{getBengaliDate(tx.date)}</div>
                             <span className="text-[10px] text-slate-400 font-bold block">{tx.time || '--:--'}</span>
@@ -647,7 +647,7 @@ export default function BnbHisabKhataAdmin({ onBack }: BnbHisabKhataAdminProps) 
                 {filteredTx.map((tx, idx) => {
                   const userMeta = getUserMeta(tx.userId);
                   return (
-                    <div key={`${tx.id}-${idx}`} className="p-4 space-y-2.5">
+                    <div key={`${tx.id || idx}-${idx}`} className="p-4 space-y-2.5">
                       <div className="flex justify-between items-start">
                         <div>
                           <div className="text-[10px] font-bold text-slate-400">{getBengaliDate(tx.date)} | {tx.time}</div>
@@ -747,7 +747,7 @@ export default function BnbHisabKhataAdmin({ onBack }: BnbHisabKhataAdminProps) 
                 >
                   <option value="">-- সদস্য সিলেক্ট করুন --</option>
                   {users.map((u, idx) => (
-                    <option key={`${u.uid}-${idx}`} value={u.uid}>{u.name} ({u.phone})</option>
+                    <option key={`${u.uid || idx}-${idx}`} value={u.uid}>{u.name} ({u.phone})</option>
                   ))}
                 </select>
               </div>
@@ -756,7 +756,7 @@ export default function BnbHisabKhataAdmin({ onBack }: BnbHisabKhataAdminProps) 
               <div>
                 <label className="text-[10px] font-black text-slate-500 block mb-1">লেনদেনের ধরন *</label>
                 <div className="grid grid-cols-4 gap-1">
-                  {(['income', 'expense', 'receivable', 'payable'] as const).map((type) => {
+                  {(['income', 'expense', 'receivable', 'payable'] as const).map((type, _idx) => {
                     let label = "আয়";
                     let col = "emerald";
                     if (type === 'expense') { label = "ব্যয়"; col = "rose"; }
@@ -772,7 +772,7 @@ export default function BnbHisabKhataAdmin({ onBack }: BnbHisabKhataAdminProps) 
 
                     return (
                       <button
-                        key={type}
+                        key={`type-_idx`}
                         type="button"
                         onClick={() => setFormType(type)}
                         className={`py-1.5 rounded-lg text-[10px] font-black text-center transition ${
@@ -906,7 +906,7 @@ export default function BnbHisabKhataAdmin({ onBack }: BnbHisabKhataAdminProps) 
               <div>
                 <label className="text-[10px] font-black text-slate-500 block mb-1">লেনদেনের ধরন *</label>
                 <div className="grid grid-cols-4 gap-1">
-                  {(['income', 'expense', 'receivable', 'payable'] as const).map((type) => {
+                  {(['income', 'expense', 'receivable', 'payable'] as const).map((type, _idx) => {
                     let label = "আয়";
                     if (type === 'expense') label = "ব্যয়";
                     if (type === 'receivable') label = "পাওনা";
@@ -921,7 +921,7 @@ export default function BnbHisabKhataAdmin({ onBack }: BnbHisabKhataAdminProps) 
 
                     return (
                       <button
-                        key={type}
+                        key={`type-_idx`}
                         type="button"
                         onClick={() => setFormType(type)}
                         className={`py-1.5 rounded-lg text-[10px] font-black text-center transition ${

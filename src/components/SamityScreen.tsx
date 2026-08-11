@@ -652,7 +652,9 @@ export default function SamityScreen({
 
       await updateDoc(userRef, {
         balance: (user.balance || 0) - targetAmt,
+        mainBalance: (user.balance || 0) - targetAmt,
         savings: (user.savings || 0) + targetAmt,
+        dpsBalance: (user.dpsBalance || (user.savings || 0)) + targetAmt,
         samityPaidMonths: updatedPaid
       });
 
@@ -1207,6 +1209,7 @@ export default function SamityScreen({
 
       await updateDoc(userRef, {
         balance: updatedBalance,
+        mainBalance: updatedBalance,
         savings: updatedSavings,
         dueLoan: updatedDueLoan,
         dpsBalance: updatedDpsBalance,
@@ -1267,17 +1270,22 @@ export default function SamityScreen({
           }
           const userToModify = { uid: targetUserSnap.id, ...targetUserSnap.data() } as User;
 
-          let updatedBalance = userToModify.balance || 0;
+          let updatedBalance = Number(userToModify.balance !== undefined ? userToModify.balance : (userToModify as any).mainBalance) || 0;
           let updatedSavings = userToModify.savings || 0;
+          let updatedDps = userToModify.dpsBalance !== undefined ? userToModify.dpsBalance : updatedSavings;
           let updatedDueLoan = userToModify.dueLoan || 0;
 
           if (tx.type === 'deposit' || tx.type === 'add_money') {
             updatedBalance += tx.amount;
-          } else if (tx.type === 'coop_savings_deposit') {
+          } else if (tx.type === 'coop_savings_deposit' || tx.type === 'samity_deposit') {
             updatedSavings += tx.amount;
+            updatedDps += tx.amount;
+            if (tx.paymentMethod === 'Main Balance' || tx.paymentMethod === 'BNB Wallet' || tx.paymentMethod === 'মেইন ব্যালেন্স' || tx.paymentMethod === 'Wallet' || (tx as any).deductFromMain) {
+              updatedBalance = Math.max(0, updatedBalance - tx.amount);
+            }
           } else if (tx.type === 'loan_repayment') {
             updatedDueLoan = Math.max(0, updatedDueLoan - tx.amount);
-            if (!tx.paymentMethod && updatedBalance >= tx.amount) {
+            if ((!tx.paymentMethod || tx.paymentMethod === 'Main Balance' || tx.paymentMethod === 'BNB Wallet' || tx.paymentMethod === 'মেইন ব্যালেন্স') && updatedBalance >= tx.amount) {
               updatedBalance = Math.max(0, updatedBalance - tx.amount);
             }
           } else if (tx.type === 'coop_loan_apply') {
@@ -1285,12 +1293,15 @@ export default function SamityScreen({
             updatedDueLoan += tx.amount;
           } else if (tx.type === 'withdraw') {
             updatedSavings = Math.max(0, updatedSavings - tx.amount);
+            updatedDps = Math.max(0, updatedDps - tx.amount);
             updatedBalance += tx.amount;
           }
 
           await updateDoc(targetUserRef, {
             balance: updatedBalance,
+            mainBalance: updatedBalance,
             savings: updatedSavings,
+            dpsBalance: updatedDps,
             dueLoan: updatedDueLoan
           });
 
@@ -1325,48 +1336,49 @@ export default function SamityScreen({
 
   const handleRejectTransaction = async (txId: string) => {
     requestPrompt(
-      'বাতিলকরণ কারণ',
-      'আবেদনটি বাতিল করার নির্দিষ্ট কারণ বা নোটিশ লিখুন (ঐচ্ছিক):',
-      '',
+      '❌ আবেদন বাতিলের কারণ লিখুন',
+      'আবেদনটি বাতিল করার নির্দিষ্ট কারণ লিখে দিন (গ্রাহকের অ্যাপে রিয়েল-টাইম নোটিফিকেশন চলে যাবে):',
+      'অসামঞ্জস্যপূর্ণ তথ্য / ভুল রিকোয়েস্ট',
       async (rejectReasonText) => {
-        requestConfirm(
-          'বাতিল নিশ্চিতকরণ',
-          'আপনি কি নিশ্চিত যে আবেদনটি বাতিল করতে চান?',
-          async () => {
-            setAdminLoading(true);
-            try {
-              const txDoc = adminTransactions.find(t => t.id === txId || t.docId === txId);
-              const realDocId = txDoc?.docId || txId;
-              const txRef = doc(db, 'transactions', realDocId);
+        const finalReason = (rejectReasonText || '').trim() || 'অসামঞ্জস্যপূর্ণ তথ্য / ভুল রিকোয়েস্ট';
+        
+        // Optimistic state update
+        setAdminTransactions(prev => prev.map(t => (t.id === txId || (t as any).docId === txId) ? { ...t, status: 'rejected', rejectReason: finalReason, processedAt: new Date().toISOString() } : t));
+        
+        try {
+          const txDoc = adminTransactions.find(t => t.id === txId || (t as any).docId === txId);
+          const realDocId = (txDoc as any)?.docId || txDoc?.id || txId;
+          const txRef = doc(db, 'transactions', realDocId);
 
-              await updateDoc(txRef, {
-                status: 'rejected',
-                rejectReason: rejectReasonText || '',
-                processedAt: new Date().toISOString()
-              });
+          const promises: Promise<any>[] = [
+            setDoc(txRef, {
+              status: 'rejected',
+              rejectReason: finalReason,
+              processedAt: new Date().toISOString()
+            }, { merge: true })
+          ];
 
-              if (txDoc) {
-                const notifyId = `notif-${Date.now()}`;
-                await addDoc(collection(db, 'user_notifications'), {
-                  id: notifyId,
-                  userId: txDoc.userId,
-                  title: '❌ লেনদেন বাতিল',
-                  body: `আপনার ${txDoc.typeLabel} আবেদনটি বাতিল করা হয়েছে। কারণ: ${rejectReasonText || 'উল্লেখ নেই'}`,
-                  read: false,
-                  isPersonal: true,
-                  category: 'samity',
-                  createdAt: new Date().toISOString()
-                });
-              }
-
-              customAlertFn('আবেদনটি বাতিল করা হয়েছে।');
-            } catch (err: any) {
-              customAlertFn('বাতিল করতে সমস্যা হয়েছে: ' + err.message);
-            } finally {
-              setAdminLoading(false);
-            }
+          if (txDoc && txDoc.userId) {
+            const notifDocRef = doc(collection(db, 'user_notifications'));
+            promises.push(setDoc(notifDocRef, {
+              id: notifDocRef.id,
+              userId: txDoc.userId,
+              title: '❌ সমিতি লেনদেন বাতিল',
+              body: `আপনার ${txDoc.typeLabel || 'সমিতি'} আবেদনটি বাতিল করা হয়েছে।\nকারণ: ${finalReason}`,
+              read: false,
+              isPersonal: true,
+              isTransactionHistory: true,
+              category: 'samity',
+              createdAt: new Date().toISOString()
+            }));
           }
-        );
+
+          await Promise.all(promises);
+          customAlertFn('⚡ ১ সেকেন্ডে সফলভাবে আবেদনটি বাতিল করা হয়েছে!');
+        } catch (err: any) {
+          console.error(err);
+          customAlertFn('বাতিল করতে সমস্যা হয়েছে: ' + (err?.message || err));
+        }
       }
     );
   };
@@ -1587,7 +1599,29 @@ export default function SamityScreen({
   // Fallbacks for dynamic DPS and profit balances
   const userDps = user.dpsBalance !== undefined ? user.dpsBalance : 0;
   const userProfits = user.profitsBalance !== undefined ? user.profitsBalance : 0;
-  const userSavings = user.savings !== undefined ? user.savings : 0;
+  
+  // Custom Helper to verify if a month is marked paid in user.samityPaidMonths array
+  const checkIsMonthPaid = (mId: string, yr: number, idx: number): boolean => {
+    const paidList: string[] = Array.isArray(user.samityPaidMonths) ? user.samityPaidMonths : [];
+    const yearKey = `${yr}-${mId}`;
+    const yearKeyAlt = `${yr}_${mId}`;
+    if (paidList.includes(yearKey) || paidList.includes(yearKeyAlt)) return true;
+    if (yr === 2026 && paidList.includes(mId)) return true;
+    if (paidList.length === 0 && (user.savings || 0) > 0) {
+      const targetMonthly = user.monthlySavingsTarget || 1000;
+      const monthIndexFromStart = (yr - 2026) * 12 + idx;
+      return monthIndexFromStart < Math.floor((user.savings || 0) / targetMonthly);
+    }
+    return false;
+  };
+
+  const calcSavingsFromMonths = Array.isArray(user.samityPaidMonths) && user.samityPaidMonths.length > 0 
+    ? user.samityPaidMonths.length * (user.monthlySavingsTarget || 1000)
+    : (user.savings || 0);
+
+  const userSavings = (Array.isArray(user.samityPaidMonths) && user.samityPaidMonths.length > 0)
+    ? calcSavingsFromMonths
+    : (user.savings !== undefined ? user.savings : 0);
   
   // Compute dynamic stats from user transaction histories to prevent hardcoded leaks
   const currentMonthDeposits = userTxHistory
@@ -1692,15 +1726,16 @@ export default function SamityScreen({
       const userRef = doc(db, 'users', user.uid);
       
       let newBalance = user.balance - amt;
-      let updateFields: Record<string, any> = { balance: newBalance };
+      let updateFields: Record<string, any> = { balance: newBalance, mainBalance: newBalance };
 
       let typeLabel = '';
-      let typeStr: Transaction['type'] = 'deposit';
+      let typeStr: Transaction['type'] = 'coop_savings_deposit';
       let descriptionStr = '';
 
       if (depositPurpose === 'savings') {
         updateFields.savings = (user.savings || 0) + amt;
-        typeStr = 'deposit';
+        updateFields.dpsBalance = (user.dpsBalance || (user.savings || 0)) + amt;
+        typeStr = 'coop_savings_deposit';
         typeLabel = 'সঞ্চয় আমানত জমা';
         descriptionStr = `মেইন ব্যালেন্স হতে ৳${amt.toLocaleString('bn-BD')} টাকা সরাসরি ইনভেস্টর সাধারণ সঞ্চয় তহবিলে স্থানান্তর করা হয়েছে।`;
       } else if (depositPurpose === 'loan') {
@@ -1773,9 +1808,12 @@ export default function SamityScreen({
       const userRef = doc(db, 'users', user.uid);
       let newBalance = user.balance - amountToDeposit;
       let newDpsBalance = (user.dpsBalance || 0) + amountToDeposit;
+      let newSavings = (user.savings || 0) + amountToDeposit;
 
       await updateDoc(userRef, {
         balance: newBalance,
+        mainBalance: newBalance,
+        savings: newSavings,
         dpsBalance: newDpsBalance
       });
 
@@ -2388,13 +2426,7 @@ export default function SamityScreen({
   const isSamityMemberUser = (u: any) => Boolean(
     u.samityApproved === true ||
     u.samityStatus === 'approved' ||
-    u.samitySchemeActive === true ||
-    u.samityAutoSavingsActive === true ||
-    u.isSamityMember === true ||
-    (Number(u.savings) || 0) > 0 ||
-    (Number(u.dpsBalance) || 0) > 0 ||
-    (Number(u.shares) || 0) > 0 ||
-    (Number(u.monthlySavingsTarget) || 0) > 0
+    u.isSamityMember === true
   );
 
   // Filter members who are registered / enrolled in Samity
@@ -3104,12 +3136,7 @@ export default function SamityScreen({
                     </div>
                   </div>
                   <span className="text-[9px] font-black bg-emerald-600 text-white px-1.5 py-0.5 rounded-full font-mono shadow-3xs shrink-0">
-                    {SAMITY_MONTHS.filter((m, idx) => {
-                      const targetMonthly = user.monthlySavingsTarget || 1000;
-                      const monthIndexFromStart = (trackerSelectedYear - 2026) * 12 + idx;
-                      const totalMonthsPaidBySavings = Math.floor((user.savings || 0) / targetMonthly);
-                      return monthIndexFromStart < totalMonthsPaidBySavings;
-                    }).length} / ১২ মাস ({trackerSelectedYear})
+                    {SAMITY_MONTHS.filter((m, idx) => checkIsMonthPaid(m.id, trackerSelectedYear, idx)).length} / ১২ মাস ({trackerSelectedYear})
                   </span>
                 </div>
 
@@ -3119,12 +3146,7 @@ export default function SamityScreen({
                     {SAMITY_YEARS.map(yr => {
                       const isCurrent = yr === new Date().getFullYear();
                       const isSelected = yr === trackerSelectedYear;
-                      const targetMonthly = user.monthlySavingsTarget || 1000;
-                      const totalMonthsPaidBySavings = Math.floor((user.savings || 0) / targetMonthly);
-                      const yrPaid = SAMITY_MONTHS.filter((m, idx) => {
-                        const idxStart = (yr - 2026) * 12 + idx;
-                        return idxStart < totalMonthsPaidBySavings;
-                      }).length;
+                      const yrPaid = SAMITY_MONTHS.filter((m, idx) => checkIsMonthPaid(m.id, yr, idx)).length;
 
                       return (
                         <button
@@ -3169,9 +3191,7 @@ export default function SamityScreen({
                 <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5">
                   {SAMITY_MONTHS.map((m, idx) => {
                     const targetMonthly = user.monthlySavingsTarget || 1000;
-                    const monthIndexFromStart = (trackerSelectedYear - 2026) * 12 + idx;
-                    const totalMonthsPaidBySavings = Math.floor((user.savings || 0) / targetMonthly);
-                    const isPaid = monthIndexFromStart < totalMonthsPaidBySavings;
+                    const isPaid = checkIsMonthPaid(m.id, trackerSelectedYear, idx);
 
                     return (
                       <button
@@ -5427,17 +5447,7 @@ export default function SamityScreen({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     {SAMITY_YEARS.map(yr => {
                       const isCurrent = yr === new Date().getFullYear();
-                      const targetMonthly = user.monthlySavingsTarget || 1000;
-                      const totalMonthsPaidBySavings = Math.floor((user.savings || 0) / targetMonthly);
-
-                      let yrPaidCount = 0;
-                      SAMITY_MONTHS.forEach((m, idx) => {
-                        const idxStart = (yr - 2026) * 12 + idx;
-                        if (idxStart < totalMonthsPaidBySavings) {
-                          yrPaidCount++;
-                        }
-                      });
-
+                      const yrPaidCount = SAMITY_MONTHS.filter((m, idx) => checkIsMonthPaid(m.id, yr, idx)).length;
                       const isSelected = yr === trackerSelectedYear;
 
                       return (
@@ -5473,8 +5483,7 @@ export default function SamityScreen({
                           {/* 12 Month Dots Matrix */}
                           <div className="grid grid-cols-6 gap-1 pt-0.5">
                             {SAMITY_MONTHS.map((m, idx) => {
-                              const idxStart = (yr - 2026) * 12 + idx;
-                              const mPaid = idxStart < totalMonthsPaidBySavings;
+                              const mPaid = checkIsMonthPaid(m.id, yr, idx);
 
                               return (
                                 <div

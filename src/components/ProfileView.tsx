@@ -875,10 +875,10 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
                       : user.role === 'sub_admin'
                       ? 'SUB ADMIN (সহকারী এডমিন)'
                       : (user.samityStatus === 'approved' || user.samityApproved === true || user.isSamityMember === true)
-                      ? 'COOPERATIVE INVESTOR MEMBER (সমবায় ইনভেস্টর সদস্য)'
-                      : user.samityStatus === 'pending'
-                      ? 'GENERAL MEMBER (সমবায় আবেদন পেন্ডিং)'
-                      : 'GENERAL MEMBER (সাধারণ অ্যাপ সদস্য)'}
+                      ? 'COOPERATIVE MEMBER (সমবায় সমিতি সদস্য - ফরম ফিলাপকৃত)'
+                      : (user.samityStatus === 'pending' || Boolean(user.samityAppliedAt))
+                      ? 'PENDING MEMBER (সমবায় সদস্য আবেদন পেন্ডিং)'
+                      : 'NORMAL MEMBER (নরমাল সদস্য - BNB কোম্পানি ইনভেস্টার)'}
                   </strong>
                 </div>
               </div>

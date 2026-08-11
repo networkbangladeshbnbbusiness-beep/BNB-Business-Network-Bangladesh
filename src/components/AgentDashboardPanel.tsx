@@ -110,9 +110,9 @@ export default function AgentDashboardPanel({
             { key: 'Available', label: lang === 'bn' ? '🟢 সক্রিয় (Active)' : '🟢 Active', color: 'bg-emerald-50 text-emerald-800 border-emerald-300' },
             { key: 'Busy', label: lang === 'bn' ? '🟡 ব্যস্ত (Busy)' : '🟡 Busy', color: 'bg-amber-50 text-amber-800 border-amber-300' },
             { key: 'Offline', label: lang === 'bn' ? '⚫ অফলাইন (Offline)' : '⚫ Offline', color: 'bg-slate-50 text-slate-600 border-slate-300' }
-          ].map(opt => (
+          ].map((opt, _idx) => (
             <button 
-              key={opt.key}
+              key={`${opt.key}-${_idx}`}
               type="button"
               onClick={() => onUpdateStatus(opt.key as any)}
               className={`py-2 border rounded-xl text-[10px] font-black transition cursor-pointer text-center ${myAgentProfile.status === opt.key ? opt.color + ' ring-1 ring-offset-1 ring-emerald-500' : 'bg-white text-slate-500 border-slate-150'}`}

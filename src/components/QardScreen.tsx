@@ -869,7 +869,7 @@ BNB Business Co-operative Welfare Fund
     }
 
     // Active days constraint (Min 2 months / 60 days for general members)
-    const isSamityInvestor = (user.savings && user.savings > 0) || user.samityStatus === 'approved' || user.samitySchemeActive || user.role === 'admin' || user.isDemo;
+    const isSamityInvestor = user.samityStatus === 'approved' || user.samityApproved === true || user.isSamityMember === true || user.samitySchemeActive || user.role === 'admin' || user.isDemo;
     if (!isSamityInvestor && activeDays < 60) {
       setErrorMsg(`দুঃখিত! করজে হাসানা আবেদনের জন্য সাধারণ সদস্যদের অ্যাপে সর্বনিম্ন ২ মাস (৬০ দিন) সক্রিয় থাকতে হবে। আপনি মাত্র ${activeDays} দিন ধরে সক্রিয় আছেন।`);
       return;
@@ -2331,7 +2331,7 @@ BNB Business Co-operative Welfare Fund
           const reqDays = eligCfg.requiredActiveDays ?? 60;
           const reqVol = eligCfg.requiredBnbTxVolume ?? 20000;
 
-          const isSamityInvestor = (user.savings && user.savings > 0) || user.samityStatus === 'approved' || user.samitySchemeActive || user.role === 'admin' || user.isDemo;
+          const isSamityInvestor = user.samityStatus === 'approved' || user.samityApproved === true || user.isSamityMember === true || user.samitySchemeActive || user.role === 'admin' || user.isDemo;
 
           const isDaysEligible = isSamityInvestor || activeDays >= reqDays;
           const isVolEligible = isSamityInvestor || bnbTxVolume >= reqVol;

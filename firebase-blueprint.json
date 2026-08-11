@@ -186,6 +186,33 @@
       },
       "required": ["id", "creatorId", "creatorName", "giveMethod", "giveAmount", "receiveMethod", "receiveAmount", "status", "createdAt"]
     },
+    "AgentLocation": {
+      "title": "AgentLocation",
+      "description": "High precision real-time GPS position per user/agent",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "User or agent ID" },
+        "name": { "type": "string", "description": "Agent name" },
+        "phone": { "type": "string", "description": "Contact phone number" },
+        "memberId": { "type": "string", "description": "Formatted member ID" },
+        "role": { "type": "string", "description": "Agent or member role" },
+        "latitude": { "type": "number", "description": "Exact GPS latitude" },
+        "longitude": { "type": "number", "description": "Exact GPS longitude" },
+        "accuracy": { "type": "number", "description": "GPS accuracy in meters" },
+        "altitude": { "type": "number", "description": "GPS altitude in meters" },
+        "heading": { "type": "number", "description": "Movement direction in degrees" },
+        "speed": { "type": "number", "description": "Movement speed in m/s" },
+        "lastUpdated": { "type": "string", "description": "Formatted timestamp" },
+        "lastUpdatedTs": { "type": "number", "description": "Epoch timestamp in milliseconds" },
+        "isOnline": { "type": "boolean", "description": "Online presence flag" },
+        "isSharingLocation": { "type": "boolean", "description": "Location broadcast flag" },
+        "profileImage": { "type": "string", "description": "Avatar image URL" },
+        "city": { "type": "string", "description": "City or area" },
+        "district": { "type": "string", "description": "District" },
+        "country": { "type": "string", "description": "Country name" }
+      },
+      "required": ["userId", "name", "phone", "latitude", "longitude", "accuracy", "lastUpdated", "lastUpdatedTs", "isOnline"]
+    },
     "FcmToken": {
       "title": "FcmToken",
       "description": "User device FCM tokens for push notifications",
@@ -242,6 +269,10 @@
     "money_exchange_deals/{dealId}": {
       "schema": "MoneyExchangeDeal",
       "description": "Stores escrow money exchange deals"
+    },
+    "agentLocations/{userId}": {
+      "schema": "AgentLocation",
+      "description": "Real-time single latest high-precision GPS position per agent/user"
     },
     "users/{userId}/fcmTokens/{tokenId}": {
       "schema": "FcmToken",

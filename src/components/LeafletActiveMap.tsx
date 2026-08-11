@@ -1,4 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
+import {
+  formatDistance,
+  formatRelativeTime,
+  getOnlinePresenceStatus,
+  toBanglaDigits
+} from '../lib/locationService';
 
 interface Agent {
   id: string;
@@ -10,11 +16,19 @@ interface Agent {
   phone: string;
   lat: number;
   lng: number;
-  bdX?: number;
-  bdY?: number;
-  img: string;
   realLat?: number;
   realLng?: number;
+  accuracy?: number;
+  lastUpdatedTs?: number;
+  lastSeen?: string;
+  isOnline?: boolean;
+  img: string;
+  district?: string;
+  thana?: string;
+  postOffice?: string;
+  distanceKm?: number;
+  shopMapLink?: string;
+  whatsapp?: string;
 }
 
 interface LeafletActiveMapProps {
@@ -23,10 +37,9 @@ interface LeafletActiveMapProps {
   highlightedAgentId: string | null;
   onSelectAgent: (id: string | null) => void;
   zoomLevel: number;
-  userLocation?: { lat: number; lng: number } | null;
+  userLocation?: { lat: number; lng: number; accuracy?: number } | null;
 }
 
-// Map percentages back to real lat/lng if not already populated
 const getAgentLatLng = (agent: any): { lat: number; lng: number } => {
   if (typeof agent.realLat === 'number' && typeof agent.realLng === 'number' && agent.realLat !== 0 && agent.realLng !== 0) {
     return { lat: agent.realLat, lng: agent.realLng };
@@ -34,7 +47,6 @@ const getAgentLatLng = (agent: any): { lat: number; lng: number } => {
   if (typeof agent.lat === 'number' && typeof agent.lng === 'number' && agent.lat !== 0 && agent.lng !== 0) {
     return { lat: agent.lat, lng: agent.lng };
   }
-  
   return { lat: 23.8103, lng: 90.4125 };
 };
 
@@ -50,22 +62,15 @@ export default function LeafletActiveMap({
   const mapInstanceRef = useRef<any>(null);
   const markersRef = useRef<{ [key: string]: any }>({});
   const [leafletLoaded, setLeafletLoaded] = useState(false);
-  
-  // Simulated LIVE drifting locations to show real-time tracking
-  const [liveDrifts, setLiveDrifts] = useState<{ [key: string]: { lat: number; lng: number } }>({});
 
-  // 1. Load Leaflet CSS and JS Dynamically (extremely safe for build systems)
+  // 1. Load Leaflet CSS and JS Dynamically
   useEffect(() => {
-    let cssInserted = false;
-    let jsInserted = false;
-
     if (!document.getElementById('leaflet-css-cdn')) {
       const link = document.createElement('link');
       link.id = 'leaflet-css-cdn';
       link.rel = 'stylesheet';
       link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
       document.head.appendChild(link);
-      cssInserted = true;
     }
 
     if (!document.getElementById('leaflet-js-cdn')) {
@@ -77,13 +82,10 @@ export default function LeafletActiveMap({
         setLeafletLoaded(true);
       };
       document.body.appendChild(script);
-      jsInserted = true;
     } else {
-      // If already appended but loaded
       if (typeof window !== 'undefined' && (window as any).L) {
         setLeafletLoaded(true);
       } else {
-        // Poll for load
         const interval = setInterval(() => {
           if ((window as any).L) {
             setLeafletLoaded(true);
@@ -95,57 +97,31 @@ export default function LeafletActiveMap({
     }
   }, []);
 
-  // 2. Setup simulated live real-time location drift/pulses (updates slightly every 4s)
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setLiveDrifts((prev) => {
-        const nextDrifts = { ...prev };
-        agents.forEach((agent) => {
-          const base = getAgentLatLng(agent);
-          const current = nextDrifts[agent.id] || base;
-          // Drift slightly (Simulate walking/patrolling/driving around 5-20 meters)
-          nextDrifts[agent.id] = {
-            lat: current.lat + (Math.random() - 0.5) * 0.00015,
-            lng: current.lng + (Math.random() - 0.5) * 0.00015,
-          };
-        });
-        return nextDrifts;
-      });
-    }, 4000);
-
-    return () => clearInterval(interval);
-  }, [agents]);
-
-  // 3. Initialize/Update Leaflet Map View & Layer Setup
+  // 2. Setup Map Instance
   useEffect(() => {
     if (!leafletLoaded || !mapContainerRef.current) return;
     const L = (window as any).L;
     if (!L) return;
 
-    // Center coordinates
-    const centerWorld = [24.0, 50.0]; // Centered at Middle-East/Asia gateway
-    const centerBD = [23.85, 90.35]; // Centered on Dhaka/Bangladesh
+    const centerWorld = [24.0, 50.0];
+    const centerBD = [23.85, 90.35];
 
     const targetCenter = mapType === 'world' ? centerWorld : centerBD;
     const targetZoom = mapType === 'world' ? (zoomLevel > 1 ? 3.5 : 2.2) : (zoomLevel > 1 ? 9 : 7.2);
 
-    // Create Map if it doesn't exist
     if (!mapInstanceRef.current) {
-      // Set anchor with zoomSnap for smooth visual rendering
       mapInstanceRef.current = L.map(mapContainerRef.current, {
         zoomControl: false,
         attributionControl: false,
         zoomSnap: 0.1,
-        maxZoom: 18,
+        maxZoom: 19,
         minZoom: 2,
       }).setView(targetCenter, targetZoom);
 
-      // Add CartoDB Voyager Tile layer for extremely premium executive map styling
       L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
         maxZoom: 20
       }).addTo(mapInstanceRef.current);
     } else {
-      // Smooth flyTo transitions instead of abrupt hops
       mapInstanceRef.current.flyTo(targetCenter, targetZoom, {
         animate: true,
         duration: 1.2
@@ -153,7 +129,7 @@ export default function LeafletActiveMap({
     }
   }, [leafletLoaded, mapType, zoomLevel]);
 
-  // 4. Handle Redrawing Live Markers & Highlighting Selection
+  // 3. Draw High Precision Agent & User Markers
   useEffect(() => {
     if (!leafletLoaded || !mapInstanceRef.current) return;
     const L = (window as any).L;
@@ -165,17 +141,18 @@ export default function LeafletActiveMap({
     });
     markersRef.current = {};
 
-    // Draw User Location Marker if available
+    // Draw User Location Marker
     if (userLocation && userLocation.lat && userLocation.lng) {
+      const accText = userLocation.accuracy ? `± ${toBanglaDigits(userLocation.accuracy.toFixed(0))} মিটার` : 'GPS সক্রিয়';
       const userIcon = L.divIcon({
         className: 'user-location-marker',
-        iconSize: [36, 36],
-        iconAnchor: [18, 18],
+        iconSize: [40, 40],
+        iconAnchor: [20, 20],
         html: `
-          <div class="relative w-9 h-9 flex items-center justify-center cursor-pointer">
-            <div class="absolute -inset-1 rounded-full bg-blue-500/35 animate-ping" style="animation-duration: 2s"></div>
-            <div class="relative w-5 h-5 rounded-full bg-blue-600 border-2 border-white shadow-md flex items-center justify-center">
-              <span class="w-2 h-2 rounded-full bg-white animate-pulse"></span>
+          <div class="relative w-10 h-10 flex items-center justify-center cursor-pointer">
+            <div class="absolute -inset-2 rounded-full bg-blue-500/30 animate-ping" style="animation-duration: 2s"></div>
+            <div class="relative w-6 h-6 rounded-full bg-blue-600 border-2 border-white shadow-lg flex items-center justify-center">
+              <span class="w-2.5 h-2.5 rounded-full bg-white animate-pulse"></span>
             </div>
           </div>
         `
@@ -183,90 +160,133 @@ export default function LeafletActiveMap({
 
       const userMarker = L.marker([userLocation.lat, userLocation.lng], { icon: userIcon })
         .addTo(mapInstanceRef.current);
-      
+
       userMarker.bindPopup(`
-        <div class="font-sans text-xs p-1 text-slate-800 font-extrabold text-center">
-          <p class="text-blue-600 font-black mb-0.5">📍 আপনার অবস্থান</p>
-          <p class="text-[9px] text-slate-500 leading-none">GPS এর মাধ্যমে সনাক্তকৃত</p>
+        <div class="font-sans text-xs p-1.5 text-slate-800 font-extrabold text-center">
+          <p class="text-blue-600 font-black text-xs mb-0.5">📍 আপনার অবস্থান</p>
+          <p class="text-[9px] text-slate-500 font-mono">${userLocation.lat.toFixed(6)}, ${userLocation.lng.toFixed(6)}</p>
+          <p class="text-[9px] text-emerald-600 font-bold mt-0.5">নির্ভুলতা: ${accText}</p>
         </div>
       `, { closeButton: false });
 
       markersRef.current['_user_location_'] = userMarker;
     }
 
-    // Filter agents shown based on mapType (World vs Bangladesh view)
+    // Filter agents shown based on mapType
     const visibleAgents = agents.filter((agent) => {
       if (mapType === 'bangladesh') {
-        return agent.country.toLowerCase() === 'bangladesh';
+        return agent.country && agent.country.toLowerCase() === 'bangladesh';
       }
       return true;
     });
 
-    // Draw Visible Map Markers with real-time drifts
+    // Draw Agent Markers
     visibleAgents.forEach((agent) => {
-      const livePos = liveDrifts[agent.id] || getAgentLatLng(agent);
+      const pos = getAgentLatLng(agent);
       const isHighlighted = highlightedAgentId === agent.id;
 
-      // Premium Custom HTML Marker with Avatar icon and pulsing beacon glow
+      const lastTs = agent.lastUpdatedTs || (agent.lastSeen ? Date.now() : 0);
+      const presence = getOnlinePresenceStatus(lastTs, 'bn');
+
+      let statusDotBg = 'bg-emerald-500';
+      let ringBorder = 'border-emerald-500';
+      if (presence.status === 'recent') {
+        statusDotBg = 'bg-amber-500';
+        ringBorder = 'border-amber-500';
+      } else if (presence.status === 'offline') {
+        statusDotBg = 'bg-slate-400';
+        ringBorder = 'border-slate-300';
+      }
+
       const customIcon = L.divIcon({
         className: 'custom-leaflet-agent-marker',
-        iconSize: [42, 42],
-        iconAnchor: [21, 21],
+        iconSize: [44, 44],
+        iconAnchor: [22, 22],
         html: `
-          <div class="relative w-10 h-10 flex items-center justify-center cursor-pointer">
-            <!-- Pulsating dynamic live status bubble -->
-            <div class="absolute -inset-1.5 rounded-full bg-emerald-500/35 animate-ping" style="animation-duration: 2.2s"></div>
-            
-            <!-- Avatar Frame -->
-            <div class="relative w-8 h-8 rounded-full bg-white border-2 border-slate-50 shadow-md flex items-center justify-center overflow-hidden transition-all duration-300 ${isHighlighted ? 'ring-4 ring-emerald-500 scale-115 !border-emerald-100' : 'hover:scale-105 border-teal-500'}" style="width: 34px; height: 34px;">
+          <div class="relative w-11 h-11 flex items-center justify-center cursor-pointer">
+            ${
+              presence.status === 'active'
+                ? '<div class="absolute -inset-1.5 rounded-full bg-emerald-500/35 animate-ping" style="animation-duration: 2s"></div>'
+                : ''
+            }
+            <div class="relative rounded-full bg-white border-2 ${ringBorder} shadow-md flex items-center justify-center overflow-hidden transition-all duration-300 ${
+              isHighlighted ? 'ring-4 ring-emerald-500 scale-125 z-30' : 'hover:scale-110'
+            }" style="width: 38px; height: 38px;">
               <img src="${agent.img}" style="width: 100%; height: 100%; object-fit: cover;" referrerPolicy="no-referrer" />
-              <!-- Status Active Dot -->
-              <span class="absolute right-0.5 bottom-0.5 w-2 h-2 rounded-full border border-white bg-green-500 shadow-xs"></span>
+              <span class="absolute right-0.5 bottom-0.5 w-2.5 h-2.5 rounded-full border border-white ${statusDotBg} shadow-xs"></span>
             </div>
           </div>
         `
       });
 
-      // Place Marker
-      const marker = L.marker([livePos.lat, livePos.lng], { icon: customIcon })
+      const marker = L.marker([pos.lat, pos.lng], { icon: customIcon })
         .addTo(mapInstanceRef.current)
         .on('click', () => {
           onSelectAgent(agent.id);
-          // Fly smoothly to marker upon click
-          mapInstanceRef.current.flyTo([livePos.lat, livePos.lng], mapType === 'world' ? 10 : 12, {
+          mapInstanceRef.current.flyTo([pos.lat, pos.lng], mapType === 'world' ? 11 : 13, {
             animate: true,
             duration: 1.0
           });
         });
 
-      // Bind custom popup tooltip
+      const formattedDist =
+        typeof agent.distanceKm === 'number'
+          ? formatDistance(agent.distanceKm, 'bn')
+          : null;
+
+      const relativeTime = lastTs ? formatRelativeTime(lastTs, 'bn') : (agent.lastSeen || 'অজানা');
+      const accVal = agent.accuracy ? `± ${toBanglaDigits(agent.accuracy.toFixed(0))} মি.` : null;
+
+      const directionsUrl = `https://www.google.com/maps/dir/?api=1&destination=${pos.lat},${pos.lng}`;
+
       const popupHtml = `
-        <div class="font-sans text-xs p-1.5 min-w-[145px] text-slate-800">
-          <div class="flex items-center gap-1.5 mb-1">
-            <span class="text-sm">${agent.flag}</span>
-            <span class="font-black text-slate-900 text-xs">${agent.name}</span>
+        <div style="font-family: system-ui, sans-serif; font-size: 11px; padding: 4px; min-width: 180px; color: #1e293b;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <img src="${agent.img}" style="width: 32px; height: 32px; border-radius: 50%; object-fit: cover; border: 1.5px solid #0d9488;" />
+            <div>
+              <div style="font-weight: 900; color: #0f172a; font-size: 12px; line-height: 1.2;">${agent.name}</div>
+              <div style="font-size: 9.5px; font-weight: 700; color: #0d9488;">${agent.role || 'অফিসিয়াল এজেন্ট'}</div>
+            </div>
           </div>
-          <p class="text-[9.5px] font-bold text-teal-600 mb-0.5">${agent.role}</p>
-          <p class="text-[9.5px] text-slate-600 leading-tight">📍 ${agent.city}${agent.district ? `, ${agent.district}` : ''}</p>
-          <p class="text-[9px] text-slate-500 font-mono mt-0.5">📞 ${agent.phone}</p>
-          ${agent.district || agent.thana || agent.postOffice ? `
-            <div style="margin-top: 4px; padding-top: 4px; border-top: 1px solid #f1f5f9; font-size: 8px; color: #475569; line-height: 1.2;">
-              <p style="font-weight: 800; color: #0d9488; margin: 0 0 2px 0;">🏠 ঠিকানাঃ</p>
-              ${agent.postOffice ? `<p style="margin: 0;">পোস্টঃ ${agent.postOffice}</p>` : ''}
-              ${agent.thana ? `<p style="margin: 0;">থানাঃ ${agent.thana}</p>` : ''}
-              ${agent.district ? `<p style="margin: 0;">জেলাঃ ${agent.district}</p>` : ''}
+
+          <div style="display: inline-block; padding: 2px 6px; border-radius: 999px; font-size: 8.5px; font-weight: 800; margin-bottom: 6px;" class="${presence.badgeClass}">
+            ${presence.label} (${relativeTime})
+          </div>
+
+          ${
+            formattedDist
+              ? `
+            <div style="margin-bottom: 5px; padding: 4px 6px; background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; font-size: 9px; font-weight: 800; color: #166534; display: flex; justify-content: space-between; align-items: center;">
+              <span>📏 আপনার থেকে দূরত্বঃ</span>
+              <span style="font-size: 10px; font-weight: 900; color: #15803d;">${formattedDist}</span>
             </div>
-          ` : ''}
-          ${agent.distance !== null && agent.distance !== undefined ? `
-            <div style="margin-top: 5px; padding: 4px 6px; background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; font-size: 8.5px; font-weight: 800; color: #166534;">
-              📏 দূরত্বঃ ${agent.distance.toFixed(1)} কি.মি.
-            </div>
-          ` : ''}
-          <a href="${agent.shopMapLink || 'https://www.google.com/maps/dir/?api=1&destination=' + livePos.lat + ',' + livePos.lng}" target="_blank" rel="noreferrer" style="margin-top: 6px; display: flex; align-items: center; justify-content: center; gap: 4px; background-color: #0d9488; color: white; padding: 4px 8px; border-radius: 8px; font-size: 9px; font-weight: 800; text-decoration: none; text-align: center;">
-            🗺️ গুগল ম্যাপে অবস্থান দেখুন
-          </a>
+          `
+              : ''
+          }
+
+          <div style="font-size: 9.5px; color: #475569; margin-bottom: 4px; line-height: 1.3;">
+            <p style="margin: 0;">📍 ${agent.city}${agent.district ? `, ${agent.district}` : ''}</p>
+            <p style="margin: 0; font-family: monospace; color: #64748b; font-size: 8.5px;">GPS: ${pos.lat.toFixed(6)}, ${pos.lng.toFixed(6)}</p>
+            ${accVal ? `<p style="margin: 0; color: #059669; font-size: 8.5px; font-weight: 700;">GPS নির্ভুলতা: ${accVal}</p>` : ''}
+          </div>
+
+          <div style="display: flex; gap: 4px; margin-top: 6px;">
+            <a href="${directionsUrl}" target="_blank" rel="noreferrer" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 2px; background-color: #0d9488; color: white; padding: 5px 6px; border-radius: 6px; font-size: 9px; font-weight: 800; text-decoration: none; text-align: center;">
+              🗺️ ডিরেকশন
+            </a>
+            ${
+              agent.phone
+                ? `
+              <a href="tel:${agent.phone}" style="display: flex; align-items: center; justify-content: center; background-color: #0284c7; color: white; padding: 5px 8px; border-radius: 6px; font-size: 9px; font-weight: 800; text-decoration: none;">
+                📞 কল
+              </a>
+            `
+                : ''
+            }
+          </div>
         </div>
       `;
+
       marker.bindPopup(popupHtml, {
         closeButton: false,
         offset: [0, -10]
@@ -279,17 +299,14 @@ export default function LeafletActiveMap({
       markersRef.current[agent.id] = marker;
     });
 
-    // Handle flying and focusing on agent if dynamically selected from the user cards
     if (highlightedAgentId) {
-      const selectedAgent = agents.find(a => a.id === highlightedAgentId);
+      const selectedAgent = agents.find((a) => a.id === highlightedAgentId);
       if (selectedAgent) {
-        const livePos = liveDrifts[selectedAgent.id] || getAgentLatLng(selectedAgent);
-        mapInstanceRef.current.flyTo([livePos.lat, livePos.lng], mapType === 'world' ? 10 : 12, {
+        const pos = getAgentLatLng(selectedAgent);
+        mapInstanceRef.current.flyTo([pos.lat, pos.lng], mapType === 'world' ? 11 : 13, {
           animate: true,
           duration: 1.2
         });
-        
-        // Open popup after flyTo completes
         setTimeout(() => {
           if (markersRef.current[selectedAgent.id]) {
             markersRef.current[selectedAgent.id].openPopup();
@@ -297,9 +314,8 @@ export default function LeafletActiveMap({
         }, 1200);
       }
     }
-  }, [leafletLoaded, mapType, highlightedAgentId, agents, liveDrifts, userLocation]);
+  }, [leafletLoaded, mapType, highlightedAgentId, agents, userLocation]);
 
-  // Clean elements on unmount for memory safety
   useEffect(() => {
     return () => {
       if (mapInstanceRef.current) {
@@ -314,13 +330,12 @@ export default function LeafletActiveMap({
       {!leafletLoaded && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/90 text-white z-20 space-y-3 font-sans">
           <div className="w-8 h-8 border-4 border-teal-500 border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-xs font-black text-slate-400 animate-pulse">রিয়েল-টাইম লাইভ ম্যাপ লোড হচ্ছে...</p>
+          <p className="text-xs font-black text-slate-400 animate-pulse">উচ্চ-নির্ভুল জিপিএস ম্যাপ লোড হচ্ছে...</p>
         </div>
       )}
-      
-      {/* Real Map Canvas Element */}
-      <div 
-        ref={mapContainerRef} 
+
+      <div
+        ref={mapContainerRef}
         style={{ width: '100%', height: '100%', outline: 'none' }}
         className="z-10"
       />

@@ -246,7 +246,7 @@ export default function BnbCorporateGuide({
             
             return (
               <button
-                key={cat.key}
+                key={`cat.key-idx`}
                 type="button"
                 onClick={() => {
                   setExpandedCategory(cat.key);
@@ -308,7 +308,7 @@ export default function BnbCorporateGuide({
 
             return (
               <motion.div 
-                key={cat.key} 
+                key={`cat.key-idx`} 
                 initial={{ opacity: 0, y: 15 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 15 }}

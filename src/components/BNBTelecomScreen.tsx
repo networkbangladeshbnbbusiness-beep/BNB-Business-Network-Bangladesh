@@ -573,7 +573,7 @@ export default function BNBTelecomScreen({
 
   const operatorList = [
     { id: 'all', name: 'সব অপারেটর', color: 'from-slate-700 to-slate-800' },
-    ...(appConfig?.telecomCategories?.map(tc => ({
+    ...(appConfig?.telecomCategories?.map((tc, _idx) => ({
       id: tc.id,
       name: tc.label,
       color: tc.id === 'Grameenphone' ? 'from-blue-500 to-sky-600' :
@@ -1327,7 +1327,7 @@ export default function BNBTelecomScreen({
                                            'bg-yellow-50 border-yellow-200 text-yellow-900';
                             return (
                               <button
-                                key={op}
+                                key={`op-idx`}
                                 type="button"
                                 onClick={() => setCashRechargeOperator(op)}
                                 className={`py-1.5 px-0.5 rounded-xl border text-center transition-all flex flex-col items-center justify-center gap-1 cursor-pointer active:scale-95 ${
@@ -1440,7 +1440,7 @@ export default function BNBTelecomScreen({
                                 const isSelected = Number(cashRechargeAmount) === Number(rule.amount);
                                 return (
                                   <button
-                                    key={rule.id || idx}
+                                    key={`rule.id || idx`}
                                     type="button"
                                     onClick={() => setCashRechargeAmount(String(rule.amount))}
                                     className={`p-2 rounded-xl text-left border transition-all active:scale-95 flex flex-col justify-between cursor-pointer ${

@@ -103,8 +103,8 @@ export async function restoreAndSeedDatabase() {
         }
       }
 
-      // 2b. Deduplicate users by last 9 phone digits: keep original/first created account (e.g. BNB00000014) and remove duplicate (e.g. BNB00000093)
-      const phoneMap: Record<string, { id: string; memberId: string; createdAt: string }[]> = {};
+      // 2b. Deduplicate users by last 9 phone digits: merge balances into retained account (e.g. BNB00000014) before removing duplicate
+      const phoneMap: Record<string, { id: string; memberId: string; createdAt: string; data: User }[]> = {};
       usersSnap.docs.forEach((uDoc) => {
         const uData = uDoc.data() as User;
         if ((uData as any).deleted || (uData as any).isDeleted) return;
@@ -115,22 +115,56 @@ export async function restoreAndSeedDatabase() {
           phoneMap[last9].push({
             id: uDoc.id,
             memberId: uData.memberId || '',
-            createdAt: uData.createdAt || ''
+            createdAt: uData.createdAt || '',
+            data: uData
           });
         }
       });
 
       for (const [last9, list] of Object.entries(phoneMap)) {
         if (list.length > 1) {
-          // Sort by member ID serial number ascending (keeps BNB00000014 over BNB00000093)
+          // Sort by member ID serial number ascending (keeps primary account BNB00000014)
           list.sort((a, b) => {
             const numA = parseInt(a.memberId.replace(/\D/g, ''), 10) || 9999999;
             const numB = parseInt(b.memberId.replace(/\D/g, ''), 10) || 9999999;
             return numA - numB;
           });
+
+          const primaryDoc = list[0];
+          let mergedBal = Number(primaryDoc.data.balance !== undefined ? primaryDoc.data.balance : primaryDoc.data.mainBalance) || Number(primaryDoc.data.mainBalance) || 0;
+          let mergedSavings = Number(primaryDoc.data.savings) || 0;
+          let mergedTelecom = Number(primaryDoc.data.telecomBalance) || 0;
+          let mergedShop = Number(primaryDoc.data.superShopBalance) || 0;
+          let needsPrimaryUpdate = false;
+
           for (let i = 1; i < list.length; i++) {
-            console.log(`[DatabaseSeeder] Removing duplicate user doc ${list[i].id} (ID: ${list[i].memberId}) for phone last 9 digits: ${last9}`);
+            const dup = list[i].data;
+            const dupBal = Number(dup.balance !== undefined ? dup.balance : dup.mainBalance) || Number(dup.mainBalance) || 0;
+            const dupSavings = Number(dup.savings) || 0;
+            const dupTelecom = Number(dup.telecomBalance) || 0;
+            const dupShop = Number(dup.superShopBalance) || 0;
+
+            if (dupBal > 0 || dupSavings > 0 || dupTelecom > 0 || dupShop > 0) {
+              mergedBal += dupBal;
+              mergedSavings += dupSavings;
+              mergedTelecom += dupTelecom;
+              mergedShop += dupShop;
+              needsPrimaryUpdate = true;
+            }
+
+            console.log(`[DatabaseSeeder] Safe merging balance (${dupBal} BDT) from duplicate user doc ${list[i].id} into primary ${primaryDoc.id}`);
             await deleteDoc(doc(db, 'users', list[i].id));
+          }
+
+          if (needsPrimaryUpdate) {
+            await setDoc(doc(db, 'users', primaryDoc.id), {
+              balance: mergedBal,
+              mainBalance: mergedBal,
+              savings: mergedSavings,
+              telecomBalance: mergedTelecom,
+              superShopBalance: mergedShop,
+              updatedAt: new Date().toISOString()
+            }, { merge: true });
           }
         }
       }

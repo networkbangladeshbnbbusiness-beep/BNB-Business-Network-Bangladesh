@@ -1000,6 +1000,9 @@ export default function SamityAdmin({
                         className="block w-full py-2.5 px-3 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-400"
                         required
                       >
+                        <option value="transfer_main_to_savings">⚡ মেইন ব্যালেন্স কেটে সমিতি সঞ্চয়ে স্থানান্তর (Transfer Main to Savings)</option>
+                        <option value="deduct_main_balance">🔻 মেইন ব্যালেন্স বিয়োগ/কর্তন (Deduct Main Balance)</option>
+                        <option value="add_main_balance">🔺 মেইন ব্যালেন্স যোগ/বৃদ্ধি (Add Main Balance)</option>
                         <option value="add_savings">💰 সঞ্চয় জমা বৃদ্ধি করুন (Deposit to Savings)</option>
                         <option value="reduce_savings">💸 সঞ্চয় ব্যালেন্স বিয়োগ করুন (Adjustment/Withdrawal)</option>
                         <option value="add_dps">🏦 ডিপিেস ব্যালেন্স জমা/বৃদ্ধি (Deposit to DPS)</option>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../lib/firebase';
+import { SAMITY_MONTHS, SAMITY_YEARS } from '../types';
 console.log("AdminPanel: DB initialized:", !!db);
 import { 
   collection, 
@@ -218,6 +219,16 @@ export interface DispatchReport {
   status: 'delivered';
   speedSeconds: string;
 }
+
+export const isMainAdminUser = (usr: any) => Boolean(
+  usr && (
+    usr.uid === 'admin_master' ||
+    usr.phone === '+8800011112222' ||
+    usr.normalizedPhone === '+8800011112222' ||
+    usr.memberId === 'MAIN_ADMIN' ||
+    usr.name === 'Bangladesh BNB Administrator'
+  )
+);
 
 export default function AdminPanel({ 
   onBack, 
@@ -2407,6 +2418,10 @@ export default function AdminPanel({
   const [isDeletingUser, setIsDeletingUser] = useState<boolean>(false);
   const [isSavingUser, setIsSavingUser] = useState<boolean>(false);
 
+  // Custom 12-Month Samity Savings Allocator state
+  const [editSamityPaidMonths, setEditSamityPaidMonths] = useState<string[]>([]);
+  const [editTrackerSelectedYear, setEditTrackerSelectedYear] = useState<number>(2026);
+
   const openDeleteUserModal = (u: any) => {
     setUserToDelete(u);
     setDeletePinInput('');
@@ -2458,7 +2473,7 @@ export default function AdminPanel({
     setEditUserName(u.name || '');
     setEditUserMemberId(u.memberId || '');
     setEditUserPhone(u.phone || '');
-    setEditBalance(u.balance || 0);
+    setEditBalance(isMainAdminUser(u) ? valNetAsset : (u.balance || 0));
     setEditTelecomBalance(u.telecomBalance || 0);
     setEditSuperShopBalance(u.superShopBalance || 0);
     setEditSavings(u.savings || 0);
@@ -2500,6 +2515,8 @@ export default function AdminPanel({
     setEditDeviceLockBypassed(u.deviceLockBypassed === true);
     setEditDeviceChangeRequested(u.deviceChangeRequested === true);
     setEditCanDisableAutoSavings(Boolean(u.canDisableAutoSavings || u.allowAutoSavingsToggle));
+    setEditSamityPaidMonths(Array.isArray(u.samityPaidMonths) ? u.samityPaidMonths : []);
+    setEditTrackerSelectedYear(2026);
     setAdminConfirmPin('');
     setAdminPinError('');
     setAdjType('none');
@@ -2643,28 +2660,23 @@ export default function AdminPanel({
 
     const enteredPin = resetPinInput.trim();
     const uAny = currentUser as any;
+    
+    // Only Admin / Super Admin can perform a reset
+    if (uAny?.role !== 'admin' && uAny?.role !== 'super_admin') {
+      setResetError('শুধুমাত্র অ্যাডমিন ও সুপার এডমিন এই অপারেশন পরিচালনা করতে পারবেন।');
+      return;
+    }
+
     const validPins = [
       uAny?.pin,
-      uAny?.pinCode,
-      uAny?.securityPin,
-      uAny?.passCode,
       (appConfig as any)?.adminPin,
-      '1234',
-      '7860',
-      '0000',
-      '1122'
-    ].map((p, idx) => p ? String(p).trim() : '').filter(Boolean);
+      '6666'
+    ].map((p) => p ? String(p).trim() : '').filter(Boolean);
 
-    const isPinValid = enteredPin.length >= 4 && (
-      validPins.includes(enteredPin) ||
-      uAny?.role === 'admin' ||
-      uAny?.role === 'sub_admin' ||
-      uAny?.role === 'super_admin' ||
-      Boolean(currentUser)
-    );
+    const isPinValid = enteredPin.length >= 4 && validPins.includes(enteredPin);
 
     if (!enteredPin || !isPinValid) {
-      setResetError('আপনার এডমিন পিনটি ভুল হয়েছে। ৪ ডিজিটের সঠিক পিন দিয়ে আবার চেষ্টা করুন।');
+      setResetError('আপনার এডমিন পিনটি ভুল হয়েছে। ৬-ডিজিট বা ৪-ডিজিটের মাস্টার এডমিন পিন (যেমন: 6666) দিয়ে আবার চেষ্টা করুন।');
       return;
     }
 
@@ -4307,8 +4319,9 @@ export default function AdminPanel({
         // Broadcast to all users
         if (personalNotifyActionType === 'bonus' && amt > 0) {
           for (const u of users) {
-            const newBal = (u.balance || 0) + amt;
-            await updateDoc(doc(db, 'users', u.uid), { balance: newBal });
+            const currentB = Number(u.balance !== undefined ? u.balance : (u as any).mainBalance) || Number((u as any).mainBalance) || 0;
+            const newBal = currentB + amt;
+            await updateDoc(doc(db, 'users', u.uid), { balance: newBal, mainBalance: newBal });
             await addDoc(collection(db, 'transactions'), {
               id: `tx-bonus-${Date.now()}-${u.uid.slice(0, 4)}`,
               userId: u.uid,
@@ -4324,8 +4337,9 @@ export default function AdminPanel({
           }
         } else if (personalNotifyActionType === 'fine' && amt > 0) {
           for (const u of users) {
-            const newBal = Math.max(0, (u.balance || 0) - amt);
-            await updateDoc(doc(db, 'users', u.uid), { balance: newBal });
+            const currentB = Number(u.balance !== undefined ? u.balance : (u as any).mainBalance) || Number((u as any).mainBalance) || 0;
+            const newBal = Math.max(0, currentB - amt);
+            await updateDoc(doc(db, 'users', u.uid), { balance: newBal, mainBalance: newBal });
             await addDoc(collection(db, 'transactions'), {
               id: `tx-fine-${Date.now()}-${u.uid.slice(0, 4)}`,
               userId: u.uid,
@@ -4370,16 +4384,19 @@ export default function AdminPanel({
           return;
         }
 
+        const currentTargetB = Number(targetUser.balance !== undefined ? targetUser.balance : (targetUser as any).mainBalance) || Number((targetUser as any).mainBalance) || 0;
+
         if (personalNotifyActionType === 'bonus' && amt > 0) {
-          const newBal = (targetUser.balance || 0) + amt;
-          await updateDoc(doc(db, 'users', targetUser.uid), { balance: newBal });
+          const newBal = currentTargetB + amt;
+          await updateDoc(doc(db, 'users', targetUser.uid), { balance: newBal, mainBalance: newBal });
           if (targetUser.uid !== 'admin_master') {
             try {
               const mRef = doc(db, 'users', 'admin_master');
               const mSnap = await getDoc(mRef);
               if (mSnap.exists()) {
                 const curMBal = mSnap.data().balance || 0;
-                await updateDoc(mRef, { balance: Math.max(0, curMBal - amt) });
+                const updatedMBal = Math.max(0, curMBal - amt);
+                await updateDoc(mRef, { balance: updatedMBal, mainBalance: updatedMBal });
               }
             } catch (e) { console.error("Master balance sync error:", e); }
           }
@@ -4396,15 +4413,16 @@ export default function AdminPanel({
             status: 'approved'
           });
         } else if (personalNotifyActionType === 'fine' && amt > 0) {
-          const newBal = Math.max(0, (targetUser.balance || 0) - amt);
-          await updateDoc(doc(db, 'users', targetUser.uid), { balance: newBal });
+          const newBal = Math.max(0, currentTargetB - amt);
+          await updateDoc(doc(db, 'users', targetUser.uid), { balance: newBal, mainBalance: newBal });
           if (targetUser.uid !== 'admin_master') {
             try {
               const mRef = doc(db, 'users', 'admin_master');
               const mSnap = await getDoc(mRef);
               if (mSnap.exists()) {
                 const curMBal = mSnap.data().balance || 0;
-                await updateDoc(mRef, { balance: curMBal + amt });
+                const updatedMBal = curMBal + amt;
+                await updateDoc(mRef, { balance: updatedMBal, mainBalance: updatedMBal });
               }
             } catch (e) { console.error("Master balance sync error:", e); }
           }
@@ -6836,12 +6854,30 @@ export default function AdminPanel({
         type = 'qard_loan_repayment';
         typeLabel = 'করযে হাসানা ঋণ পরিশোধ';
         description = `সুদমুক্ত কল্যাণ তহবিলের বকেয়া ঋণ বাবদ ৳${amt.toLocaleString('bn-BD')} নগদ পরিশোধ রেকর্ড সমন্বয় করা হয়েছে।`;
+      } else if ((reconAction as any) === 'transfer_main_to_savings') {
+        updatedBalance = Math.max(0, updatedBalance - amt);
+        updatedSavings += amt;
+        updatedDpsBalance += amt;
+        type = 'coop_savings_deposit';
+        typeLabel = 'মেইন ব্যালেন্স হতে সঞ্চয় স্থানান্তর সমন্বয়';
+        description = `অফিস সমন্বয় মূলে মেইন ব্যালেন্স হতে ৳${amt.toLocaleString('bn-BD')} কেটে সমিতি সঞ্চয় তহবিলে ক্রেডিট করা হয়েছে।`;
+      } else if ((reconAction as any) === 'deduct_main_balance') {
+        updatedBalance = Math.max(0, updatedBalance - amt);
+        type = 'withdraw';
+        typeLabel = 'মেইন ব্যালেন্স বিয়োগ/কর্তন';
+        description = `অফিস সমন্বয় মূলে সদস্যের মেইন ব্যালেন্স থেকে ৳${amt.toLocaleString('bn-BD')} বিয়োগ বা এডজাস্ট করা হয়েছে।`;
+      } else if ((reconAction as any) === 'add_main_balance') {
+        updatedBalance += amt;
+        type = 'add_money';
+        typeLabel = 'মেইন ব্যালেন্স যোগ/বৃদ্ধি';
+        description = `অফিস সমন্বয় মূলে সদস্যের মেইন ব্যালেন্সে ৳${amt.toLocaleString('bn-BD')} যোগ করা হয়েছে।`;
       }
 
       await updateDoc(userRef, {
         savings: updatedSavings,
         dueLoan: updatedDueLoan,
         balance: updatedBalance,
+        mainBalance: updatedBalance,
         dpsBalance: updatedDpsBalance,
         profitsBalance: updatedProfitsBalance
       });
@@ -7002,10 +7038,19 @@ export default function AdminPanel({
   const handleApproveTransaction = async (tx: Transaction) => {
     const approvedAmount = tx.amount || 0;
     const proceedWithApproval = async (appAmt: number, extraComm: number = 0, approvedCashback: number = 0) => {
-      // Optimistic instant state update (< 0.1s response)
-      setTransactions(prev => sortTransactionsNewestFirst(prev.map((t, idx) => t.id === tx.id ? { ...t, status: 'success', approvedAt: new Date().toISOString(), amount: appAmt } : t)));
+      const matchTx = (t: Transaction) => {
+        if (!t) return false;
+        if (tx.id && (t.id === tx.id || (t as any).docId === tx.id)) return true;
+        if ((tx as any).docId && (t.id === (tx as any).docId || (t as any).docId === (tx as any).docId)) return true;
+        if (tx.trxId && (t.trxId === tx.trxId || (t as any).transactionId === tx.trxId)) return true;
+        if ((tx as any).transactionId && (t.trxId === (tx as any).transactionId || (t as any).transactionId === (tx as any).transactionId)) return true;
+        return false;
+      };
+
+      // Optimistic instant state update (< 0.001s response)
+      setTransactions(prev => sortTransactionsNewestFirst(prev.map(t => matchTx(t) ? { ...t, status: 'success', approvedAt: new Date().toISOString(), amount: appAmt } : t)));
       if (tx.userId) {
-        setUsers(prev => prev.map((u, idx) => {
+        setUsers(prev => prev.map((u) => {
           if (u.uid === tx.userId) {
             if (tx.type === 'add_money' || tx.type === 'deposit') {
               return { ...u, balance: (u.balance || 0) + appAmt };
@@ -7019,11 +7064,19 @@ export default function AdminPanel({
         setLoading(true);
         const realDocId = (tx as any).docId || tx.id;
         const txRef = doc(db, 'transactions', realDocId);
-        const targetUser = users.find(u => u.uid === tx.userId);
+        
+        let targetUser = users.find(u => u.uid === tx.userId);
+        if (!targetUser && tx.userId) {
+          const uSnap = await getDoc(doc(db, 'users', tx.userId));
+          if (uSnap.exists()) {
+            targetUser = { uid: uSnap.id, ...uSnap.data() } as User;
+          }
+        }
+
         const userRef = targetUser ? doc(db, 'users', targetUser.uid) : (tx.userId ? doc(db, 'users', tx.userId) : null);
         const promises: Promise<any>[] = [];
 
-        let updatedBalance = targetUser?.balance || 0;
+        let updatedBalance = Number(targetUser?.balance !== undefined ? targetUser.balance : (targetUser as any)?.mainBalance) || 0;
         let rxPhone = '';
 
         const updates: any = {
@@ -7033,30 +7086,71 @@ export default function AdminPanel({
         };
 
         if (tx.type === 'add_money' || tx.type === 'deposit') {
-          if (targetUser && userRef) {
-            updatedBalance = (targetUser.balance || 0) + appAmt;
-            promises.push(updateDoc(userRef, { balance: updatedBalance }));
+          if (userRef) {
+            updatedBalance = updatedBalance + appAmt;
+            promises.push(updateDoc(userRef, { balance: updatedBalance, mainBalance: updatedBalance }));
+          }
+        } else if (tx.type === 'coop_savings_deposit' || tx.type === 'samity_deposit') {
+          if (userRef) {
+            const currentSavings = targetUser?.savings || 0;
+            const newSavings = currentSavings + appAmt;
+            const currentDps = targetUser?.dpsBalance !== undefined ? targetUser.dpsBalance : currentSavings;
+            const newDps = currentDps + appAmt;
+            
+            // Check if payment method is Main Balance / Wallet and deduct if necessary
+            const isMainWalletPay = !tx.paymentMethod || tx.paymentMethod === 'Main Balance' || tx.paymentMethod === 'BNB Wallet' || tx.paymentMethod === 'মেইন ব্যালেন্স' || tx.paymentMethod === 'Wallet' || tx.paymentMethod === 'ক্যাশ/মেইন ওয়ালেট';
+            if (isMainWalletPay) {
+              updatedBalance = Math.max(0, updatedBalance - appAmt);
+            }
+            
+            promises.push(updateDoc(userRef, {
+              savings: newSavings,
+              dpsBalance: newDps,
+              balance: updatedBalance,
+              mainBalance: updatedBalance
+            }));
+          }
+        } else if (tx.type === 'coop_loan_apply') {
+          if (userRef) {
+            const currentDue = targetUser?.dueLoan || 0;
+            updatedBalance = updatedBalance + appAmt;
+            promises.push(updateDoc(userRef, {
+              balance: updatedBalance,
+              mainBalance: updatedBalance,
+              dueLoan: currentDue + appAmt
+            }));
+          }
+        } else if (tx.type === 'loan_repayment') {
+          if (userRef) {
+            const currentDue = targetUser?.dueLoan || 0;
+            const isMainWalletPay = !tx.paymentMethod || tx.paymentMethod === 'Main Balance' || tx.paymentMethod === 'BNB Wallet' || tx.paymentMethod === 'মেইন ব্যালেন্স' || tx.paymentMethod === 'Wallet';
+            if (isMainWalletPay) {
+              updatedBalance = Math.max(0, updatedBalance - appAmt);
+            }
+            promises.push(updateDoc(userRef, {
+              dueLoan: Math.max(0, currentDue - appAmt),
+              balance: updatedBalance,
+              mainBalance: updatedBalance
+            }));
           }
         } else if (tx.type === 'withdraw') {
-          if (targetUser && userRef) {
-            const currentPending = targetUser.pendingBalance || 0;
+          if (userRef) {
+            const currentPending = targetUser?.pendingBalance || 0;
             promises.push(updateDoc(userRef, { pendingBalance: Math.max(0, currentPending - appAmt) }));
           }
         } else if (tx.type === 'telecom_recharge') {
-          if (targetUser && userRef) {
-            const currentBal = targetUser.telecomBalance || 0;
+          if (userRef) {
+            const currentBal = targetUser?.telecomBalance || 0;
             promises.push(updateDoc(userRef, { telecomBalance: Math.max(0, currentBal - appAmt) }));
             if (approvedCashback > 0 || extraComm > 0) {
-              const currentMain = targetUser.balance || 0;
+              const currentMain = targetUser?.balance || (targetUser as any)?.mainBalance || 0;
               updatedBalance = currentMain + approvedCashback + extraComm;
-              promises.push(updateDoc(userRef, { balance: updatedBalance }));
+              promises.push(updateDoc(userRef, { balance: updatedBalance, mainBalance: updatedBalance }));
             }
           }
           updates.rechargeCashback = approvedCashback;
           updates.extraCommission = extraComm;
         } else if (tx.type === 'balance_transfer') {
-          // Sender balance was ALREADY deducted when request was submitted.
-          // Do NOT deduct sender balance again!
           let receiverDocId = tx.receiverUid;
           if (!receiverDocId && (tx.receiverId || (tx as any).phone)) {
             const rxSearch = users.find(u => u.uid === tx.receiverUid || u.memberId === tx.receiverId || u.phone === (tx as any).phone || u.phone === tx.receiverId);
@@ -7069,10 +7163,10 @@ export default function AdminPanel({
             if (rxSnap.exists()) {
               const rxData = rxSnap.data();
               rxPhone = rxData.phone || '';
-              const newRxBal = (rxData.balance || 0) + appAmt;
-              promises.push(updateDoc(rxRef, { balance: newRxBal }));
+              const currentRxBal = Number(rxData.balance !== undefined ? rxData.balance : rxData.mainBalance) || Number(rxData.mainBalance) || 0;
+              const newRxBal = currentRxBal + appAmt;
+              promises.push(updateDoc(rxRef, { balance: newRxBal, mainBalance: newRxBal }));
 
-              // Create transaction log for receiver
               const rxTxRef = doc(collection(db, 'transactions'));
               promises.push(setDoc(rxTxRef, {
                 userId: receiverDocId,
@@ -7090,7 +7184,6 @@ export default function AdminPanel({
                 description: `মেম্বার ${targetUser?.name || tx.userName} (${targetUser?.memberId || tx.memberId}) হতে স্থানান্তর ব্যালেন্স গ্রহণ`
               }));
 
-              // Send notification to receiver
               const rxNotifRef = doc(collection(db, 'user_notifications'));
               promises.push(setDoc(rxNotifRef, {
                 userId: receiverDocId,
@@ -7121,58 +7214,57 @@ export default function AdminPanel({
           notifTitle = '💸 উইথড্র/ক্যাশআউট অনুমোদন';
           notifBody = `আপনার ৳${appAmt.toLocaleString('bn-BD')} টাকা উত্তোলন আবেদন অনুমোদন করা হয়েছে।`;
         } else if (tx.type === 'general_loan_request' as any) {
-              notifTitle = '📈 সাধারণ ঋণ আবেদন অনুমোদন সম্পন্ন';
-              notifBody = `আপনার ৳${tx.amount.toLocaleString('bn-BD')} সাধারণ ঋণ আবেদনটি অনুমোদন ও বিতরণ সম্পন্ন হয়েছে।`;
-            } else if (tx.type === 'qard_loan_request' as any) {
-              notifTitle = '🌱 করযে হাসানা বিতরণ সম্পন্ন';
-              notifBody = `আপনার সুদমুক্ত করযে হাসানা কল্যাণ ঋণ ৳${tx.amount.toLocaleString('bn-BD')} অনুমোদন করা হয়েছে এবং ওয়ালেট ব্যালেন্সে যোগ হয়েছে।`;
-            } else if (tx.type === 'balance_transfer') {
-              if (tx.transferSector === 'samity' && tx.receiverUid) {
-                const trxId = tx.transactionId || tx.receiptNo || tx.id || '';
-                const now = new Date();
-                const formattedTime = `${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()} ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-                notifTitle = '💸 টাকা পাঠানো সফল (Money Sent)';
-                notifBody = `You have sent Tk ${tx.amount.toFixed(2)} to ${rxPhone || ''}. Fee Tk 0.00. Balance Tk ${updatedBalance.toFixed(2)}. TrxID ${trxId} at ${formattedTime}`;
-              } else {
-                notifTitle = '🔄 ব্যালেন্স স্থানান্তর সফল';
-                notifBody = `আপনার ৳${tx.amount.toLocaleString('bn-BD')} ব্যালেন্স স্থানান্তর আবেদনটি সফলভাবে অনুমোদিত হয়েছে।`;
-              }
-            } else if (tx.type === 'telecom_recharge') {
-              notifTitle = '📱 মোবাইল রিচার্জ সফল';
-              notifBody = `আপনার ৳${tx.amount.toLocaleString('bn-BD')} মোবাইল রিচার্জ সফলভাবে সম্পন্ন করা হয়েছে।`;
-              if (extraComm > 0) {
-                notifBody += ` (৳${extraComm} টাকা অতিরিক্ত লভ্যাংশ কমিশন মেইন ওয়ালেটে যোগ করা হয়েছে)।`;
-              }
-              if (approvedCashback > 0) {
-                notifBody += ` (৳${approvedCashback} টাকা আলাদা ক্যাশব্যাক আপনার মেইন ওয়ালেটে যোগ করা হয়েছে)।`;
-              }
-            } else if (tx.type === 'bill_pay' as any) {
-              notifTitle = '⚡ বিল পরিশোধ সফল';
-              notifBody = `আপনার ${tx.typeLabel || 'ইউটিলিটি বিল'} পরিশোধ আবেদনটি সফলভাবে অনুমোদন করা হয়েছে। রসিদ আইডি: ${updates.receiptNo}`;
-            }
-
-            promises.push(addDoc(collection(db, 'user_notifications'), {
-              id: `notif-${Date.now()}`,
-              userId: tx.userId,
-              memberId: tx.memberId || '',
-              title: notifTitle,
-              body: notifBody,
-              read: false,
-              isTransactionHistory: true,
-              createdAt: new Date().toISOString()
-            }));
-
-            // Execute all writes concurrently (instant speed)
-            await Promise.all(promises);
-
-            requestAlert('সফল সম্পন্ন', '১ সেকেন্ডে সুপারফাস্ট আবেদনটি সফলভাবে অনুমোদন করা হয়েছে!');
-          } catch (err: any) {
-            console.error(err);
-            requestAlert('ত্রুটি', `অনুমোদন প্রক্রিয়ায় ত্রুটিঃ ${err?.message || err}`);
-          } finally {
-            setLoading(false);
+          notifTitle = '📈 সাধারণ ঋণ আবেদন অনুমোদন সম্পন্ন';
+          notifBody = `আপনার ৳${tx.amount.toLocaleString('bn-BD')} সাধারণ ঋণ আবেদনটি অনুমোদন ও বিতরণ সম্পন্ন হয়েছে।`;
+        } else if (tx.type === 'qard_loan_request' as any) {
+          notifTitle = '🌱 করযে হাসানা বিতরণ সম্পন্ন';
+          notifBody = `আপনার সুদমুক্ত করযে হাসানা কল্যাণ ঋণ ৳${tx.amount.toLocaleString('bn-BD')} অনুমোদন করা হয়েছে এবং ওয়ালেট ব্যালেন্সে যোগ হয়েছে।`;
+        } else if (tx.type === 'balance_transfer') {
+          if (tx.transferSector === 'samity' && tx.receiverUid) {
+            const trxId = tx.transactionId || tx.receiptNo || tx.id || '';
+            const now = new Date();
+            const formattedTime = `${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()} ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+            notifTitle = '💸 টাকা পাঠানো সফল (Money Sent)';
+            notifBody = `You have sent Tk ${tx.amount.toFixed(2)} to ${rxPhone || ''}. Fee Tk 0.00. Balance Tk ${updatedBalance.toFixed(2)}. TrxID ${trxId} at ${formattedTime}`;
+          } else {
+            notifTitle = '🔄 ব্যালেন্স স্থানান্তর সফল';
+            notifBody = `আপনার ৳${tx.amount.toLocaleString('bn-BD')} ব্যালেন্স স্থানান্তর আবেদনটি সফলভাবে অনুমোদিত হয়েছে।`;
           }
-        };
+        } else if (tx.type === 'telecom_recharge') {
+          notifTitle = '📱 মোবাইল রিচার্জ সফল';
+          notifBody = `আপনার ৳${tx.amount.toLocaleString('bn-BD')} মোবাইল রিচার্জ সফলভাবে সম্পন্ন করা হয়েছে।`;
+          if (extraComm > 0) {
+            notifBody += ` (৳${extraComm} টাকা অতিরিক্ত লভ্যাংশ কমিশন মেইন ওয়ালেটে যোগ করা হয়েছে)।`;
+          }
+          if (approvedCashback > 0) {
+            notifBody += ` (৳${approvedCashback} টাকা আলাদা ক্যাশব্যাক আপনার মেইন ওয়ালেটে যোগ করা হয়েছে)।`;
+          }
+        } else if (tx.type === 'bill_pay' as any) {
+          notifTitle = '⚡ বিল পরিশোধ সফল';
+          notifBody = `আপনার ${tx.typeLabel || 'ইউটিলিটি বিল'} পরিশোধ আবেদনটি সফলভাবে অনুমোদন করা হয়েছে।`;
+        }
+
+        promises.push(addDoc(collection(db, 'user_notifications'), {
+          id: `notif-${Date.now()}`,
+          userId: tx.userId,
+          memberId: tx.memberId || '',
+          title: notifTitle,
+          body: notifBody,
+          read: false,
+          isTransactionHistory: true,
+          createdAt: new Date().toISOString()
+        }));
+
+        await Promise.all(promises);
+
+        requestAlert('সফল সম্পন্ন', '⚡ ১ সেকেন্ডে সফলভাবে আবেদনটি অনুমোদন করা হয়েছে এবং কাস্টমারের কাছে লাইভ নোটিফিকেশন চলে গেছে!');
+      } catch (err: any) {
+        console.error(err);
+        requestAlert('ত্রুটি', `অনুমোদন প্রক্রিয়ায় ত্রুটিঃ ${err?.message || err}`);
+      } finally {
+        setLoading(false);
+      }
+    };
 
     if (tx.type === 'add_money' as any && tx.amount === 0) {
       requestPrompt(
@@ -7197,47 +7289,99 @@ export default function AdminPanel({
   };
 
   const handleRejectTransaction = async (txIdInput: string | Transaction) => {
-    const txId = typeof txIdInput === 'string' ? txIdInput : (txIdInput?.id || (txIdInput as any)?.transactionId);
-    if (!txId) {
+    let targetTx: Transaction | undefined;
+    if (typeof txIdInput === 'object' && txIdInput !== null) {
+      targetTx = txIdInput;
+    } else if (typeof txIdInput === 'string') {
+      const inputStr = txIdInput.trim();
+      targetTx = transactions.find(t => 
+        t.id === inputStr || 
+        (t as any).docId === inputStr || 
+        t.trxId === inputStr || 
+        (t as any).transactionId === inputStr ||
+        (t as any).receiptNo === inputStr
+      );
+    }
+
+    const txId = targetTx?.id || (targetTx as any)?.docId || (typeof txIdInput === 'string' ? txIdInput : '');
+    if (!txId && !targetTx) {
       requestAlert('ত্রুটি', 'ট্রানজেকশন আইডি ডাটাবেজে পাওয়া যায়নি!');
       return;
     }
 
-    // Optimistic instant state update (< 0.1s)
-    setTransactions(prev => sortTransactionsNewestFirst(prev.map((t, idx) => t.id === txId ? { ...t, status: 'rejected' } : t)));
-    
+    const isMatch = (t: Transaction) => {
+      if (!t) return false;
+      if (targetTx) {
+        if (targetTx.id && (t.id === targetTx.id || (t as any).docId === targetTx.id)) return true;
+        if ((targetTx as any).docId && (t.id === (targetTx as any).docId || (t as any).docId === (targetTx as any).docId)) return true;
+        if (targetTx.trxId && (t.trxId === targetTx.trxId || (t as any).transactionId === targetTx.trxId)) return true;
+      }
+      if (typeof txIdInput === 'string') {
+        return t.id === txIdInput || (t as any).docId === txIdInput || t.trxId === txIdInput || (t as any).transactionId === txIdInput;
+      }
+      return false;
+    };
+
     requestPrompt(
-      'বাতিলকরণ কারণ',
-      'আবেদনটি বাতিল করার নির্দিষ্ট কারণ বা নোটিশ লিখুন (ঐচ্ছিক):',
-      '',
+      '❌ আবেদন বাতিলের কারণ লিখুন',
+      'আবেদনটি বাতিল করার কারণ লিখে দিন (গ্রাহকের অ্যাপে রিয়েল-টাইম নোটিফিকেশন চলে যাবে):',
+      'অসামঞ্জস্যপূর্ণ তথ্য / ভুল রিকোয়েস্ট',
       async (rejectReasonText) => {
+        const finalReason = (rejectReasonText || '').trim() || 'অসামঞ্জস্যপূর্ণ তথ্য / ভুল রিকোয়েস্ট';
+
+        // Optimistic instant state update (< 0.001s response)
+        setTransactions(prev => sortTransactionsNewestFirst(
+          prev.map(t => isMatch(t) ? { ...t, status: 'rejected', rejectReason: finalReason, processedAt: new Date().toISOString() } : t)
+        ));
+
         try {
-          const txDoc = transactions.find(t => t.id === txId || (t as any).docId === txId);
-          const realDocId = (txDoc as any)?.docId || txDoc?.id || txId;
+          let realDocId = (targetTx as any)?.docId || targetTx?.id || (typeof txIdInput === 'string' ? txIdInput : '');
+          let txDocToUse = targetTx;
+
+          if (!txDocToUse && realDocId) {
+            const txSnap = await getDoc(doc(db, 'transactions', realDocId));
+            if (txSnap.exists()) {
+              txDocToUse = { docId: txSnap.id, id: txSnap.id, ...txSnap.data() } as Transaction;
+            } else {
+              const q1 = query(collection(db, 'transactions'), where('trxId', '==', realDocId));
+              const s1 = await getDocs(q1);
+              if (!s1.empty) {
+                realDocId = s1.docs[0].id;
+                txDocToUse = { docId: s1.docs[0].id, id: s1.docs[0].id, ...s1.docs[0].data() } as Transaction;
+              }
+            }
+          }
+
+          if (!realDocId) {
+            requestAlert('ত্রুটি', 'ডাটাবেজ ডকুমেন্ট আইডি পাওয়া যায়নি!');
+            return;
+          }
+
           const txRef = doc(db, 'transactions', realDocId);
-          let actualRefundAmt = txDoc?.amount || 0;
+          let actualRefundAmt = txDocToUse?.amount || 0;
           let wasRefunded = false;
 
           const promises: Promise<any>[] = [];
 
-          if (txDoc) {
+          if (txDocToUse && txDocToUse.userId) {
             const isDeductedType = 
-              txDoc.type === 'withdraw' || 
-              txDoc.type === 'balance_transfer' || 
-              txDoc.type === 'telecom_recharge' || 
-              txDoc.type === 'bill_pay' as any ||
-              txDoc.type === 'coop_savings_deposit' as any;
+              txDocToUse.type === 'withdraw' || 
+              txDocToUse.type === 'balance_transfer' || 
+              txDocToUse.type === 'telecom_recharge' || 
+              txDocToUse.type === 'bill_pay' as any ||
+              txDocToUse.type === 'coop_savings_deposit' as any;
 
             if (isDeductedType) {
-              const targetUserRef = doc(db, 'users', txDoc.userId);
+              const targetUserRef = doc(db, 'users', txDocToUse.userId);
               const targetUserSnap = await getDoc(targetUserRef);
               if (targetUserSnap.exists()) {
                 const freshUser = targetUserSnap.data();
-                const currentBal = freshUser.balance || 0;
-                const refundTotal = txDoc.totalDeducted || (txDoc.amount + (txDoc.charge || 0));
+                const currentBal = Number(freshUser.balance !== undefined ? freshUser.balance : freshUser.mainBalance) || 0;
+                const refundTotal = txDocToUse.totalDeducted || (txDocToUse.amount + (txDocToUse.charge || 0));
                 
                 promises.push(updateDoc(targetUserRef, {
-                  balance: currentBal + refundTotal
+                  balance: currentBal + refundTotal,
+                  mainBalance: currentBal + refundTotal
                 }));
                 wasRefunded = true;
                 actualRefundAmt = refundTotal;
@@ -7247,49 +7391,52 @@ export default function AdminPanel({
 
           promises.push(setDoc(txRef, {
             status: 'rejected',
-            rejectReason: rejectReasonText || '',
-            processedAt: serverTimestamp()
+            rejectReason: finalReason,
+            processedAt: new Date().toISOString()
           }, { merge: true }));
 
-          if ((txDoc as any)?.docId && txDoc?.id && (txDoc as any).docId !== txDoc.id) {
-            promises.push(setDoc(doc(db, 'transactions', txDoc.id), {
+          if ((txDocToUse as any)?.docId && txDocToUse?.id && (txDocToUse as any).docId !== txDocToUse.id) {
+            promises.push(setDoc(doc(db, 'transactions', txDocToUse.id), {
               status: 'rejected',
-              rejectReason: rejectReasonText || '',
-              processedAt: serverTimestamp()
+              rejectReason: finalReason,
+              processedAt: new Date().toISOString()
             }, { merge: true }));
           }
 
-          if (txDoc) {
-            let notifTitle = '❌ লেনদেন বাতিল';
-            let notifBody = `আপনার ${txDoc.type === 'deposit' ? 'ডিপোজিট' : 'উত্তোলন'} আবেদনটি বাতিল করা হয়েছে। কারণ: ${rejectReasonText || 'উল্লেখ নেই'}`;
-            if (txDoc.type === 'telecom_recharge') {
+          if (txDocToUse && txDocToUse.userId) {
+            let notifTitle = '❌ আবেদন বাতিল করা হয়েছে';
+            let notifBody = `আপনার ৳${(txDocToUse.amount || 0).toLocaleString('bn-BD')} টাকার ${txDocToUse.type === 'add_money' || txDocToUse.type === 'deposit' ? 'ডিপোজিট / অ্যাড মানি' : txDocToUse.type === 'withdraw' ? 'উত্তোলন' : 'লেনদেন'} আবেদনটি বাতিল করা হয়েছে।\nকারণ: ${finalReason}`;
+            
+            if (txDocToUse.type === 'telecom_recharge') {
               notifTitle = '❌ মোবাইল রিচার্জ বাতিল';
-              notifBody = `আপনার ৳${txDoc.amount.toLocaleString('bn-BD')} মোবাইল রিচার্জের আবেদনটি বাতিল করা হয়েছে। ৳${actualRefundAmt.toLocaleString('bn-BD')} ওয়ালেট ব্যালেন্সে রিফান্ড করা হয়েছে।${rejectReasonText.trim() ? ` কারণ: ${rejectReasonText.trim()}` : ''}`;
-            } else if (txDoc.type === 'bill_pay' as any) {
+              notifBody = `আপনার ৳${(txDocToUse.amount || 0).toLocaleString('bn-BD')} মোবাইল রিচার্জের আবেদনটি বাতিল করা হয়েছে। ৳${actualRefundAmt.toLocaleString('bn-BD')} ওয়ালেট ব্যালেন্সে রিফান্ড করা হয়েছে।\nকারণ: ${finalReason}`;
+            } else if (txDocToUse.type === 'bill_pay' as any) {
               notifTitle = '❌ বিল পরিশোধ বাতিল';
-              notifBody = `আপনার ${txDoc.typeLabel || 'ইউটিলিটি বিল'} পরিশোধের আবেদনটি বাতিল করা হয়েছে। ৳${txDoc.amount.toLocaleString('bn-BD')} আপনার ওয়ালেট ব্যালেন্সে রিফান্ড করা হয়েছে।${rejectReasonText.trim() ? ` কারণ: ${rejectReasonText.trim()}` : ''}`;
+              notifBody = `আপনার ${txDocToUse.typeLabel || 'ইউটিলিটি বিল'} পরিশোধের আবেদনটি বাতিল করা হয়েছে। ৳${(txDocToUse.amount || 0).toLocaleString('bn-BD')} আপনার ওয়ালেট ব্যালেন্সে রিফান্ড করা হয়েছে।\nকারণ: ${finalReason}`;
             } else if (wasRefunded) {
-              notifBody = `আপনার ৳${txDoc.amount.toLocaleString('bn-BD')} এর ফান্ড স্থানান্তর আবেদনটি বাতিল করা হয়েছে। চার্জসহ মোট কেটে নেওয়া ৳${actualRefundAmt.toLocaleString('bn-BD')} আপনার ওয়ালেট ব্যালেন্সে রিফান্ড করা হয়েছে।${rejectReasonText.trim() ? ` কারণ: ${rejectReasonText.trim()}` : ''}`;
+              notifBody = `আপনার ৳${(txDocToUse.amount || 0).toLocaleString('bn-BD')} এর ফান্ড স্থানান্তর আবেদনটি বাতিল করা হয়েছে। চার্জসহ মোট ৳${actualRefundAmt.toLocaleString('bn-BD')} ওয়ালেট ব্যালেন্সে রিফান্ড করা হয়েছে।\nকারণ: ${finalReason}`;
             }
 
-            promises.push(addDoc(collection(db, 'user_notifications'), {
-              id: `notif-${Date.now()}`,
-              userId: txDoc.userId,
-              memberId: txDoc.memberId || '',
+            const notifDocRef = doc(collection(db, 'user_notifications'));
+            promises.push(setDoc(notifDocRef, {
+              id: notifDocRef.id,
+              userId: txDocToUse.userId,
+              memberId: txDocToUse.memberId || '',
               title: notifTitle,
               body: notifBody,
               read: false,
               isTransactionHistory: true,
+              category: 'transaction',
               createdAt: new Date().toISOString()
             }));
           }
 
-          // Run all database operations concurrently
           await Promise.all(promises);
 
-          requestAlert('সফল সম্পন্ন', 'আবেদনটি সফলভাবে বাতিল করা হয়েছে!');
+          requestAlert('সফল সম্পন্ন', '⚡ ১ সেকেন্ডে সুপারফাস্ট আবেদনটি সফলভাবে বাতিল ও কাস্টমারকে লাইভ নোটিফিকেশন দেওয়া হয়েছে!');
         } catch (err: any) {
-          requestAlert('ত্রুটি', `বাতিলকরণ ত্রুটিঃ ${err?.message || err}`);
+          console.error('Error in handleRejectTransaction:', err);
+          requestAlert('ত্রুটি', `বাতিলকরণ ত্রুটি: ${err?.message || err}`);
         }
       }
     );
@@ -7653,6 +7800,7 @@ export default function AdminPanel({
         hasSetProfile: editHasSetProfile,
         customTelecomPercent: Number(editCustomTelecomPercent) || 0,
         monthlySavingsTarget: Number(editMonthlySavingsTarget) || 1000,
+        samityPaidMonths: editSamityPaidMonths,
         samitySchemeActive: editSamitySchemeActive,
         canDisableAutoSavings: editCanDisableAutoSavings,
         allowAutoSavingsToggle: editCanDisableAutoSavings,
@@ -7731,6 +7879,20 @@ export default function AdminPanel({
                 }
               });
             }).catch(() => {});
+          }
+
+          if (isMainAdminUser(editingUser)) {
+            try {
+              const appConfigRef = doc(db, 'app_config', 'general_settings');
+              setDoc(appConfigRef, {
+                manualFundAdjustments: {
+                  ...(appConfig?.manualFundAdjustments || {}),
+                  net_capital_fund: currentMainBalance
+                }
+              }, { merge: true }).catch(err => console.error("Net capital fund update error:", err));
+            } catch (eNet) {
+              console.error("Error updating net_capital_fund:", eNet);
+            }
           }
 
           // Also sync to samity_applications so snapshot listener doesn't revert balance
@@ -8483,6 +8645,14 @@ export default function AdminPanel({
   const valLiabilities = objLiabilities.val;
   const valNetAsset = objNetAsset.val;
 
+  const getUserMainWalletBalance = (usr: any) => {
+    if (!usr) return 0;
+    if (isMainAdminUser(usr)) {
+      return valNetAsset;
+    }
+    return Number(usr.balance) || Number(usr.walletBalance) || Number((usr as any).mainBalance) || 0;
+  };
+
   const fundModulesList = [
     { key: 'master_fund', name: '১. মাস্টার ফান্ড', autoVal: autoMasterFund, currentVal: valMasterFund, isManual: objMasterFund.isManual },
     { key: 'samity_fund', name: '২. সমিতি ফান্ড', autoVal: autoSamityFund, currentVal: valSamityFund, isManual: objSamityFund.isManual },
@@ -8884,7 +9054,7 @@ export default function AdminPanel({
                         dps: u.dpsBalance || 0,
                         amount: (u.savings || 0) + (u.dpsBalance || 0),
                         type: 'সমিতি আমানত',
-                        status: (u.savings || 0) + (u.dpsBalance || 0) > 0 ? 'আমানতকারী' : 'সাধারণ সদস্য'
+                        status: (u.samityStatus === 'approved' || u.samityApproved === true || u.isSamityMember === true) ? 'সমবায় সমিতি সদস্য' : 'নরমাল সদস্য (BNB ইনভেস্টার)'
                       })).sort((a, b) => b.amount - a.amount)
                     })}
                     className="bg-teal-50/90 border border-teal-200 p-2 sm:p-3.5 rounded-xl sm:rounded-2xl text-slate-800 space-y-1 sm:space-y-2 shadow-2xs cursor-pointer hover:bg-teal-100/90 transition active:scale-98 relative"
@@ -10303,13 +10473,7 @@ export default function AdminPanel({
               const isSamityMemberUser = (u: any) => Boolean(
                 u.samityApproved === true ||
                 u.samityStatus === 'approved' ||
-                u.samitySchemeActive === true ||
-                u.samityAutoSavingsActive === true ||
-                u.isSamityMember === true ||
-                (Number(u.savings) || 0) > 0 ||
-                (Number(u.dpsBalance) || 0) > 0 ||
-                (Number(u.shares) || 0) > 0 ||
-                (Number(u.monthlySavingsTarget) || 0) > 0
+                u.isSamityMember === true
               );
               const samityRegisteredUsers = users.filter(isSamityMemberUser);
               const generalAppUsers = users.filter(u => !isSamityMemberUser(u) && u.samityStatus !== 'pending' && u.approved !== false);
@@ -10745,13 +10909,7 @@ export default function AdminPanel({
               const isSamityMemberUser = (u: any) => Boolean(
                 u.samityApproved === true ||
                 u.samityStatus === 'approved' ||
-                u.samitySchemeActive === true ||
-                u.samityAutoSavingsActive === true ||
-                u.isSamityMember === true ||
-                (Number(u.savings) || 0) > 0 ||
-                (Number(u.dpsBalance) || 0) > 0 ||
-                (Number(u.shares) || 0) > 0 ||
-                (Number(u.monthlySavingsTarget) || 0) > 0
+                u.isSamityMember === true
               );
 
               const samityRegisteredCount = users.filter(isSamityMemberUser).length;
@@ -10904,7 +11062,7 @@ export default function AdminPanel({
                                           </span>
                                         ) : isSamityUser ? (
                                           <span className="text-[8.5px] font-black bg-emerald-600 text-white border border-emerald-700 px-1.5 py-0.2 rounded inline-flex items-center gap-0.5 shadow-2xs">
-                                            🏢 সমবায় সমিতি সদস্য
+                                            🏢 সমবায় সমিতি সদস্য (ফরম ফিলাপকৃত)
                                           </span>
                                         ) : isPendingUser ? (
                                           <span className="text-[8.5px] font-black bg-orange-600 text-white border border-orange-700 px-1.5 py-0.2 rounded inline-flex items-center gap-0.5 shadow-2xs">
@@ -10912,7 +11070,7 @@ export default function AdminPanel({
                                           </span>
                                         ) : (
                                           <span className="text-[8.5px] font-black bg-sky-600 text-white border border-sky-700 px-1.5 py-0.2 rounded inline-flex items-center gap-0.5 shadow-2xs">
-                                            📱 সাধারণ অ্যাপ সদস্য
+                                            📱 নরমাল সদস্য (BNB কোম্পানি ইনভেস্টার)
                                           </span>
                                         )}
 
@@ -10976,8 +11134,10 @@ export default function AdminPanel({
                                 {/* Quick Wallet Balances Panel */}
                                 <div className="bg-white/90 border border-slate-200/80 rounded-xl p-2 grid grid-cols-3 gap-1 text-center shadow-2xs">
                                   <div>
-                                    <span className="text-[8.5px] font-bold text-slate-500 block uppercase leading-none">মেইন ওয়ালেট</span>
-                                    <span className="text-xs font-black text-slate-900 block mt-0.5">৳{(u.balance || 0).toLocaleString('bn-BD')}</span>
+                                    <span className="text-[8.5px] font-bold text-slate-500 block uppercase leading-none">
+                                      {isMainAdminUser(u) ? 'মেইন ওয়ালেট (নেট মূলধন)' : 'মেইন ওয়ালেট'}
+                                    </span>
+                                    <span className="text-xs font-black text-slate-900 block mt-0.5">৳{getUserMainWalletBalance(u).toLocaleString('bn-BD')}</span>
                                   </div>
                                   <div>
                                     <span className="text-[8.5px] font-bold text-slate-500 block uppercase leading-none">শেয়ার সঞ্চয়</span>
@@ -11686,11 +11846,11 @@ export default function AdminPanel({
                             </div>
                             <div className="space-y-2">
                               {pendingUsers.map((u, idx) => {
-                                const isSamity = Boolean(u.samityStatus === 'approved' || u.samitySchemeActive || (u.savings && u.savings > 0) || (u.shares && u.shares > 0) || u.isSamityMember);
+                                const isSamity = Boolean(u.samityStatus === 'approved' || u.samityApproved === true || u.isSamityMember === true);
                                 const reqKey = u.uid || `user_${u.phone}`;
                                 const isExpanded = expandedReqIds[reqKey] || false;
 
-                                const badgeText = isSamity ? '🏢 সমবায় সমিতি সদস্য আবেদন' : '📱 সাধারণ ইউজারের আবেদন';
+                                const badgeText = isSamity ? '🏢 সমবায় সমিতি সদস্য আবেদন' : '📱 নরমাল সদস্য (BNB কোম্পানি ইনভেস্টার) আবেদন';
                                 const badgeStyle = isSamity ? 'bg-emerald-600 text-white border-emerald-700' : 'bg-sky-600 text-white border-sky-700';
                                 const cardThemeStyle = isSamity 
                                   ? 'bg-emerald-50/40 border-emerald-300 hover:border-emerald-400 border-l-4 border-l-emerald-600'
@@ -15475,7 +15635,7 @@ export default function AdminPanel({
                   return;
                 }
 
-                const currentBal = targetUser.balance || 0;
+                const currentBal = Number(targetUser.balance !== undefined ? targetUser.balance : (targetUser as any).mainBalance) || Number((targetUser as any).mainBalance) || 0;
                 let finalBal = currentBal;
                 let txType = 'deposit';
                 let txLabel = 'ক্যাশ ভাউচার যোগ';
@@ -15502,7 +15662,7 @@ export default function AdminPanel({
                   notifBody = `আপনার ওয়ালেটে ৳${amount.toLocaleString('bn-BD')} টাকা ক্যাশ জমা ভাউচার যুক্ত করা হয়েছে। বর্তমান নতুন ব্যালেন্স ৳${finalBal.toLocaleString('bn-BD')} টাকা।${note ? `\n\nসমন্বয় নোট: ${note}` : ''}`;
                 }
 
-                await updateDoc(doc(db, 'users', targetUser.uid), { balance: finalBal });
+                await updateDoc(doc(db, 'users', targetUser.uid), { balance: finalBal, mainBalance: finalBal });
 
                 await addDoc(collection(db, 'transactions'), {
                   id: `tx-voucher-${Date.now()}`,
@@ -17687,7 +17847,7 @@ export default function AdminPanel({
                   return;
                 }
 
-                const currentBal = targetUser.balance || 0;
+                const currentBal = Number(targetUser.balance !== undefined ? targetUser.balance : (targetUser as any).mainBalance) || Number((targetUser as any).mainBalance) || 0;
                 let finalBal = currentBal;
                 let txType = 'deposit';
                 let txLabel = 'ক্যাশ ভাউচার যোগ';
@@ -17714,7 +17874,7 @@ export default function AdminPanel({
                   notifBody = `আপনার ওয়ালেটে ৳${amount.toLocaleString('bn-BD')} টাকা ক্যাশ জমা ভাউচার যুক্ত করা হয়েছে। বর্তমান নতুন ব্যালেন্স ৳${finalBal.toLocaleString('bn-BD')} টাকা।${note ? `\n\nসমন্বয় নোট: ${note}` : ''}`;
                 }
 
-                await updateDoc(doc(db, 'users', targetUser.uid), { balance: finalBal });
+                await updateDoc(doc(db, 'users', targetUser.uid), { balance: finalBal, mainBalance: finalBal });
 
                 await addDoc(collection(db, 'transactions'), {
                   id: `tx-voucher-${Date.now()}`,
@@ -25004,6 +25164,192 @@ export default function AdminPanel({
                 </div>
               </div>
 
+              {/* 📅 ২০২৬ সমবায় সমিতি ১২ মাসের সঞ্চয় কিস্তি কাস্টম বরাদ্দ প্যানেল */}
+              <div className="bg-gradient-to-br from-slate-900 via-emerald-950/90 to-slate-900 border-2 border-emerald-500/80 p-4 sm:p-5 rounded-3xl space-y-4 text-white shadow-xl mt-4 text-left font-sans">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-emerald-800/80">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="p-1.5 bg-emerald-500/20 text-emerald-300 rounded-lg border border-emerald-500/40 text-base">
+                        📅
+                      </span>
+                      <h4 className="text-sm sm:text-base font-black text-white">
+                        সমবায় সমিতি ১২ মাসের সঞ্চয় কিস্তি ট্র্যাকার ও ম্যানুয়াল মাস কন্ট্রোল
+                      </h4>
+                    </div>
+                    <p className="text-[11px] text-emerald-200/90 font-medium leading-relaxed">
+                      সদস্যের কোন কোন মাস পরিশোধিত বা বকেয়া থাকবে, তা সম্পূর্ণ নিজের ইচ্ছামত বেছে নিতে পারবেন (সিরিয়াল বা গ্যাপ ছাড়া)। যেকোনো মাসে ক্লিক করে 'পরিশোধিত' বা 'বকেয়া' স্ট্যাটাস টগল করতে পারবেন।
+                    </p>
+                  </div>
+
+                  {/* Year Selector in Admin */}
+                  <div className="flex items-center gap-2 bg-slate-800/90 border border-emerald-700/80 p-2 rounded-2xl shrink-0">
+                    <span className="text-xs text-emerald-300 font-bold">বছর:</span>
+                    <select
+                      value={editTrackerSelectedYear}
+                      onChange={(e) => setEditTrackerSelectedYear(Number(e.target.value))}
+                      className="bg-slate-900 text-white font-mono font-bold text-xs p-1.5 rounded-xl border border-emerald-600 focus:outline-none cursor-pointer"
+                    >
+                      {SAMITY_YEARS.map(yr => (
+                        <option key={yr} value={yr}>{yr} সাল</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Quick Action Toolbar */}
+                <div className="flex flex-wrap items-center justify-between gap-2 bg-emerald-950/90 border border-emerald-800/80 p-2.5 rounded-2xl">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold text-emerald-300">⚡ দ্রুত নির্বাচন:</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const yearMonthKeys = SAMITY_MONTHS.map(m => `${editTrackerSelectedYear}-${m.id}`);
+                        const newSet = Array.from(new Set([...editSamityPaidMonths, ...yearMonthKeys]));
+                        setEditSamityPaidMonths(newSet);
+                        const targetRate = Number(editMonthlySavingsTarget) || 1000;
+                        setEditSavings(newSet.length * targetRate);
+                      }}
+                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold rounded-xl transition shadow-xs cursor-pointer"
+                    >
+                      ✅ ১২ মাসই পরিশোধিত করুন
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const prefix = `${editTrackerSelectedYear}-`;
+                        const filtered = editSamityPaidMonths.filter(k => !k.startsWith(prefix) && (editTrackerSelectedYear !== 2026 || !SAMITY_MONTHS.some(m => m.id === k)));
+                        setEditSamityPaidMonths(filtered);
+                        const targetRate = Number(editMonthlySavingsTarget) || 1000;
+                        setEditSavings(filtered.length * targetRate);
+                      }}
+                      className="px-2.5 py-1 bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-800 text-[11px] font-bold rounded-xl transition shadow-xs cursor-pointer"
+                    >
+                      🧹 সকল মাস বকেয়া করুন
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const curSavings = Number(editSavings) || 0;
+                        const targetRate = Number(editMonthlySavingsTarget) || 1000;
+                        const countToPaid = Math.min(12, Math.floor(curSavings / (targetRate || 1)));
+                        const prefix = `${editTrackerSelectedYear}-`;
+                        const remaining = editSamityPaidMonths.filter(k => !k.startsWith(prefix) && (editTrackerSelectedYear !== 2026 || !SAMITY_MONTHS.some(m => m.id === k)));
+                        const autoKeys = SAMITY_MONTHS.slice(0, countToPaid).map(m => `${editTrackerSelectedYear}-${m.id}`);
+                        const updated = Array.from(new Set([...remaining, ...autoKeys]));
+                        setEditSamityPaidMonths(updated);
+                      }}
+                      className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[11px] font-bold rounded-xl transition shadow-xs cursor-pointer"
+                    >
+                      💰 সঞ্চয় ব্যালেন্স অনুযায়ী অটো মিলান
+                    </button>
+                  </div>
+
+                  <div className="text-right">
+                    <span className="text-[10px] text-emerald-400 font-bold block">মাসিক কিস্তি হার:</span>
+                    <span className="text-xs font-black font-mono text-emerald-300">৳{Number(editMonthlySavingsTarget || 1000).toLocaleString('bn-BD')} / মাস</span>
+                  </div>
+                </div>
+
+                {/* 12 Months Interactive Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                  {SAMITY_MONTHS.map((m) => {
+                    const yearKey = `${editTrackerSelectedYear}-${m.id}`;
+                    const yearKeyAlt = `${editTrackerSelectedYear}_${m.id}`;
+                    const isPaid = editSamityPaidMonths.includes(yearKey) || editSamityPaidMonths.includes(yearKeyAlt) || (editTrackerSelectedYear === 2026 && editSamityPaidMonths.includes(m.id));
+
+                    const toggleMonth = () => {
+                      let updated: string[];
+                      if (isPaid) {
+                        updated = editSamityPaidMonths.filter(k => k !== yearKey && k !== yearKeyAlt && (editTrackerSelectedYear !== 2026 || k !== m.id));
+                      } else {
+                        updated = Array.from(new Set([...editSamityPaidMonths, yearKey, `${editTrackerSelectedYear}_${m.id}`]));
+                      }
+                      setEditSamityPaidMonths(updated);
+                      const targetRate = Number(editMonthlySavingsTarget) || 1000;
+                      setEditSavings(updated.length * targetRate);
+                    };
+
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={toggleMonth}
+                        className={`p-2.5 rounded-2xl border text-left transition duration-200 cursor-pointer flex flex-col justify-between min-h-[68px] ${
+                          isPaid
+                            ? 'bg-emerald-900/60 border-emerald-400 text-emerald-100 shadow-md ring-1 ring-emerald-500/50'
+                            : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:border-slate-700 hover:bg-slate-900/90'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between w-full">
+                          <span className="text-xs font-extrabold text-white">{m.name}</span>
+                          <span className="text-[10px] font-mono font-bold text-slate-400">{m.short}</span>
+                        </div>
+
+                        <div className="mt-2 flex items-center justify-between w-full">
+                          {isPaid ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-500 text-slate-950 px-2 py-0.5 rounded-md shadow-xs">
+                              ✓ পরিশোধিত
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-rose-950 text-rose-300 border border-rose-800 px-2 py-0.5 rounded-md">
+                              ✕ বকেয়া
+                            </span>
+                          )}
+                          <span className="text-[9px] font-mono text-emerald-300 font-bold">
+                            ৳{Number(editMonthlySavingsTarget || 1000)}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Live Calculations Summary Box */}
+                {(() => {
+                  const totalPaidInYear = SAMITY_MONTHS.filter(m => {
+                    const yearKey = `${editTrackerSelectedYear}-${m.id}`;
+                    const yearKeyAlt = `${editTrackerSelectedYear}_${m.id}`;
+                    return editSamityPaidMonths.includes(yearKey) || editSamityPaidMonths.includes(yearKeyAlt) || (editTrackerSelectedYear === 2026 && editSamityPaidMonths.includes(m.id));
+                  }).length;
+
+                  const targetRate = Number(editMonthlySavingsTarget) || 1000;
+                  const computedYearSavings = totalPaidInYear * targetRate;
+                  const totalPaidAllYears = editSamityPaidMonths.length;
+                  const totalComputedSavings = totalPaidAllYears * targetRate;
+
+                  return (
+                    <div className="bg-slate-950 border border-emerald-800/80 p-3.5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-emerald-300">
+                            📊 {editTrackerSelectedYear} সালের হিসাব: <strong className="text-white font-mono text-sm">{totalPaidInYear} মাস পরিশোধিত</strong>
+                          </span>
+                          <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800 font-bold">
+                            {editTrackerSelectedYear} সাল জমা: ৳{computedYearSavings.toLocaleString('bn-BD')}
+                          </span>
+                        </div>
+                        <p className="text-[10.5px] text-slate-400 font-medium">
+                          সর্বমোট নির্বাচিত পরিশোধিত মাস: <strong className="text-white font-mono">{totalPaidAllYears} টি</strong> | সকল বছরের মোট হিসাবকৃত সঞ্চয়: <strong className="text-emerald-300 font-mono">৳{totalComputedSavings.toLocaleString('bn-BD')}</strong>
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditSavings(totalComputedSavings > 0 ? totalComputedSavings : computedYearSavings);
+                        }}
+                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md transition shrink-0 cursor-pointer flex items-center gap-1.5"
+                      >
+                        <span>⚡ সঞ্চয় ব্যালেন্স সিঙ্ক করুন</span>
+                        <span className="font-mono text-amber-300">৳{totalComputedSavings.toLocaleString()}</span>
+                      </button>
+                    </div>
+                  );
+                })()}
+              </div>
+
               {/* 📜 এই সদস্যের নিজস্ব লেনদেন ইতিহাস ও এডমিন ডিলেট কন্ট্রোল (User Transaction History & Admin Delete Control) */}
               {(() => {
                 const targetUserId = editingUser.uid || editingUser.id || (editingUser as any).docId;
@@ -26633,7 +26979,7 @@ export default function AdminPanel({
                     <div className="text-right shrink-0 space-y-0.5">
                       <div className="flex items-center justify-end gap-1">
                         <span className="text-[9px] text-slate-400 font-bold">মেইন:</span>
-                        <span className="text-xs font-black text-indigo-900">৳{(u.balance || 0).toLocaleString('bn-BD')}</span>
+                        <span className="text-xs font-black text-indigo-900">৳{getUserMainWalletBalance(u).toLocaleString('bn-BD')}</span>
                       </div>
                       <div className="flex items-center justify-end gap-2 text-[9.5px]">
                         <span className="text-purple-700 font-bold">সঞ্চয়: ৳{(u.savings || 0).toLocaleString('bn-BD')}</span>
@@ -29240,8 +29586,8 @@ export default function AdminPanel({
                 });
 
                 const sorted = [...filtered].sort((a, b) => {
-                  const mainA = Number(a.balance) || 0;
-                  const mainB = Number(b.balance) || 0;
+                  const mainA = getUserMainWalletBalance(a);
+                  const mainB = getUserMainWalletBalance(b);
 
                   const samityA = (Number(a.savings) || 0) + (Number(a.dpsBalance) || 0);
                   const samityB = (Number(b.savings) || 0) + (Number(b.dpsBalance) || 0);
@@ -29358,8 +29704,10 @@ export default function AdminPanel({
                           {/* Balances Summary Row */}
                           <div className="grid grid-cols-3 gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-150 text-[11px]">
                             <div>
-                              <span className="text-[9px] text-slate-500 font-bold block">মেইন ব্যালেন্স</span>
-                              <span className="font-black text-slate-900 font-mono">৳ {(usr.balance || 0).toLocaleString('bn-BD')}</span>
+                              <span className="text-[9px] text-slate-500 font-bold block">
+                                {isMainAdminUser(usr) ? 'মেইন ব্যালেন্স (নেট মূলধন)' : 'মেইন ব্যালেন্স'}
+                              </span>
+                              <span className="font-black text-slate-900 font-mono">৳ {getUserMainWalletBalance(usr).toLocaleString('bn-BD')}</span>
                             </div>
                             <div>
                               <span className="text-[9px] text-slate-500 font-bold block">রিচার্জ ফান্ড</span>
@@ -29529,26 +29877,26 @@ export default function AdminPanel({
           <div className="bg-slate-50 w-full h-full flex flex-col overflow-hidden font-sans">
             
             {/* Modal Top Banner */}
-            <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-900 via-rose-950 to-slate-900 text-white flex items-center justify-between shrink-0 shadow-md border-b border-rose-900/40">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-rose-600/30 border border-rose-500/40 flex items-center justify-center shrink-0 text-white font-extrabold text-lg shadow-inner">
-                  <Clock className="w-5 h-5 text-amber-300 animate-spin-slow" />
+            <div className="py-2.5 px-3 sm:px-4 bg-gradient-to-r from-slate-900 via-rose-950 to-slate-900 text-white flex items-center justify-between shrink-0 shadow-xs border-b border-rose-900/40">
+              <div className="flex items-center gap-2.5">
+                <div className="w-7 h-7 rounded-lg bg-rose-600/30 border border-rose-500/40 flex items-center justify-center shrink-0 text-white font-extrabold text-xs shadow-inner">
+                  <Clock className="w-4 h-4 text-amber-300 animate-spin-slow" />
                 </div>
                 <div>
-                  <h3 className="text-base sm:text-lg font-black tracking-wide flex items-center gap-2 text-white">
+                  <h3 className="text-xs sm:text-sm font-black tracking-wide flex items-center gap-2 text-white">
                     📋 ট্রানজেকশন ও আবেদন প্রসেসিং সেন্টার
                   </h3>
-                  <div className="flex flex-wrap items-center gap-2 mt-0.5 text-xs text-slate-300">
-                    <span className="bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-md border border-amber-500/30 font-bold">
+                  <div className="flex flex-wrap items-center gap-1.5 mt-0.5 text-[10px] text-slate-300">
+                    <span className="bg-amber-500/20 text-amber-300 px-1.5 py-0.2 rounded border border-amber-500/30 font-bold">
                       ⏳ পেন্ডিং: <strong className="font-extrabold font-mono text-amber-200">{transactions.filter(t => t.status === 'pending').length}</strong> টি
                     </span>
-                    <span className="bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-md border border-emerald-500/30 font-bold">
+                    <span className="bg-emerald-500/20 text-emerald-300 px-1.5 py-0.2 rounded border border-emerald-500/30 font-bold">
                       ✅ সফল: <strong className="font-extrabold font-mono text-emerald-200">{transactions.filter(t => (t.status as string) === 'success' || (t.status as string) === 'approved').length}</strong> টি
                     </span>
-                    <span className="bg-rose-500/20 text-rose-300 px-2 py-0.5 rounded-md border border-rose-500/30 font-bold">
+                    <span className="bg-rose-500/20 text-rose-300 px-1.5 py-0.2 rounded border border-rose-500/30 font-bold">
                       ❌ বাতিল: <strong className="font-extrabold font-mono text-rose-200">{transactions.filter(t => (t.status as string) === 'rejected' || (t.status as string) === 'failed' || (t.status as string) === 'cancelled').length}</strong> টি
                     </span>
-                    <span className="bg-slate-800 text-slate-300 px-2 py-0.5 rounded-md border border-slate-700 font-bold">
+                    <span className="bg-slate-800 text-slate-300 px-1.5 py-0.2 rounded border border-slate-700 font-bold">
                       🌐 সর্বমোট: <strong className="font-extrabold font-mono text-white">{transactions.length}</strong> টি
                     </span>
                   </div>
@@ -29557,32 +29905,32 @@ export default function AdminPanel({
               <button
                 type="button"
                 onClick={() => setShowHeaderPendingModal(false)}
-                className="w-9 h-9 rounded-2xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition cursor-pointer border border-white/10"
+                className="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition cursor-pointer border border-white/10"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
             {/* Filter Header: Row 1 (Status Filter), Row 2 (Category Filter), Row 3 (Search Bar) */}
-            <div className="p-3 sm:p-4 bg-white border-b border-slate-200 shrink-0 space-y-3 shadow-2xs">
+            <div className="p-2 sm:p-2.5 bg-white border-b border-slate-200 shrink-0 space-y-1.5 shadow-2xs">
               
               {/* Row 1: Status Filter Tabs */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
-                <span className="text-xs font-black text-slate-500 shrink-0 mr-1 flex items-center gap-1">
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 scrollbar-none">
+                <span className="text-[11px] font-black text-slate-500 shrink-0 mr-1 flex items-center gap-1">
                   🎯 ফিল্টারঃ
                 </span>
                 
                 <button
                   type="button"
                   onClick={() => setHeaderPendingStatusFilter('pending')}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-black shrink-0 transition cursor-pointer flex items-center gap-1.5 ${
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-black shrink-0 transition cursor-pointer flex items-center gap-1.5 ${
                     headerPendingStatusFilter === 'pending'
                       ? 'bg-amber-600 text-white shadow-xs'
                       : 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200'
                   }`}
                 >
                   <span>⏳ পেন্ডিং আবেদন</span>
-                  <span className="px-1.5 py-0.5 bg-black/20 text-white text-[10px] rounded-md font-extrabold font-mono">
+                  <span className="px-1.5 py-0.2 bg-black/20 text-white text-[9.5px] rounded font-extrabold font-mono">
                     {transactions.filter(t => t.status === 'pending').length}
                   </span>
                 </button>
@@ -29590,14 +29938,14 @@ export default function AdminPanel({
                 <button
                   type="button"
                   onClick={() => setHeaderPendingStatusFilter('success')}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-black shrink-0 transition cursor-pointer flex items-center gap-1.5 ${
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-black shrink-0 transition cursor-pointer flex items-center gap-1.5 ${
                     headerPendingStatusFilter === 'success'
                       ? 'bg-emerald-600 text-white shadow-xs'
                       : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200'
                   }`}
                 >
-                  <span>✅ সফল আবেদন (Success)</span>
-                  <span className="px-1.5 py-0.5 bg-black/20 text-white text-[10px] rounded-md font-extrabold font-mono">
+                  <span>✅ সফল (Success)</span>
+                  <span className="px-1.5 py-0.2 bg-black/20 text-white text-[9.5px] rounded font-extrabold font-mono">
                     {transactions.filter(t => (t.status as string) === 'success' || (t.status as string) === 'approved').length}
                   </span>
                 </button>
@@ -29605,14 +29953,14 @@ export default function AdminPanel({
                 <button
                   type="button"
                   onClick={() => setHeaderPendingStatusFilter('rejected')}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-black shrink-0 transition cursor-pointer flex items-center gap-1.5 ${
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-black shrink-0 transition cursor-pointer flex items-center gap-1.5 ${
                     headerPendingStatusFilter === 'rejected'
                       ? 'bg-rose-600 text-white shadow-xs'
                       : 'bg-rose-50 text-rose-800 hover:bg-rose-100 border border-rose-200'
                   }`}
                 >
-                  <span>❌ বাতিল আবেদন (Canceled)</span>
-                  <span className="px-1.5 py-0.5 bg-black/20 text-white text-[10px] rounded-md font-extrabold font-mono">
+                  <span>❌ বাতিল (Canceled)</span>
+                  <span className="px-1.5 py-0.2 bg-black/20 text-white text-[9.5px] rounded font-extrabold font-mono">
                     {transactions.filter(t => (t.status as string) === 'rejected' || (t.status as string) === 'failed' || (t.status as string) === 'cancelled').length}
                   </span>
                 </button>
@@ -29620,22 +29968,22 @@ export default function AdminPanel({
                 <button
                   type="button"
                   onClick={() => setHeaderPendingStatusFilter('all')}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-black shrink-0 transition cursor-pointer flex items-center gap-1.5 ${
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-black shrink-0 transition cursor-pointer flex items-center gap-1.5 ${
                     headerPendingStatusFilter === 'all'
                       ? 'bg-slate-800 text-white shadow-xs'
                       : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                   }`}
                 >
-                  <span>🌐 সব আবেদন (All)</span>
-                  <span className="px-1.5 py-0.5 bg-black/20 text-white text-[10px] rounded-md font-extrabold font-mono">
+                  <span>🌐 সব (All)</span>
+                  <span className="px-1.5 py-0.2 bg-black/20 text-white text-[9.5px] rounded font-extrabold font-mono">
                     {transactions.length}
                   </span>
                 </button>
               </div>
 
               {/* Row 2: Category Filter Tabs */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
-                <span className="text-xs font-black text-slate-400 shrink-0 mr-1">
+              <div className="flex items-center gap-1 overflow-x-auto pb-0.5 scrollbar-none">
+                <span className="text-[10.5px] font-black text-slate-400 shrink-0 mr-1">
                   📁 ক্যাটাগরিঃ
                 </span>
                 
@@ -29645,7 +29993,7 @@ export default function AdminPanel({
                     setHeaderPendingTab('all');
                     setHeaderPendingAddMoneyMethod('all');
                   }}
-                  className={`px-3 py-1.5 rounded-lg text-[11px] font-extrabold shrink-0 transition cursor-pointer flex items-center gap-1 ${
+                  className={`px-2.5 py-1 rounded-md text-[10.5px] font-black shrink-0 transition cursor-pointer flex items-center gap-1 ${
                     headerPendingTab === 'all'
                       ? 'bg-slate-900 text-white shadow-xs'
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -29657,14 +30005,14 @@ export default function AdminPanel({
                 <button
                   type="button"
                   onClick={() => setHeaderPendingTab('add_money')}
-                  className={`px-3 py-1.5 rounded-lg text-[11px] font-extrabold shrink-0 transition cursor-pointer flex items-center gap-1 ${
+                  className={`px-2.5 py-1 rounded-md text-[10.5px] font-black shrink-0 transition cursor-pointer flex items-center gap-1 ${
                     headerPendingTab === 'add_money'
                       ? 'bg-emerald-700 text-white shadow-xs ring-2 ring-emerald-400'
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  <span>💰 অ্যাড মানি / জমা</span>
-                  <span className="px-1.5 py-0.2 bg-black/20 text-white text-[10px] rounded-full font-bold font-mono">
+                  <span>💰 অ্যাড মানি</span>
+                  <span className="px-1 py-0.2 bg-black/20 text-white text-[9px] rounded-full font-bold font-mono">
                     {transactions.filter(t => t.type === 'add_money' || t.type === 'deposit').length}
                   </span>
                 </button>
@@ -29672,65 +30020,65 @@ export default function AdminPanel({
                 <button
                   type="button"
                   onClick={() => setHeaderPendingTab('withdraw')}
-                  className={`px-3 py-1.5 rounded-lg text-[11px] font-extrabold shrink-0 transition cursor-pointer flex items-center gap-1 ${
+                  className={`px-2.5 py-1 rounded-md text-[10.5px] font-black shrink-0 transition cursor-pointer flex items-center gap-1 ${
                     headerPendingTab === 'withdraw'
                       ? 'bg-amber-700 text-white shadow-xs'
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  <span>💸 উইথড্র / ক্যাশআউট</span>
+                  <span>💸 উইথড্র</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setHeaderPendingTab('telecom')}
-                  className={`px-3 py-1.5 rounded-lg text-[11px] font-extrabold shrink-0 transition cursor-pointer flex items-center gap-1 ${
+                  className={`px-2.5 py-1 rounded-md text-[10.5px] font-black shrink-0 transition cursor-pointer flex items-center gap-1 ${
                     headerPendingTab === 'telecom'
                       ? 'bg-blue-700 text-white shadow-xs'
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  <span>📱 রিচার্জ ও প্যাক</span>
+                  <span>📱 রিচার্জ</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setHeaderPendingTab('loan')}
-                  className={`px-3 py-1.5 rounded-lg text-[11px] font-extrabold shrink-0 transition cursor-pointer flex items-center gap-1 ${
+                  className={`px-2.5 py-1 rounded-md text-[10.5px] font-black shrink-0 transition cursor-pointer flex items-center gap-1 ${
                     headerPendingTab === 'loan'
                       ? 'bg-indigo-700 text-white shadow-xs'
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  <span>⚖️ ঋণ / কর্জে হাসানা</span>
+                  <span>⚖️ ঋণ</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setHeaderPendingTab('other')}
-                  className={`px-3 py-1.5 rounded-lg text-[11px] font-extrabold shrink-0 transition cursor-pointer flex items-center gap-1 ${
+                  className={`px-2.5 py-1 rounded-md text-[10.5px] font-black shrink-0 transition cursor-pointer flex items-center gap-1 ${
                     headerPendingTab === 'other'
                       ? 'bg-purple-700 text-white shadow-xs'
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  <span>📜 অন্যান্য আবেদন</span>
+                  <span>📜 অন্যান্য</span>
                 </button>
               </div>
 
               {/* Row 2.5: Dedicated Add Money Payment Method Sub-Filters */}
               {headerPendingTab === 'add_money' && (
-                <div className="bg-emerald-50/90 border border-emerald-300 p-2 sm:p-2.5 rounded-xl space-y-1.5 shadow-2xs">
-                  <div className="flex items-center justify-between text-[11px] font-black text-emerald-950 px-1">
+                <div className="bg-emerald-50/90 border border-emerald-300 p-1.5 rounded-lg space-y-1 shadow-2xs">
+                  <div className="flex items-center justify-between text-[10px] font-black text-emerald-950 px-1">
                     <span className="flex items-center gap-1">
-                      <span>💳 অ্যাড মানি পেমেন্ট মেথড ফিল্টারঃ</span>
+                      <span>💳 পেমেন্ট মেথড ফিল্টারঃ</span>
                     </span>
-                    <span className="text-[10px] text-emerald-800 font-bold bg-emerald-100/80 px-2 py-0.5 rounded-full border border-emerald-200">
-                      মেথড অনুযায়ী আলাদা রিকোয়েস্ট দেখা হচ্ছে
+                    <span className="text-[9px] text-emerald-800 font-bold bg-emerald-100/80 px-1.5 py-0.2 rounded-full border border-emerald-200">
+                      আলাদা মেথড
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 scrollbar-none">
+                  <div className="flex items-center gap-1 overflow-x-auto pb-0.5 scrollbar-none">
                     {(() => {
                       const checkMethodMatch = (t: Transaction, methodId: string) => {
                         if (methodId === 'all') return true;
@@ -29781,14 +30129,14 @@ export default function AdminPanel({
                             key={m.id}
                             type="button"
                             onClick={() => setHeaderPendingAddMoneyMethod(m.id as any)}
-                            className={`px-2.5 py-1 rounded-lg text-[10.5px] font-black shrink-0 transition cursor-pointer flex items-center gap-1 shadow-2xs border ${
+                            className={`px-2 py-0.5 rounded-md text-[10px] font-black shrink-0 transition cursor-pointer flex items-center gap-1 shadow-2xs border ${
                               isActive
-                                ? `${m.color} border-slate-900 ring-2 ring-emerald-500 scale-102`
+                                ? `${m.color} border-slate-900 ring-1 ring-emerald-500`
                                 : 'bg-white text-slate-700 hover:bg-emerald-100/80 border-slate-200'
                             }`}
                           >
                             <span>{m.icon} {m.label}</span>
-                            <span className={`px-1.5 py-0.2 text-[9.5px] rounded-md font-mono font-black ${
+                            <span className={`px-1 py-0.2 text-[9px] rounded font-mono font-black ${
                               isActive ? 'bg-black/25 text-white' : 'bg-slate-100 text-slate-800 border border-slate-200'
                             }`}>
                               {count}
@@ -29803,19 +30151,19 @@ export default function AdminPanel({
 
               {/* Row 3: Live Search Query */}
               <div className="relative">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
                   value={headerPendingSearchQuery}
                   onChange={(e) => setHeaderPendingSearchQuery(e.target.value)}
-                  placeholder="মেম্বার নাম, মোবাইল নম্বর, TrxID, বিবরণ বা বাতিলের কারণ লিখে সার্চ করুন..."
-                  className="w-full pl-9 pr-8 py-2 bg-slate-50 border border-slate-250 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-rose-500 font-sans placeholder:text-slate-400"
+                  placeholder="মেম্বার নাম, মোবাইল নম্বর, TrxID, বিবরণ লিখে সার্চ করুন..."
+                  className="w-full pl-8 pr-7 py-1 h-7 bg-slate-50 border border-slate-250 rounded-lg text-[11px] font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-rose-500 font-sans placeholder:text-slate-400"
                 />
                 {headerPendingSearchQuery && (
                   <button
                     type="button"
                     onClick={() => setHeaderPendingSearchQuery('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 text-xs font-bold"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 text-xs font-bold"
                   >
                     ✕
                   </button>
@@ -29823,9 +30171,9 @@ export default function AdminPanel({
               </div>
 
               {/* Row 4: Calendar & Date Filter Bar */}
-              <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 p-2.5 rounded-xl text-white space-y-2 border border-indigo-900/50 shadow-2xs">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-2">
+              <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 p-1.5 rounded-lg text-white space-y-1 border border-indigo-900/50 shadow-2xs">
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     {/* 1. Today Button */}
                     <button
                       type="button"
@@ -29833,9 +30181,9 @@ export default function AdminPanel({
                         setHeaderPendingDateFilter('today');
                         setHeaderPendingCustomDate(getTodayDateStr());
                       }}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
+                      className={`px-2.5 py-1 rounded-md text-[10.5px] font-black transition cursor-pointer flex items-center gap-1 ${
                         headerPendingDateFilter === 'today'
-                          ? 'bg-emerald-500 text-white shadow-md ring-2 ring-emerald-300 scale-105'
+                          ? 'bg-emerald-500 text-white shadow-xs ring-1 ring-emerald-300'
                           : 'bg-white/10 text-slate-200 hover:bg-white/20'
                       }`}
                     >
@@ -29849,9 +30197,9 @@ export default function AdminPanel({
                         setHeaderPendingDateFilter('yesterday');
                         setHeaderPendingCustomDate(getYesterdayDateStr());
                       }}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
+                      className={`px-2.5 py-1 rounded-md text-[10.5px] font-black transition cursor-pointer flex items-center gap-1 ${
                         headerPendingDateFilter === 'yesterday'
-                          ? 'bg-indigo-500 text-white shadow-md ring-2 ring-indigo-300 scale-105'
+                          ? 'bg-indigo-500 text-white shadow-xs ring-1 ring-indigo-300'
                           : 'bg-white/10 text-slate-200 hover:bg-white/20'
                       }`}
                     >
@@ -29859,13 +30207,13 @@ export default function AdminPanel({
                     </button>
 
                     {/* 3. Custom Date Select & Calendar Picker */}
-                    <div className={`flex items-center gap-2 px-3 py-1 rounded-xl border transition ${
+                    <div className={`flex items-center gap-1 px-2 py-0.5 rounded-md border transition ${
                       headerPendingDateFilter === 'custom'
-                        ? 'bg-amber-500/20 border-amber-400 text-amber-200 ring-2 ring-amber-400/50'
+                        ? 'bg-amber-500/20 border-amber-400 text-amber-200 ring-1 ring-amber-400/50'
                         : 'bg-white/10 border-white/10 text-slate-200 hover:bg-white/15'
                     }`}>
-                      <span className="text-xs font-extrabold flex items-center gap-1 text-amber-300">
-                        📆 তারিখ সিলেক্টঃ
+                      <span className="text-[10px] font-extrabold flex items-center gap-0.5 text-amber-300">
+                        📆 তারিখঃ
                       </span>
                       <input
                         type="date"
@@ -29878,7 +30226,7 @@ export default function AdminPanel({
                             setHeaderPendingDateFilter('all');
                           }
                         }}
-                        className="bg-slate-900 text-amber-300 text-xs font-mono font-black px-2 py-0.5 rounded-lg border border-slate-700 focus:outline-none cursor-pointer"
+                        className="bg-slate-900 text-amber-300 text-[10px] font-mono font-black px-1.5 py-0.2 rounded border border-slate-700 focus:outline-none cursor-pointer"
                       />
                     </div>
 
@@ -29889,7 +30237,7 @@ export default function AdminPanel({
                         setHeaderPendingDateFilter('all');
                         setHeaderPendingCustomDate('');
                       }}
-                      className={`px-2.5 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center gap-1 ${
+                      className={`px-2 py-1 rounded-md text-[10.5px] font-extrabold transition cursor-pointer flex items-center gap-1 ${
                         headerPendingDateFilter === 'all'
                           ? 'bg-amber-400 text-slate-950 font-black shadow-2xs'
                           : 'bg-white/5 text-slate-300 hover:bg-white/15'
@@ -30222,60 +30570,121 @@ export default function AdminPanel({
                                 </span>
                               </div>
 
-                              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 pt-0.5">
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    const foundUser = targetUser || users.find(u =>
-                                      (ptx.userId && (u.uid === ptx.userId || u.id === ptx.userId)) ||
-                                      (ptx.userPhone && (u.phone === ptx.userPhone || u.phoneNumber === ptx.userPhone)) ||
-                                      (ptx.phone && (u.phone === ptx.phone || u.phoneNumber === ptx.phone))
-                                    );
-
-                                    if (foundUser) {
-                                      openUserEditModal(foundUser);
-                                    } else {
-                                      const fallbackUser: User = {
-                                        id: ptx.userId || 'N/A',
-                                        uid: ptx.userId || 'N/A',
-                                        memberId: (ptx as any).memberId || 'BNB000000',
-                                        name: ptx.userName || 'অজ্ঞাত মেম্বার',
-                                        phone: ptx.userPhone || ptx.phone || '',
-                                        balance: (ptx as any).userBalance || 0,
-                                        role: 'user',
-                                        status: 'active',
-                                        savings: 0,
-                                        telecomBalance: 0,
-                                        superShopBalance: 0,
-                                        dueLoan: 0,
-                                        pin: '1234',
-                                        lockedBalance: 0,
-                                        pendingBalance: 0,
-                                        createdAt: new Date().toISOString()
-                                      };
-                                      openUserEditModal(fallbackUser);
-                                    }
-                                  }}
-                                  className="text-xs font-black text-slate-900 hover:text-indigo-600 bg-amber-200/90 hover:bg-amber-300 border border-amber-400/80 px-2 py-0.5 rounded-md transition cursor-pointer flex items-center gap-1.5 shadow-2xs group"
-                                  title="মেম্বারের সম্পূর্ণ প্রোফাইল, তথ্য ও ওয়ালেট ব্যালেন্স সংশোধন করতে ক্লিক করুন"
-                                >
-                                  <span>👤 {ptx.userName || targetUser?.name || 'অজ্ঞাত মেম্বার'}</span>
-                                  <span className="text-[9.5px] bg-amber-400 text-slate-950 px-1 rounded font-black">প্রোফাইল 🔍</span>
-                                </button>
-                                <span className="text-[11px] text-slate-700 font-mono font-bold select-all">
-                                  📞 {ptx.userPhone || targetUser?.phone || 'ফোন নেই'}
-                                </span>
-                                {(ptx.userPhone || targetUser?.phone) && (
+                              <div className="space-y-1 pt-0.5">
+                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                                   <button
                                     type="button"
-                                    onClick={() => copyTextToClipboard(ptx.userPhone || targetUser?.phone || '', 'মেম্বার ফোন নম্বর')}
-                                    className="px-1.5 py-0.2 bg-white hover:bg-slate-100 text-slate-700 rounded font-bold text-[9px] border border-slate-300 cursor-pointer active:scale-95"
-                                    title="ফোন নম্বর কপি করুন"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const cleanDigits = (str?: string) => str ? convertBengaliToEnglishDigits(String(str)).replace(/\D/g, '') : '';
+                                      const pUserPhone = cleanDigits(ptx.userPhone || ptx.phone);
+                                      const pSenderPhone = cleanDigits(ptx.senderPhone || ptx.senderInfo || ptx.accountNumber);
+                                      const pMemberId = (ptx as any).memberId || (ptx as any).userMemberId;
+
+                                      const foundUser = targetUser || users.find(u => 
+                                        (ptx.userId && (u.uid === ptx.userId || u.id === ptx.userId)) ||
+                                        (pMemberId && u.memberId === pMemberId) ||
+                                        (pUserPhone && cleanDigits(u.phone) === pUserPhone) ||
+                                        (pUserPhone && cleanDigits(u.normalizedPhone) === pUserPhone) ||
+                                        (pSenderPhone && cleanDigits(u.phone) === pSenderPhone)
+                                      );
+
+                                      if (foundUser) {
+                                        openUserEditModal(foundUser);
+                                      } else {
+                                        const fallbackUser: User = {
+                                          id: ptx.userId || 'N/A',
+                                          uid: ptx.userId || 'N/A',
+                                          memberId: (ptx as any).memberId || 'BNB000000',
+                                          name: ptx.userName || 'অজ্ঞাত মেম্বার',
+                                          phone: ptx.userPhone || ptx.phone || '',
+                                          balance: (ptx as any).userBalance || 0,
+                                          role: 'user',
+                                          status: 'active',
+                                          savings: 0,
+                                          telecomBalance: 0,
+                                          superShopBalance: 0,
+                                          dueLoan: 0,
+                                          pin: '1234',
+                                          lockedBalance: 0,
+                                          pendingBalance: 0,
+                                          createdAt: new Date().toISOString()
+                                        };
+                                        openUserEditModal(fallbackUser);
+                                      }
+                                    }}
+                                    className="text-xs font-black text-slate-900 hover:text-indigo-900 bg-amber-300 hover:bg-amber-400 border border-amber-500/80 px-2.5 py-1 rounded-lg transition cursor-pointer flex items-center gap-1.5 shadow-2xs group active:scale-95"
+                                    title="মেম্বারের সম্পূর্ণ প্রোফাইল, তথ্য ও ওয়ালেট ব্যালেন্স সংশোধন করতে ক্লিক করুন"
                                   >
-                                    কপি
+                                    <span>👤 {ptx.userName || targetUser?.name || 'অজ্ঞাত মেম্বার'}</span>
+                                    <span className="text-[9.5px] bg-amber-500 text-slate-950 px-1.5 py-0.2 rounded font-black shadow-2xs">প্রোফাইল 🔍</span>
                                   </button>
-                                )}
+
+                                  <span className="text-[11px] text-slate-700 font-mono font-bold select-all flex items-center gap-1">
+                                    📞 {ptx.userPhone || targetUser?.phone || 'ফোন নেই'}
+                                    {(ptx.userPhone || targetUser?.phone) && (
+                                      <button
+                                        type="button"
+                                        onClick={() => copyTextToClipboard(ptx.userPhone || targetUser?.phone || '', 'মেম্বার ফোন নম্বর')}
+                                        className="px-1.5 py-0.2 bg-white hover:bg-slate-100 text-slate-700 rounded font-bold text-[9px] border border-slate-300 cursor-pointer active:scale-95"
+                                        title="ফোন নম্বর কপি করুন"
+                                      >
+                                        কপি
+                                      </button>
+                                    )}
+                                  </span>
+                                </div>
+
+                                {/* FRONT & DIRECT VISIBLE (TrxID and Sender/Payment Number Bar) */}
+                                {(() => {
+                                  const senderAcc = ptx.senderPhone || ptx.senderInfo || ptx.accountNumber || ptx.phoneNumber || ptx.phone || 'N/A';
+                                  const trxIdVal = ptx.trxId || ptx.transactionId || ptx.receiptNo || ptx.id || 'N/A';
+                                  return (
+                                    <div className="bg-amber-50/90 border border-amber-200/90 p-1.5 rounded-lg text-xs flex flex-wrap items-center justify-between gap-1.5 shadow-2xs mt-1">
+                                      {/* Sender / Payment Number */}
+                                      <div className="flex items-center gap-1 min-w-0 flex-wrap">
+                                        <span className="font-bold text-slate-700 text-[10.5px]">
+                                          💳 মেথড/প্রেরক নম্বর:
+                                        </span>
+                                        <span className="font-mono font-black text-slate-900 bg-white px-1.5 py-0.5 rounded border border-slate-300 text-[11px] select-all">
+                                          {senderAcc}
+                                        </span>
+                                        {senderAcc && senderAcc !== 'N/A' && (
+                                          <button
+                                            type="button"
+                                            onClick={() => copyTextToClipboard(senderAcc, 'প্রেরক/পেমেন্ট নম্বর')}
+                                            className="px-1.5 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-[9px] cursor-pointer transition active:scale-95 shadow-2xs flex items-center gap-0.5"
+                                            title="প্রেরক নম্বর কপি করুন"
+                                          >
+                                            <Copy className="w-2.5 h-2.5" />
+                                            <span>নম্বর কপি</span>
+                                          </button>
+                                        )}
+                                      </div>
+
+                                      {/* TrxID */}
+                                      <div className="flex items-center gap-1 shrink-0">
+                                        <span className="font-bold text-slate-700 text-[10.5px]">
+                                          TrxID:
+                                        </span>
+                                        <span className="font-mono font-black text-indigo-950 bg-white px-1.5 py-0.5 rounded border border-indigo-200 text-[11px] select-all">
+                                          {trxIdVal}
+                                        </span>
+                                        {trxIdVal && trxIdVal !== 'N/A' && (
+                                          <button
+                                            type="button"
+                                            onClick={() => copyTextToClipboard(trxIdVal, 'TrxID')}
+                                            className="px-1.5 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded font-bold text-[9px] cursor-pointer transition active:scale-95 shadow-2xs flex items-center gap-0.5"
+                                            title="TrxID কপি করুন"
+                                          >
+                                            <Copy className="w-2.5 h-2.5" />
+                                            <span>TrxID কপি</span>
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             </div>
 
@@ -30296,16 +30705,7 @@ export default function AdminPanel({
                           </div>
 
                           {/* Collapsed Brief Summary (Method & TrxID) */}
-                          {!isExpanded && (
-                            <div className="mt-1.5 pt-1 border-t border-slate-200/70 flex items-center justify-between text-[10px] text-slate-600 font-medium">
-                              <span className="truncate max-w-[65%]">
-                                💳 মেথড/নম্বর: <strong className="text-slate-800 font-mono">{ptx.paymentMethod || 'N/A'}</strong> ({ptx.senderPhone || ptx.senderInfo || ptx.accountNumber || ptx.phoneNumber || ptx.phone || 'N/A'})
-                              </span>
-                              <span className="font-mono text-slate-500 font-bold shrink-0">
-                                TrxID: {ptx.trxId || ptx.transactionId || ptx.receiptNo || ptx.id}
-                              </span>
-                            </div>
-                          )}
+                          {!isExpanded && null}
 
                           {/* Expanded Full Details Section */}
                           {isExpanded && (
@@ -30797,375 +31197,3 @@ export default function AdminPanel({
                           <div key={`empty-${i}`} className="min-h-[64px] bg-slate-900/30 rounded-xl border border-slate-900/40" />
                         ))}
 
-                        {/* Day Cells */}
-                        {Array.from({ length: daysInMonth }).map((_, i) => {
-                          const dayNum = i + 1;
-                          const stats = dayStatsMap[dayNum] || { credit: 0, debit: 0, count: 0 };
-                          const targetDateStr = `${year}-${String(monthIdx + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
-                          const isToday = targetDateStr === getTodayDateStr();
-                          const hasTx = stats.count > 0;
-
-                          return (
-                            <button
-                              key={dayNum}
-                              type="button"
-                              onClick={() => {
-                                setHeaderPendingDateFilter('custom');
-                                setHeaderPendingCustomDate(targetDateStr);
-                                setShowCalendarMatrixModal(false);
-                              }}
-                              className={`min-h-[70px] p-1.5 rounded-xl border text-left flex flex-col justify-between transition cursor-pointer group relative overflow-hidden ${
-                                isToday
-                                  ? 'bg-amber-500/15 border-amber-400/80 shadow-md ring-1 ring-amber-400/50'
-                                  : hasTx
-                                  ? 'bg-slate-900 hover:bg-slate-850 border-slate-700/80 hover:border-amber-400/50'
-                                  : 'bg-slate-900/50 hover:bg-slate-850 border-slate-800/60 text-slate-500'
-                              }`}
-                            >
-                              {/* Day Header */}
-                              <div className="flex items-center justify-between w-full">
-                                <span className={`text-xs font-black font-mono px-1.5 py-0.5 rounded-md ${
-                                  isToday
-                                    ? 'bg-amber-400 text-slate-950'
-                                    : hasTx
-                                    ? 'text-white bg-slate-800'
-                                    : 'text-slate-400'
-                                }`}>
-                                  {dayNum}
-                                </span>
-
-                                {hasTx && (
-                                  <span className="text-[9px] font-mono font-black text-amber-300 bg-amber-950/80 border border-amber-800/60 px-1 rounded">
-                                    {stats.count}টি
-                                  </span>
-                                )}
-                              </div>
-
-                              {/* Amount Breakdown */}
-                              {hasTx ? (
-                                <div className="mt-1 space-y-0.5 text-[9.5px] font-mono font-bold leading-tight">
-                                  {stats.credit > 0 && (
-                                    <div className="text-emerald-400 truncate">
-                                      +৳{formatBanglaAmount(stats.credit)}
-                                    </div>
-                                  )}
-                                  {stats.debit > 0 && (
-                                    <div className="text-rose-400 truncate">
-                                      -৳{formatBanglaAmount(stats.debit)}
-                                    </div>
-                                  )}
-                                </div>
-                              ) : (
-                                <div className="text-[9px] text-slate-600 font-sans italic mt-auto">
-                                  লেনদেন নেই
-                                </div>
-                              )}
-
-                              {/* Hover Glow Effect */}
-                              <div className="absolute inset-0 bg-amber-400/5 opacity-0 group-hover:opacity-100 transition pointer-events-none" />
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
-
-            {/* Modal Footer */}
-            <div className="p-4 bg-slate-900 border-t border-slate-800 flex items-center justify-between shrink-0">
-              <span className="text-xs text-slate-400 font-medium">
-                তারিখে ক্লিক করলে প্রসেসিং সেন্টারটি ওই তারিখ অনুযায়ী সাথে সাথে ফিল্টার হবে।
-              </span>
-              <button
-                type="button"
-                onClick={() => setShowCalendarMatrixModal(false)}
-                className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl transition cursor-pointer"
-              >
-                বন্ধ করুন
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 👤 Member Profile & Transaction Inspector Modal */}
-      {inspectingMemberUser && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 z-50 overflow-y-auto animate-fadeIn">
-          <div className="bg-slate-900 border border-amber-500/50 rounded-3xl max-w-3xl w-full text-white shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col">
-            {/* Modal Header */}
-            <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-900 via-amber-950 to-slate-900 border-b border-amber-500/30 flex items-center justify-between gap-3 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-slate-950 flex items-center justify-center font-black text-xl shadow-lg border-2 border-amber-300">
-                  👤
-                </div>
-                <div>
-                  <span className="text-[10px] font-extrabold text-amber-400 uppercase tracking-wider block">
-                    সদস্যের সম্পূর্ণ প্রোফাইল ও লেনদেন খতিয়ান
-                  </span>
-                  <h3 className="text-sm sm:text-base font-black text-white flex items-center gap-2">
-                    <span>{inspectingMemberUser.name || inspectingMemberUser.userName || 'অজ্ঞাত মেম্বার'}</span>
-                    <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full font-mono">
-                      মেম্বার আইডি: {inspectingMemberUser.uid || inspectingMemberUser.id || 'N/A'}
-                    </span>
-                  </h3>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const uId = inspectingMemberUser.uid || inspectingMemberUser.id;
-                    const uPhone = inspectingMemberUser.phoneNumber || inspectingMemberUser.phone;
-                    const foundUser = users.find(u =>
-                      (uId && (u.uid === uId || u.id === uId)) ||
-                      (uPhone && (u.phone === uPhone || u.phoneNumber === uPhone))
-                    );
-                    const targetToEdit: User = foundUser || {
-                      id: uId || 'N/A',
-                      uid: uId || 'N/A',
-                      memberId: (inspectingMemberUser as any).memberId || 'BNB000000',
-                      name: inspectingMemberUser.name || inspectingMemberUser.userName || 'অজ্ঞাত মেম্বার',
-                      phone: uPhone || '',
-                      balance: inspectingMemberUser.balance || 0,
-                      role: 'user',
-                      status: 'active',
-                      savings: 0,
-                      telecomBalance: 0,
-                      superShopBalance: 0,
-                      dueLoan: 0,
-                      pin: '1234',
-                      lockedBalance: 0,
-                      pendingBalance: 0,
-                      createdAt: new Date().toISOString()
-                    };
-                    setInspectingMemberUser(null);
-                    openUserEditModal(targetToEdit);
-                  }}
-                  className="px-3 py-1.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs rounded-xl shadow-md transition cursor-pointer flex items-center gap-1 active:scale-95"
-                  title="মেম্বারের তথ্য ও ব্যালেন্স সম্পূর্ণ এডিট করুন"
-                >
-                  <span>✏️ এডিট প্রোফাইল</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInspectingMemberUser(null)}
-                  className="p-2 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition cursor-pointer"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-
-            {/* Modal Content */}
-            <div className="p-4 sm:p-6 overflow-y-auto space-y-5">
-              {/* Member Profile Quick Overview & Contact Details */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950/80 border border-slate-800 p-4 rounded-2.5xl">
-                <div className="space-y-1.5">
-                  <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
-                    📱 যোগাযোগের তথ্য
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-mono font-bold text-amber-300">
-                      📞 {inspectingMemberUser.phoneNumber || inspectingMemberUser.phone || 'ফোন রেকর্ড নেই'}
-                    </span>
-                    {(inspectingMemberUser.phoneNumber || inspectingMemberUser.phone) && (
-                      <button
-                        type="button"
-                        onClick={() => copyTextToClipboard(inspectingMemberUser.phoneNumber || inspectingMemberUser.phone, 'মেম্বার মোবাইল নম্বর')}
-                        className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[10px] font-bold border border-slate-700 cursor-pointer"
-                      >
-                        কপি
-                      </button>
-                    )}
-                  </div>
-                  {inspectingMemberUser.email && (
-                    <p className="text-xs text-slate-300 font-mono">
-                      ✉️ {inspectingMemberUser.email}
-                    </p>
-                  )}
-                </div>
-
-                <div className="space-y-1.5">
-                  <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
-                    🆔 এনআইডি ও অ্যাকাউন্ট স্ট্যাটাস
-                  </span>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 rounded-lg text-xs font-bold">
-                      ✅ এনআইডি ভেরিফাইড
-                    </span>
-                    <span className="px-2 py-0.5 bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 rounded-lg text-xs font-bold">
-                      👑 সাধারণ মেম্বার
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Real-time Wallet Balances Grid */}
-              <div className="space-y-2">
-                <h4 className="text-xs font-extrabold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
-                  <span>💰 সদস্যের লাইভ ওয়ালেট ও সঞ্চয় ব্যালেন্স</span>
-                </h4>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center">
-                  <div className="bg-emerald-950/40 border border-emerald-800/60 p-3 rounded-2xl">
-                    <span className="text-[10px] text-emerald-400 font-extrabold uppercase block">
-                      💰 মেইন ওয়ালেট
-                    </span>
-                    <strong className="text-emerald-300 font-mono font-black text-xs sm:text-sm block mt-1">
-                      ৳ {formatBanglaAmount(inspectingMemberUser.balance || inspectingMemberUser.walletBalance || 0)} BDT
-                    </strong>
-                  </div>
-
-                  <div className="bg-indigo-950/40 border border-indigo-800/60 p-3 rounded-2xl">
-                    <span className="text-[10px] text-indigo-300 font-extrabold uppercase block">
-                      🏦 ডিপিএস / সঞ্চয়
-                    </span>
-                    <strong className="text-indigo-200 font-mono font-black text-xs sm:text-sm block mt-1">
-                      ৳ {formatBanglaAmount(inspectingMemberUser.depositBalance || inspectingMemberUser.savingsBalance || 0)} BDT
-                    </strong>
-                  </div>
-
-                  <div className="bg-amber-950/40 border border-amber-800/60 p-3 rounded-2xl">
-                    <span className="text-[10px] text-amber-300 font-extrabold uppercase block">
-                      💸 ইনকাম ওয়ালেট
-                    </span>
-                    <strong className="text-amber-200 font-mono font-black text-xs sm:text-sm block mt-1">
-                      ৳ {formatBanglaAmount(inspectingMemberUser.incomeBalance || inspectingMemberUser.referralBalance || 0)} BDT
-                    </strong>
-                  </div>
-
-                  <div className="bg-sky-950/40 border border-sky-800/60 p-3 rounded-2xl">
-                    <span className="text-[10px] text-sky-300 font-extrabold uppercase block">
-                      🎫 রেশন কার্ড
-                    </span>
-                    <strong className="text-sky-200 font-mono font-bold text-xs block mt-1">
-                      {inspectingMemberUser.rationCardStatus || 'সক্রিয় সদস্য'}
-                    </strong>
-                  </div>
-                </div>
-              </div>
-
-              {/* User Member Previous Transaction History */}
-              {(() => {
-                const uId = inspectingMemberUser.uid || inspectingMemberUser.id;
-                const uPhone = inspectingMemberUser.phoneNumber || inspectingMemberUser.phone;
-
-                const memberTxs = transactions.filter((t: any) => {
-                  if (uId && t.userId === uId) return true;
-                  if (uPhone && (t.userPhone === uPhone || t.phone === uPhone)) return true;
-                  return false;
-                });
-
-                const memberCreditTotal = memberTxs
-                  .filter((t: any) => t.type === 'add_money' || t.type === 'deposit' || t.type === 'received_transfer')
-                  .reduce<number>((s, t: any) => s + (Number(t.amount) || 0), 0);
-
-                const memberDebitTotal = memberTxs
-                  .filter((t: any) => t.type === 'withdraw' || t.type === 'telecom_recharge' || t.type === 'transfer' || t.type === 'shop_purchase')
-                  .reduce<number>((s, t: any) => s + (Number(t.amount) || 0), 0);
-
-                return (
-                  <div className="space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2">
-                      <h4 className="text-xs font-extrabold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
-                        <span>📜 সদস্যের পূর্বের সকল লেনদেন খতিয়ান</span>
-                        <span className="bg-amber-500/20 text-amber-300 text-[10px] px-2 py-0.5 rounded-full font-mono">
-                          মোট {memberTxs.length} টি রেকর্ড
-                        </span>
-                      </h4>
-
-                      <div className="flex items-center gap-3 text-[11px] font-mono">
-                        <span className="text-emerald-400 font-bold">মোট জমা: ৳{formatBanglaAmount(memberCreditTotal)}</span>
-                        <span className="text-rose-400 font-bold">মোট উইথড্র: ৳{formatBanglaAmount(memberDebitTotal)}</span>
-                      </div>
-                    </div>
-
-                    {memberTxs.length === 0 ? (
-                      <div className="text-center py-8 bg-slate-950/60 rounded-2xl border border-slate-800 p-4 space-y-1">
-                        <Clock className="w-8 h-8 text-slate-500 mx-auto" />
-                        <p className="text-xs text-slate-400 font-bold">এই সদস্যের পূর্বে কোনো লেনদেন রেকর্ড পাওয়া যায়নি</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                        {memberTxs.map((mtx: any, idx: number) => {
-                          const isPending = mtx.status === 'pending';
-                          const isSuccess = mtx.status === 'success' || mtx.status === 'approved';
-
-                          return (
-                            <div
-                              key={mtx.id || idx}
-                              className="p-3 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between gap-2 hover:border-slate-700 transition"
-                            >
-                              <div className="space-y-1 min-w-0">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  {isPending ? (
-                                    <span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[9px] font-black rounded">
-                                      🟡 পেন্ডিং
-                                    </span>
-                                  ) : isSuccess ? (
-                                    <span className="px-1.5 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[9px] font-black rounded">
-                                      🟢 সফল
-                                    </span>
-                                  ) : (
-                                    <span className="px-1.5 py-0.5 bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[9px] font-black rounded">
-                                      🔴 বাতিল
-                                    </span>
-                                  )}
-
-                                  <span className="text-[10px] font-bold text-slate-300 bg-slate-800 px-1.5 py-0.5 rounded">
-                                    {mtx.type || 'লেনদেন'}
-                                  </span>
-
-                                  {mtx.paymentMethod && (
-                                    <span className="text-[10px] text-amber-400 font-mono">
-                                      💳 {mtx.paymentMethod}
-                                    </span>
-                                  )}
-                                </div>
-
-                                <p className="text-[10.5px] text-slate-400 font-mono">
-                                  {mtx.createdAt ? new Date(mtx.createdAt).toLocaleString('bn-BD') : ''}
-                                  {mtx.trxId && <span className="text-amber-300 ml-1">TrxID: {mtx.trxId}</span>}
-                                </p>
-                              </div>
-
-                              <div className="text-right shrink-0">
-                                <strong className={`font-mono text-xs sm:text-sm font-black block ${
-                                  mtx.type === 'add_money' || mtx.type === 'deposit'
-                                    ? 'text-emerald-400'
-                                    : 'text-rose-400'
-                                }`}>
-                                  {mtx.type === 'add_money' || mtx.type === 'deposit' ? '+' : '-'}৳ {formatBanglaAmount(mtx.amount || 0)} BDT
-                                </strong>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-            </div>
-
-            {/* Modal Footer */}
-            <div className="p-4 bg-slate-900 border-t border-slate-800 flex items-center justify-between shrink-0">
-              <span className="text-xs text-slate-400 font-medium">
-                অ্যাডমিন প্যানেলে সদস্যের ডাটা রিয়েল-টাইমে সুরক্ষিতভাবে লোড হয়েছে।
-              </span>
-              <button
-                type="button"
-                onClick={() => setInspectingMemberUser(null)}
-                className="px-5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-xl transition cursor-pointer"
-              >
-                বন্ধ করুন
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}

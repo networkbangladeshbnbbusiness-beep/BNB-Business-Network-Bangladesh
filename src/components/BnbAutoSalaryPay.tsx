@@ -482,7 +482,7 @@ export default function BnbAutoSalaryPay({ user, onBack, syncLiveProfile, appCon
       );
       const snapshot = await getDocs(empQuery);
       
-      const batchPromises = snapshot.docs.map(docSnap => {
+      const batchPromises = snapshot.docs.map((docSnap, _idx) => {
         return updateDoc(doc(db, 'salary_employees', docSnap.id), {
           status: 'Paid',
           lastPaymentDate: config.payDate,
@@ -566,7 +566,7 @@ export default function BnbAutoSalaryPay({ user, onBack, syncLiveProfile, appCon
       try {
         const empQuery = query(collection(db, 'salary_employees'), where('userId', '==', user.uid));
         const snapshot = await getDocs(empQuery);
-        const batchPromises = snapshot.docs.map(docSnap => {
+        const batchPromises = snapshot.docs.map((docSnap, _idx) => {
           return updateDoc(doc(db, 'salary_employees', docSnap.id), {
             status: 'Pending'
           });
@@ -587,7 +587,7 @@ export default function BnbAutoSalaryPay({ user, onBack, syncLiveProfile, appCon
         setLoading(true);
         const empQuery = query(collection(db, 'salary_employees'), where('userId', '==', user.uid));
         const snapshot = await getDocs(empQuery);
-        const deletePromises = snapshot.docs.map(docSnap => deleteDoc(doc(db, 'salary_employees', docSnap.id)));
+        const deletePromises = snapshot.docs.map((docSnap, _idx) => deleteDoc(doc(db, 'salary_employees', docSnap.id)));
         await Promise.all(deletePromises);
         setSelectedEmployee(null);
         alert('সকল কর্মচারীর তথ্য সফলভাবে মুছে ফেলা হয়েছে!');
@@ -904,7 +904,7 @@ export default function BnbAutoSalaryPay({ user, onBack, syncLiveProfile, appCon
 
                         return (
                           <tr 
-                            key={`${emp.id}-${idx}`}
+                            key={`${emp.id || idx}-${idx}`}
                             onClick={() => setSelectedEmployee(emp)}
                             className={`hover:bg-slate-50/80 cursor-pointer transition-colors ${isSelected ? 'bg-slate-50 font-medium' : ''}`}
                           >
@@ -1226,7 +1226,7 @@ export default function BnbAutoSalaryPay({ user, onBack, syncLiveProfile, appCon
 
                   return (
                     <div 
-                      key={`${emp.id}-${idx}`}
+                      key={`${emp.id || idx}-${idx}`}
                       className="bg-slate-50 border border-slate-100 rounded-xl p-3.5 flex items-center justify-between gap-3 shadow-3xs"
                     >
                       <div className="flex items-center gap-3">
@@ -1393,7 +1393,7 @@ export default function BnbAutoSalaryPay({ user, onBack, syncLiveProfile, appCon
                     </div>
                   ) : (
                     paymentHistory.map((hist, idx) => (
-                      <div key={`${hist.id || hist.createdAt}-${idx}`} className="p-3 flex items-center justify-between hover:bg-slate-50">
+                      <div key={`${hist.id || hist.createdAt || idx}-${idx}`} className="p-3 flex items-center justify-between hover:bg-slate-50">
                         <div>
                           <span className="font-black text-slate-800 block">{hist.companyName || config.companyName} - বেতন বিতরণ</span>
                           <span className="text-[10px] font-bold text-slate-400 mt-0.5 block">
