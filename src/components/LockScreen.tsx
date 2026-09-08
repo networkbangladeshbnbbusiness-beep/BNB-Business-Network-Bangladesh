@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { User, AppConfig } from '../types';
-import { maskSecretPhone } from '../lib/memberUtils';
+import { maskSecretPhone, convertBengaliToEnglishDigits } from '../lib/memberUtils';
 import { db } from '../lib/firebase';
 import { doc, getDoc, collection, query, where, getDocs, updateDoc, setDoc, onSnapshot } from 'firebase/firestore';
 import { KeyRound, LogOut, ArrowRight, ShieldAlert, Check, X, Search, Lock, ShieldCheck, Eye, EyeOff, LockKeyhole } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { BNBLogo } from './BNBLogo';
+import { getLockoutState, recordFailedAttempt, clearLockoutState, LockoutState } from '../lib/lockoutUtils';
+import LockoutScreen from './LockoutScreen';
 
 // Comprehensive global country list with flags & dialed codes
 const countries = [
@@ -33,7 +35,7 @@ const countries = [
   { name: 'জর্ডান (Jordan)', code: '+962', flag: '🇯🇴', placeholder: '791234567', minLength: 9, maxLength: 9 },
   { name: 'ইরাক (Iraq)', code: '+964', flag: '🇮🇶', placeholder: '7701234567', minLength: 10, maxLength: 10 },
   { name: 'মিশর (Egypt)', code: '+20', flag: '🇪🇬', placeholder: '1012345678', minLength: 10, maxLength: 10 },
-  { name: 'অন্যান্য (Others)', code: '+', flag: '🌐', placeholder: '১২৩৪৫৬৭৮৯০', minLength: 5, maxLength: 15 }
+  { name: 'অন্যান্য (Others)', code: '+', flag: '🌐', placeholder: '1234567890', minLength: 5, maxLength: 15 }
 ];
 
 // Formatting helper
@@ -71,10 +73,10 @@ const validatePhoneNumber = (phone: string, country: typeof countries[0]): strin
   
   if (country.code === '+880') {
     if (digitsOnly.length === 11 && !digitsOnly.startsWith('01')) {
-      return '১১ ডিজিটের বাংলাদেশি নাম্বার অবশ্যই ০১ দিয়ে শুরু হতে হবে।';
+      return '11 ডিজিটের বাংলাদেশি নাম্বার অবশ্যই 01 দিয়ে শুরু হতে হবে।';
     }
     if (digitsOnly.length !== 10 && digitsOnly.length !== 11) {
-      return 'সদস্যের সঠিক ১০ বা ১১ ডিজিটের বাংলাদেশি মোবাইল নাম্বার দিন।';
+      return 'সদস্যের সঠিক 10 বা 11 ডিজিটের বাংলাদেশি মোবাইল নাম্বার দিন।';
     }
   } else {
     if (digitsOnly.length < (country.minLength || 6) || digitsOnly.length > (country.maxLength || 15)) {
@@ -107,6 +109,14 @@ export default function LockScreen({
   onLanguageChange,
   darkMode = false
 }: LockScreenProps) {
+  const userIdentifier = user?.phone || user?.uid || '';
+  const [lockoutInfo, setLockoutInfo] = useState<LockoutState>(() => getLockoutState(userIdentifier));
+
+  useEffect(() => {
+    const status = getLockoutState(userIdentifier);
+    setLockoutInfo(status);
+  }, [userIdentifier]);
+
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -124,6 +134,7 @@ export default function LockScreen({
   const [resetMessage, setResetMessage] = useState('');
   const [resetError, setResetError] = useState('');
   const [resetLoading, setResetLoading] = useState(false);
+  const [hasActiveUnlockRequest, setHasActiveUnlockRequest] = useState(false);
 
   // International recovery setup states
   const [forgotCountry, setForgotCountry] = useState(countries[0]);
@@ -136,7 +147,7 @@ export default function LockScreen({
     setResetMessage('');
 
     if (newResetPin.length !== 4 || !/^\d+$/.test(newResetPin)) {
-      setResetError('নতুন পিন অবশ্যই ৪ ডিজিটের সংখ্যা হতে হবে।');
+      setResetError('নতুন পিন অবশ্যই 4 ডিজিটের সংখ্যা হতে হবে।');
       return;
     }
     if (newResetPin !== newResetPinConfirm) {
@@ -168,7 +179,7 @@ export default function LockScreen({
         setNewResetPin('');
         setNewResetPinConfirm('');
         setResetMessage('');
-        onUnlock(); // Auto-unlock instantly for maximum ease of use!
+        onUnlock(); // Auto-unlock after explicit successful PIN change
       }, 1500);
 
     } catch (err: any) {
@@ -179,15 +190,20 @@ export default function LockScreen({
     }
   };
 
-  // Real-time listener for user document to automatically unlock when Admin approves unlock request
+  // Real-time listener for user document to unlock ONLY when Admin approves active unlock request
   useEffect(() => {
-    if (!user?.uid) return;
+    if (!user?.uid || !hasActiveUnlockRequest) return;
     const userRef = doc(db, 'users', user.uid);
     const unsub = onSnapshot(userRef, (snap) => {
       if (snap.exists()) {
         const data = snap.data();
-        if (data.appLockResetStatus === 'approved' || (data.isAppLocked === false && user.isAppLocked)) {
-          // Admin approved or unlocked!
+        if (data.appLockResetStatus === 'approved' && data.appLockResetRequested) {
+          // Admin approved active unlock request! Consume the status in Firestore and unlock
+          updateDoc(userRef, {
+            appLockResetStatus: 'consumed',
+            appLockResetRequested: false
+          }).catch((e) => console.warn("Failed to consume unlock status:", e));
+          setHasActiveUnlockRequest(false);
           onUnlock();
         }
       }
@@ -195,7 +211,7 @@ export default function LockScreen({
       console.warn("LockScreen real-time user listener error:", err);
     });
     return () => unsub();
-  }, [user?.uid, user?.isAppLocked, onUnlock]);
+  }, [user?.uid, hasActiveUnlockRequest, onUnlock]);
 
   const handleSendAdminUnlockRequest = async () => {
     if (!user?.uid) return;
@@ -221,6 +237,7 @@ export default function LockScreen({
         status: 'pending'
       }, { merge: true });
 
+      setHasActiveUnlockRequest(true);
       setResetMessage('আপনার আনলক রিকোয়েস্ট সফলভাবে এডমিনের কাছে পাঠানো হয়েছে! এডমিন যাচাই করে এপ্রুভ করার সাথে সাথে অ্যাপস আনলক হয়ে যাবে।');
     } catch (err: any) {
       console.error("Error sending admin unlock request:", err);
@@ -254,7 +271,6 @@ export default function LockScreen({
   }, [pin]);
 
   const handleKeyPress = (num: string) => {
-    setError('');
     if (pin.length < 4) {
       const nextPin = pin + num;
       setPin(nextPin);
@@ -265,7 +281,6 @@ export default function LockScreen({
   };
 
   const handleBackspace = () => {
-    setError('');
     setPin(prev => prev.slice(0, -1));
   };
 
@@ -275,28 +290,80 @@ export default function LockScreen({
   };
 
   const handleVerifyPin = async (overridePin?: string) => {
-    const targetPin = overridePin !== undefined ? overridePin : pin;
+    const rawTarget = overridePin !== undefined ? overridePin : pin;
+    const targetPin = convertBengaliToEnglishDigits(rawTarget).trim();
     if (targetPin.length !== 4) return;
+
+    const lockStatus = getLockoutState(userIdentifier);
+    if (lockStatus.isLocked) {
+      setLockoutInfo(lockStatus);
+      return;
+    }
 
     setError('');
     setLoading(true);
 
     try {
-      const userPin = user?.pin;
-      const isAdmin2121 = targetPin === '2121';
+      // 1. In-memory user PIN & admin check
+      let userPin = user?.pin ? convertBengaliToEnglishDigits(String(user.pin)).trim() : '';
+      let userAppLockCode = user?.appLockCode ? convertBengaliToEnglishDigits(String(user.appLockCode)).trim() : '';
+      const isAdmin = user?.role === 'admin' || user?.memberId === 'MAIN_ADMIN' || user?.phone === '+8800011112222';
+      const adminMasterPin = appConfig?.adminPin ? convertBengaliToEnglishDigits(String(appConfig.adminPin)).trim() : '6666';
+
+      // 2. If userPin is missing, empty, or doesn't match targetPin, fetch LIVE document directly from Firestore
+      // This prevents "সঠিক দিল ভুল দেখায়" when page refreshes or user document hasn't loaded PIN in memory yet
+      if ((!userPin || targetPin !== userPin) && user?.uid) {
+        try {
+          const freshUserSnap = await getDoc(doc(db, 'users', user.uid));
+          if (freshUserSnap.exists()) {
+            const freshData = freshUserSnap.data();
+            if (freshData?.pin !== undefined && freshData?.pin !== null) {
+              userPin = convertBengaliToEnglishDigits(String(freshData.pin)).trim();
+            }
+            if (freshData?.appLockCode !== undefined && freshData?.appLockCode !== null) {
+              userAppLockCode = convertBengaliToEnglishDigits(String(freshData.appLockCode)).trim();
+            }
+          }
+        } catch (fetchErr) {
+          console.warn("Direct Firestore PIN verify fallback warning:", fetchErr);
+        }
+      }
+
+      // Also check if valid PIN was previously cached on this device
+      const cachedPin = typeof window !== 'undefined' ? (localStorage.getItem('bnb_user_pin') || '') : '';
+
+      const isCorrectPin = 
+        (userPin && targetPin === userPin) ||
+        (userAppLockCode && targetPin === userAppLockCode) ||
+        (cachedPin && targetPin === cachedPin) ||
+        (isAdmin && (targetPin === '6666' || targetPin === adminMasterPin));
       
-      if (isAdmin2121 || (userPin && targetPin === userPin) || (!userPin && targetPin === '1234')) {
+      if (isCorrectPin) {
+        clearLockoutState(userIdentifier);
+        try {
+          localStorage.setItem('bnb_user_pin', targetPin);
+          if (user) {
+            user.pin = targetPin;
+          }
+        } catch (e) {}
+
         if (isLogoutMode) {
           onLogout();
         } else {
           onUnlock();
         }
       } else {
-        setError('ভুল সিকিউরিটি পিন! সঠিক পিন টাইপ করুন।');
+        const result = recordFailedAttempt(userIdentifier, 'pin');
+        setLockoutInfo(result);
+        if (result.isLocked) {
+          setError('ভুল পিন ৩ বার দেওয়া হয়েছে! অ্যাকাউন্ট ১ ঘণ্টার জন্য লক করা হলো।');
+        } else {
+          setError(`ভুল পিন! আর মাত্র ${result.remainingAttempts} বার চেষ্টা করতে পারবেন।`);
+        }
         setPin('');
       }
     } catch (err) {
-      console.error(err);
+      console.error("PIN verification error:", err);
       setError('পিন যাচাই করতে সমস্যা হয়েছে');
     } finally {
       setLoading(false);
@@ -311,25 +378,30 @@ export default function LockScreen({
       return;
     }
 
+    const lockStatus = getLockoutState(userIdentifier);
+    if (lockStatus.isLocked) {
+      setLockoutInfo(lockStatus);
+      return;
+    }
+
     setError('');
     setLoading(true);
 
     try {
       const userAppLockCode = user?.appLockCode ? String(user.appLockCode).trim() : '';
       const userPin = user?.pin ? String(user.pin).trim() : '';
-      const isSystemEmergencyMaster = cleanInput === 'BNBMASTER9999' || cleanInput === 'BNBADMIN9999';
 
       let isAuthorized = false;
       if (userAppLockCode.length > 0) {
-        // STRICT SECURITY: Must match the custom App Lock Password (e.g. 123456) set during lock setup.
-        // Transaction PIN (like 2121) or default PINs will NEVER unlock this second lock layer!
-        isAuthorized = (cleanInput === userAppLockCode) || isSystemEmergencyMaster;
-      } else {
-        // Fallback only if user has no custom appLockCode set yet
-        isAuthorized = (cleanInput === userPin) || isSystemEmergencyMaster;
+        // STRICT SECURITY: Must match the custom App Lock Password set during lock setup.
+        isAuthorized = cleanInput === userAppLockCode;
+      } else if (userPin.length > 0) {
+        // Fallback to user's registered PIN only if no separate appLockCode set yet
+        isAuthorized = cleanInput === userPin;
       }
 
       if (isAuthorized) {
+        clearLockoutState(userIdentifier);
         setSecretCodeInput('');
         setLoading(false);
 
@@ -347,14 +419,20 @@ export default function LockScreen({
         }
       } else {
         setLoading(false);
-        if (userAppLockCode.length > 0) {
-          if (cleanInput === userPin) {
-            setError('ভুল সিক্রেট পাসওয়ার্ড! এটি অ্যাপ্সের ২য় ধাপের গোপন পাসওয়ার্ড লক। আপনার ৪ ডিজিটের ট্রানজেকশন পিন দিয়ে এই লক খুলবে না, সেট করা নির্দিষ্ট পাসওয়ার্ড দিয়ে চেষ্টা করুন।');
-          } else {
-            setError('ভুল সিক্রেট পাসওয়ার্ড! সেট করা নির্দিষ্ট অ্যাপ লক পাসওয়ার্ড প্রদান করুন।');
-          }
+        const result = recordFailedAttempt(userIdentifier, 'password');
+        setLockoutInfo(result);
+        if (result.isLocked) {
+          setError('ভুল পাসওয়ার্ড 3 বার দেওয়া হয়েছে! আপনার অ্যাকাউন্ট 1 ঘণ্টার জন্য সম্পূর্ণ লক করা হলো।');
         } else {
-          setError('ভুল গোপন পাসওয়ার্ড! সঠিক পাসওয়ার্ড বা পিন প্রদান করুন।');
+          if (userAppLockCode.length > 0) {
+            if (cleanInput === userPin) {
+              setError(`ভুল সিক্রেট পাসওয়ার্ড! এটি অ্যাপ্সের গোপন পাসওয়ার্ড, পিন নয়। আর মাত্র ${result.remainingAttempts} বার চেষ্টা করা যাবে।`);
+            } else {
+              setError(`ভুল সিক্রেট পাসওয়ার্ড! আর মাত্র ${result.remainingAttempts} বার সুযোগ বাকি।`);
+            }
+          } else {
+            setError(`ভুল গোপন পাসওয়ার্ড! আর মাত্র ${result.remainingAttempts} বার সুযোগ বাকি।`);
+          }
         }
         setSecretCodeInput('');
       }
@@ -366,6 +444,34 @@ export default function LockScreen({
   };
 
   const isSecretLocked = !!user?.isAppLocked;
+
+  if (lockoutInfo.isLocked) {
+    return (
+      <div className="fixed inset-0 bg-slate-50 flex flex-col items-center justify-center p-4 z-50">
+        <div className="w-full max-w-sm">
+          <LockoutScreen
+            identifier={userIdentifier}
+            initialRemainingSeconds={lockoutInfo.remainingSeconds}
+            reason={lockoutInfo.reason}
+            onUnlocked={() => {
+              setLockoutInfo({
+                isLocked: false,
+                remainingSeconds: 0,
+                failedAttempts: 0,
+                pinAttempts: 0,
+                passwordAttempts: 0
+              });
+              setError('');
+            }}
+            onBack={() => {
+              onLogout();
+            }}
+            appLanguage={appLanguage}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 bg-slate-50 flex flex-col items-center justify-between py-8 px-6 overflow-y-auto select-none font-sans text-slate-800 z-40">
@@ -392,7 +498,7 @@ export default function LockScreen({
 
         {isSecretLocked ? (
           /* ========================================================= */
-          /* 2ND STEP SECRET APP LOCK UI (৬-১২ ডিজিট/অক্ষরের গোপন পাসওয়ার্ড) */
+          /* 2ND STEP SECRET APP LOCK UI (6-12 ডিজিট/অক্ষরের গোপন পাসওয়ার্ড) */
           /* ========================================================= */
           <div className="w-full bg-white rounded-3xl p-5 border border-slate-200/90 shadow-xl space-y-4 text-left relative overflow-hidden">
             <div className="flex items-center gap-3 border-b border-slate-100 pb-3">
@@ -401,7 +507,7 @@ export default function LockScreen({
               </div>
               <div>
                 <span className="text-[9px] font-black text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200 uppercase tracking-wider">
-                  🔒 ২য় ধাপের গোপন অ্যাপ লক
+                  🔒 2য় ধাপের গোপন অ্যাপ লক
                 </span>
                 <h2 className="text-base font-black text-slate-900 mt-0.5">{user.name || 'গ্রাহক'}</h2>
                 <p className="text-[11px] font-mono font-bold text-slate-600">ID: {user.memberId}</p>
@@ -435,7 +541,7 @@ export default function LockScreen({
             <form onSubmit={handleVerifySecretLock} className="space-y-3.5 pt-1">
               <div>
                 <label className="block text-xs font-black text-slate-700 mb-1">
-                  গোপন লকিং কোড (৪ - ১২ ডিজিট/অক্ষর)
+                  গোপন লকিং কোড (4 - 12 ডিজিট/অক্ষর)
                 </label>
                 <div className="relative">
                   <input
@@ -443,7 +549,7 @@ export default function LockScreen({
                     value={secretCodeInput}
                     onChange={(e) => setSecretCodeInput(e.target.value)}
                     maxLength={12}
-                    placeholder="৬-১২ অক্ষরের পাসওয়ার্ড কোডটি লিখুন"
+                    placeholder="6-12 অক্ষরের পাসওয়ার্ড কোডটি লিখুন"
                     className="w-full pl-10 pr-10 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
                     autoFocus
                     required
@@ -458,7 +564,7 @@ export default function LockScreen({
                   </button>
                 </div>
                 <div className="flex justify-between items-center mt-1 text-[10px] text-slate-400 font-bold px-1">
-                  <span>সর্বনিম্ন ৪, সর্বোচ্চ ১২ ডিজিট/অক্ষর</span>
+                  <span>সর্বনিম্ন 4, সর্বোচ্চ 12 ডিজিট/অক্ষর</span>
                   <span>{secretCodeInput.length}/12</span>
                 </div>
               </div>
@@ -519,26 +625,33 @@ export default function LockScreen({
           /* ========================================================= */
           <>
             {/* User Card */}
-            <div className="flex flex-col items-center gap-1 mb-1 text-center shrink-0">
+            <div className="flex flex-col items-center gap-1 mb-1 text-center shrink-0 w-full max-w-[300px]">
               <div className="w-13 h-13 bg-emerald-100/70 border border-emerald-200 rounded-full flex items-center justify-center text-emerald-700 shadow-xs mb-1">
                 <KeyRound className="w-6 h-6 text-emerald-700" />
               </div>
               <span className="text-[10.5px] font-extrabold text-emerald-800 uppercase tracking-widest bg-emerald-50 px-3 py-0.5 rounded-full border border-emerald-200 shadow-2xs">নিরাপত্তা লক</span>
               <h2 className="text-lg font-black text-slate-900 tracking-tight mt-1">{user.name || 'সদস্য'}</h2>
-              <p className="text-[11px] font-mono font-bold text-slate-700 bg-white px-3 py-0.5 rounded-full border border-slate-200 mt-0.5 shadow-2xs">
-                {user.memberId}
-              </p>
+              <div className="flex items-center gap-2 justify-center">
+                <p className="text-[11px] font-mono font-bold text-slate-800 bg-white px-3 py-0.5 rounded-full border border-slate-200 shadow-2xs">
+                  {user.memberId || localStorage.getItem('bnb_user_member_id') || 'BNB00000000'}
+                </p>
+                {user.phone && (
+                  <p className="text-[11px] font-mono font-bold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200 shadow-2xs">
+                    {user.phone}
+                  </p>
+                )}
+              </div>
             </div>
 
             {/* PIN Input Circles */}
-            <div className="flex flex-col items-center gap-2 mb-1 shrink-0 w-full">
-              <div className="flex justify-center gap-4">
+            <div className="flex flex-col items-center gap-1 mb-1 shrink-0 w-full">
+              <div className="flex justify-center gap-4 py-1">
                 {[0, 1, 2, 3].map((index) => (
                   <motion.div
                     key={index}
                     animate={error ? { x: [0, -4, 4, -4, 4, 0] } : {}}
                     transition={{ duration: 0.4 }}
-                    className={`w-4 h-4 rounded-full border-2 transition-all duration-200 ${
+                    className={`w-4.5 h-4.5 rounded-full border-2 transition-all duration-200 ${
                       index < pin.length
                         ? 'bg-emerald-600 border-emerald-600 shadow-xs scale-110'
                         : 'bg-white border-slate-300'
@@ -547,16 +660,20 @@ export default function LockScreen({
                 ))}
               </div>
               
-              {/* Error Message Space */}
-              <div className="text-xs font-bold text-red-600 text-center min-h-[16px] mt-1 max-w-[280px]">
-                {error && (
+              {/* Error Message Space - RIGID FIXED HEIGHT TO ABSOLUTELY PREVENT ANY KEYPAD LAYOUT SHIFT */}
+              <div className="h-12 w-full max-w-[300px] flex items-center justify-center text-center px-1 shrink-0">
+                {error ? (
                   <motion.span
-                    initial={{ opacity: 0, y: -2 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="inline-block bg-red-50 text-red-600 border border-red-200 px-3 py-1 rounded-xl shadow-2xs"
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="text-[11px] leading-tight font-bold bg-rose-50 text-rose-700 border border-rose-200 px-3 py-1 rounded-xl shadow-2xs max-w-full"
                   >
                     ⚠️ {error}
                   </motion.span>
+                ) : (
+                  <span className="text-[11px] font-medium text-slate-400">
+                    ৪ ডিজিট ট্রানজেকশন পিন কোড দিন
+                  </span>
                 )}
               </div>
             </div>
@@ -612,16 +729,18 @@ export default function LockScreen({
             </button>
 
             {/* Footer actions */}
-            <div className="flex justify-between w-full max-w-[300px] border-t border-slate-200 pt-3.5 px-1 text-xs shrink-0">
+            <div className="flex justify-between items-center w-full max-w-[300px] border-t border-slate-200 pt-3 px-1 text-xs shrink-0">
               <button
+                type="button"
                 onClick={onLogout}
-                className="flex items-center gap-1.5 text-slate-600 hover:text-red-600 transition-colors font-bold cursor-pointer"
+                className="flex items-center gap-1.5 text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-3 py-1.5 rounded-xl transition-all font-bold cursor-pointer active:scale-95 shadow-2xs"
               >
-                <LogOut className="w-4 h-4" />
+                <LogOut className="w-3.5 h-3.5" />
                 অন্য অ্যাকাউন্ট
               </button>
               
               <button
+                type="button"
                 onClick={() => handleVerifyPin(pin)}
                 disabled={loading || pin.length !== 4}
                 className="flex items-center gap-1.5 text-emerald-800 hover:text-emerald-900 transition-colors font-black disabled:opacity-50 cursor-pointer"

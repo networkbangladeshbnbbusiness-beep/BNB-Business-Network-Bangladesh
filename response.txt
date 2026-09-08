@@ -1,0 +1,1 @@
+Found. Redirecting to /?payment_status=failed&error=Cannot%20access%20'currentMainBalance'%20before%20initialization

@@ -1,5 +1,5 @@
 import { db } from './firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, deleteField } from 'firebase/firestore';
 import { AppConfig } from '../types';
 
 export const DEFAULT_QARD_CONFIG = {
@@ -10,9 +10,9 @@ export const DEFAULT_QARD_CONFIG = {
     { id: '2', icon: '📅', title: 'সক্রিয়তার শর্ত', description: 'আবেদনকারীকে আমাদের অ্যাপে সর্বনিম্ন ২ মাস সক্রিয় থাকতে হবে এবং এই সময়ে কমপক্ষে BNB টু BNB ২০,০০০ টাকার লেনদেন থাকতে হবে।' },
     { id: '3', icon: '🔍', title: 'এজেন্ট ভেরিফিকেশন', description: 'এরপর আমাদের এজেন্ট যাচাই-বাছাই করে আবেদনকারীর জন্য ঋণের পরিমাণ নির্ধারণ করবেন। কাউকে খালি হাতে ফেরানো হবে না।' },
     { id: '4', icon: '🎯', title: 'ঋণের লিমিট ও ভবিষ্যৎ প্ল্যান', description: 'প্রাথমিকভাবে সর্বনিম্ন ৫০০ টাকা থেকে সর্বোচ্চ ১০,০০০ টাকা পর্যন্ত করজে হাসানা দেওয়া হবে। তবে আমাদের ভবিষ্যৎ পরিকল্পনা আছে বাড়ি করার জন্য এবং বিদেশ যাওয়ার জন্য ৫০,০০০ থেকে ১,০০,০০০ টাকা পর্যন্ত এখান থেকে দেওয়ার জন্য বিনা সুদে।' },
-    { id: '5', icon: '⏳', title: 'পরিশোধের মেয়াদ', description: 'নেওয়া অর্থ সর্বোচ্চ ৩ মাসের মধ্যে সম্পূর্ণ পরিশোধ করতে হবে।' },
-    { id: '6', icon: '⚠️', title: 'বকেয়া জরিমানা', description: 'নির্ধারিত সময়ের মধ্যে পরিশোধ না করলে প্রতি ১,০০০ টাকার জন্য প্রতিদিন ১০ টাকা হারে জরিমানা প্রযোজ্য হবে।', isWarning: true },
-    { id: '7', icon: '⚡', title: 'সমবায় আমানতের ১% - ৫০% ইনস্ট্যান্ট অটো-ঋণ', description: 'সমিতিতে যাদের একাউন্ট/সঞ্চয় রয়েছে, তারা সঞ্চয়ের ১% থেকে ৫০% টাকা (যেমন ১০০ টাকা থাকলে ১-৫০ টাকা, ১০,০০০ টাকা থাকলে ১০০-৫,০০০ টাকা) যেকোনো সময় সর্বোচ্চ ৩ মাস মেয়াদে কোনো এডমিন অনুমোদন ছাড়াই অটো-ঋণ হিসেবে নিতে পারবেন। নেওয়া ঋণ ৩ মাসের মধ্যে যেকোনো দিন পরিশোধ করা যাবে এবং পরিশোধ করার তারিখ থেকে আগামী ৩ মাস পর পুনরায় ইনস্ট্যান্ট ঋণ নেওয়া যাবে।' }
+    { id: '5', icon: '⏳', title: 'পরিশোধের মেয়াদ ও কিস্তির নিয়ম', description: 'যেই তারিখে টাকা নিবেন, ঠিক পরের মাসে সেই একই তারিখে পরিশোধ করতে হবে (অর্থাৎ পুরো ৩০ দিন গণনা হবে)। যারা ৩ মাসের জন্য নিবেন ৯০ দিন গণনা হবে তবে প্রতি ৩০ দিন পর পর মোট ৩টি সমান কিস্তিতে পরিশোধ করতে হবে।' },
+    { id: '6', icon: '⚠️', title: '২ দিন আগে নোটিফিকেশন ও বিলম্ব জরিমানা', description: 'মেয়াদ শেষ হওয়ার ২ দিন পূর্বে রিমাইন্ডার নোটিফিকেশন পাঠানো হবে। ৩০ দিনের মধ্যে পরিশোধ না করলে প্রতিদিন প্রতি ১,০০০ টাকায় ১০ টাকা হারে বিলম্ব জরিমানা যুক্ত হবে।', isWarning: true },
+    { id: '7', icon: '⚡', title: 'সমবায় আমানতের ১% - ৫০% ইনস্ট্যান্ট অটো-ঋণ', description: 'সমিতিতে যাদের সঞ্চয় রয়েছে, তারা যেকোনো সময় (২৪/৭) কোনো এডমিন অনুমোদন ছাড়াই ১ মাস (৩০ দিন) অথবা ৩ মাস (৩ কিস্তি) মেয়াদে ইনস্ট্যান্ট ঋণ নিতে পারবেন।' }
   ],
   verificationNotice: {
     title: "এডমিন প্যানেল ভেরিফিকেশন নোটিশঃ",
@@ -34,18 +34,96 @@ export const DEFAULT_QARD_CONFIG = {
     maxDurationMonths: 3,
     cooldownDays: 90,
     takeStartDay: 1,
-    takeEndDay: 25,
+    takeEndDay: 31,
     autoDeductStartDay: 1,
-    autoDeductEndDay: 9,
-    month1Ratio: 40,
-    month2Ratio: 35,
-    month3Ratio: 25,
+    autoDeductEndDay: 31,
+    month1Ratio: 33.34,
+    month2Ratio: 33.33,
+    month3Ratio: 33.33,
     title: "🏢 সমবায় আমানতের ১% - ৫০% ইনস্ট্যান্ট অটো-ঋণ",
-    description: "সমিতিতে যাদের একাউন্ট/সঞ্চয় রয়েছে, তারা তাদের জমানো সঞ্চয়ের ১% থেকে ৫০% টাকা (যেমন ১০০ টাকা থাকলে ১-৫০ টাকা) যেকোনো সময় কোনো এডমিন অনুমোদন ছাড়াই ১-৩ মাস মেয়াদে ইনস্ট্যান্ট অটো-ঋণ নিতে পারবেন (আবেদনের সময়ঃ মাসের ১-২৫ তারিখ)। ৩ মাস মেয়াদে কিস্তি অনুপাতে (৪০%, ৩৫%, ২৫%) প্রতি মাসের ১-৯ তারিখের মধ্যে অটো-কিস্তি কেটে নেওয়া হবে।"
+    description: "সমিতিতে যাদের একাউন্ট/সঞ্চয় রয়েছে, তারা তাদের জমানো সঞ্চয়ের ১% থেকে ৫০% টাকা (যেমন ১০০ টাকা থাকলে ১-৫০ টাকা) যেকোনো সময় (২৪/৭) কোনো এডমিন অনুমোদন ছাড়াই ইনস্ট্যান্ট অটো-ঋণ নিতে পারবেন। যে তারিখে টাকা নিবেন, ঠিক পরের মাসে সেই একই তারিখে দিতে হবে (ঠিক ৩০ দিন গণনা হবে)। যারা ৩ মাসের জন্য নিবেন ৯০ দিন গণনা হবে তবে প্রতি ৩০ দিন পর পর মোট ৩টি সমান কিস্তিতে দিতে হবে। ৩০ দিনের মধ্যে পরিশোধ না করলে প্রতিদিন প্রতি হাজারে ১০ টাকা করে বিলম্ব জরিমানা কার্যকর হবে।"
+  },
+  goldLoanConfig: {
+    enabled: true,
+    protectionMonths: 3,
+    protectionDays: 90,
+    equalMarketPrice: true,
+    extraBenefit: 0,
+    noticeTitle: "স্বর্ণ রেখে জরুরি টাকা নীতিমালা",
+    noticeSubtitle: "বিপদের সময় পাশে থাকাই আমাদের মূল উদ্দেশ্য",
+    rates: {
+      k24: 125000,
+      k22: 115000,
+      k21: 110000,
+      k18: 95000,
+      traditional: 80000
+    },
+    guidelines: [
+      { id: '1', icon: '👑', title: 'সমবায় সদস্যদের ১০০% সমপরিমাণ লোন সুবিধা', description: 'BNB সমবায় সমিতির সদস্যরা ৩ মাসের জন্য স্বর্ণের সমপরিমাণ (১০০% টাকা) জরুরি লোন নিতে পারবেন এবং ৩ মাসের মধ্যে সমপরিমাণ মূল টাকা পরিশোধ করে অক্ষত অবস্থায় স্বর্ণ ছাড়িয়ে নিতে পারবেন।' },
+      { id: '2', icon: '👥', title: 'সাধারণ নাগরিকদের জন্য বাজারদর নীতি', description: 'যাঁরা সমবায় সমিতির সদস্য নন, তাঁরা প্রচলিত বাজার নীতি ও সাধারণ মূল্যায়নের ভিত্তিতে স্বর্ণ রেখে জরুরি আর্থিক সুবিধা গ্রহণ করতে পারবেন।' },
+      { id: '3', icon: '💎', title: '০% সুদ ও সুদমুক্ত কল্যাণ সেবা', description: 'করযে হাসানা তহবিলের অধীনে সমবায় সদস্যদের জন্য কোনো প্রকার সুদ, অতিরিক্ত ফি বা লুকানো চার্জ নেই।' },
+      { id: '4', icon: '🔒', title: '৩ মাসের সুরক্ষিত ভল্ট হেফাজত', description: 'নির্দিষ্ট ৩ মাস (৯০ দিন) সময়সীমার পূর্বে আপনার সংরক্ষিত স্বর্ণ কোনো অবস্থাতেই বিক্রি বা হস্তান্তর করা হবে না।' },
+      { id: '5', icon: '🤝', title: 'টাকা পরিশোধে অক্ষত স্বর্ণ ফেরত', description: 'গৃহীত মূল টাকা পরিশোধ করার সাথে সাথে আপনার গচ্ছিত স্বর্ণ শতভাগ অক্ষত অবস্থায় ফিরিয়ে দেওয়া হবে।' },
+      { id: '6', icon: '🏛️', title: 'সিদ্ধান্তের পূর্বে নোটিশ ও ভল্ট ডায়েরি', description: 'মেয়াদ শেষ হলে যেকোনো পদক্ষেপ নেওয়ার পূর্বে সদস্যের সাথে যোগাযোগ করা হবে এবং প্রতিটি অলংকার অফিশিয়াল সিলযুক্ত ভল্টে সংরক্ষিত থাকে।' }
+    ]
   }
 };
 
+export const DEFAULT_MANDATORY_NOTICE: import('../types').MandatoryNoticeConsent = {
+  id: 'notice_rule_v1',
+  active: false,
+  type: 'rules_consent',
+  categoryBadge: 'নতুন নিয়ম',
+  title: 'নতুন নিয়মে আপনার অনুমতি প্রয়োজন',
+  introText: 'আমাদের সেবার মান উন্নয়ন এবং সদস্যদের নিরাপত্তা নিশ্চিত করতে কিছু নতুন নিয়ম ও আপডেট আনা হয়েছে। অনুমতি দেওয়ার আগে অনুগ্রহ করে সম্পূর্ণ পড়ুন।',
+  startButtonText: 'চলুন দেখি',
+  startCaption: 'আপনি না বলা পর্যন্ত এটি বারবার আসবে',
+  slides: [
+    {
+      id: 'slide_1',
+      badge: 'নতুন নিয়ম',
+      iconType: 'security',
+      title: '১. একাউন্ট নিরাপত্তা',
+      description: 'আপনার একাউন্ট আরও নিরাপদ রাখতে এখন থেকে দুই-ধাপ যাচাইকরণ (2FA) বাধ্যতামূলক করা হয়েছে।\n\nএতে আপনার একাউন্ট সুরক্ষিত থাকবে।',
+      bulletPoints: [
+        'অননুমোদিত ডিভাইস থেকে প্রবেশ রোধ',
+        'নিরাপদ পিন ও নিরাপত্তা সুরক্ষা'
+      ]
+    },
+    {
+      id: 'slide_2',
+      badge: 'নতুন নিয়ম',
+      iconType: 'limits',
+      title: '২. লেনদেন সীমা আপডেট',
+      description: 'সদস্যদের সুবিধার জন্য দৈনিক লেনদেন সীমা আপডেট করা হয়েছে।',
+      bulletPoints: [
+        'সাধারণ সদস্য: ৳ ৫০,০০০',
+        'ভেরিফাইড সদস্য: ৳ ১০০,০০০'
+      ]
+    },
+    {
+      id: 'slide_3',
+      badge: 'নতুন নিয়ম',
+      iconType: 'handshake',
+      title: '৩. আমাদের প্রত্যাশা',
+      description: 'সবাই নিয়ম মেনে চললে আমাদের কমিউনিটি আরও শক্তিশালী হবে। আপনার সহযোগিতা আমাদের জন্য গুরুত্বপূর্ণ।',
+      footerNote: 'আপনার মূল্যবান মতামত আমাদের সেবাকে আরো গতিশীল করবে'
+    }
+  ],
+  finalQuestion: 'আপনি কি উপরোক্ত নতুন নিয়ম ও শর্তাবলী মেনে নিতে সম্মত?',
+  agreeButtonText: 'হ্যাঁ, আমি সম্মত',
+  disagreeButtonText: 'না, আমি সম্মত নই',
+  allowFeedbackComment: false,
+  successTitle: 'ধন্যবাদ!',
+  successMessage: 'আপনি নতুন নিয়মে সম্মতি দিয়েছেন।\nএখন থেকে আপনি আমাদের সকল সেবা উপভোগ করতে পারবেন।',
+  disagreeTitle: 'আপনি সম্মত হননি',
+  disagreeMessage: 'আপনি নতুন নিয়মে সম্মতি না দেওয়ায় কিছু সেবা সীমিত থাকতে পারে।\n\nআপনি চাইলে পরে প্রোফাইল থেকে নিয়মগুলো পড়ে সম্মতি দিতে পারবেন।',
+  version: 1
+};
+
 export const DEFAULT_CONFIG: AppConfig = {
+  mandatoryNotice: DEFAULT_MANDATORY_NOTICE,
+  mandatoryNoticeResponses: {},
   phoneChangeConfig: {
     enabled: true,
     freeDaysAfterRegistration: 5,
@@ -311,6 +389,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   }
 };
 
+export const DEFAULT_SAMITY_INVESTMENTS: import('../types').SamityInvestment[] = [];
+
 export async function loadAppConfig(): Promise<AppConfig> {
   try {
     const configRef = doc(db, 'system_settings', 'app_config');
@@ -359,12 +439,76 @@ export async function loadAppConfig(): Promise<AppConfig> {
   }
 }
 
+export function sanitizeConfig(obj: any): any {
+  if (obj === undefined) return null;
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) {
+    return obj.map(item => sanitizeConfig(item));
+  }
+  const result: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      result[key] = sanitizeConfig(value);
+    }
+  }
+  return result;
+}
+
 export async function saveAppConfig(newConfig: AppConfig): Promise<void> {
   try {
     const configRef = doc(db, 'system_settings', 'app_config');
-    await setDoc(configRef, newConfig, { merge: true });
+    const sanitized = sanitizeConfig(newConfig);
+    await setDoc(configRef, sanitized, { merge: true });
+    try {
+      localStorage.setItem('bnb_app_config', JSON.stringify({ ...DEFAULT_CONFIG, ...sanitized }));
+    } catch (e) {}
   } catch (err) {
     console.error("Failed to save DB config:", err);
     throw err;
   }
 }
+
+export async function saveSectionIcon(sectionKey: string, iconDataUrl: string): Promise<void> {
+  try {
+    const configRef = doc(db, 'system_settings', 'app_config');
+    if (!iconDataUrl || iconDataUrl.trim() === '') {
+      if (sectionKey === 'samity') {
+        await setDoc(configRef, {
+          sectionIcons: { samity: "/samity_logo.svg" }
+        }, { merge: true });
+      } else {
+        await updateDoc(configRef, {
+          [`sectionIcons.${sectionKey}`]: deleteField()
+        });
+      }
+    } else {
+      await setDoc(configRef, {
+        sectionIcons: {
+          [sectionKey]: iconDataUrl
+        }
+      }, { merge: true });
+    }
+    
+    try {
+      const cached = localStorage.getItem('bnb_app_config');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        parsed.sectionIcons = parsed.sectionIcons || {};
+        if (!iconDataUrl) {
+          if (sectionKey === 'samity') {
+            parsed.sectionIcons.samity = "/samity_logo.svg";
+          } else {
+            delete parsed.sectionIcons[sectionKey];
+          }
+        } else {
+          parsed.sectionIcons[sectionKey] = iconDataUrl;
+        }
+        localStorage.setItem('bnb_app_config', JSON.stringify(parsed));
+      }
+    } catch (e) {}
+  } catch (err) {
+    console.error("Failed to update section icon in Firestore:", err);
+    throw err;
+  }
+}
+

@@ -201,7 +201,7 @@ const MoneyExchangeModule: React.FC<MoneyExchangeModuleProps> = ({
         setTimeStr('00:00:00');
         const extraMins = Math.floor(Math.abs(remainingMs) / 60000);
         const penaltyAmount = extraMins + 1; // At least 1 Taka for the first extra minute
-        setPenaltyText(`নির্ধারিত ১৫ মিনিট সময় অতিক্রম হয়েছে! জরিমানা: ৳${penaltyAmount} (প্রতি অতিরিক্ত মিনিটে ১ টাকা)`);
+        setPenaltyText(`নির্ধারিত 15 মিনিট সময় অতিক্রম হয়েছে! জরিমানা: ৳${penaltyAmount} (প্রতি অতিরিক্ত মিনিটে 1 টাকা)`);
       }
     }, 100);
 
@@ -240,7 +240,7 @@ const MoneyExchangeModule: React.FC<MoneyExchangeModuleProps> = ({
     }
 
     if (!walletPinInput.trim()) {
-      setToastNotice({ text: 'দয়া করে আপনার ৪ বা ৫ ডিজিটের ওয়ালেট পিন নম্বরটি প্রদান করুন!', type: 'error' });
+      setToastNotice({ text: 'দয়া করে আপনার 4 বা 5 ডিজিটের ওয়ালেট পিন নম্বরটি প্রদান করুন!', type: 'error' });
       return;
     }
 
@@ -804,7 +804,7 @@ const MoneyExchangeModule: React.FC<MoneyExchangeModuleProps> = ({
           {/* ⚫ BNB HOLD (Middle Black Box / Escrow Hold Balance Display) */}
           <div className="bg-black text-white p-4 flex flex-col items-center justify-center rounded-tr-[2.5rem] rounded-bl-[2.5rem] shadow-2xl border border-slate-800 text-center select-none min-h-[110px]">
             <span className="text-[14px] font-black font-mono text-emerald-400">
-              ৳{activeDeal ? activeDeal.amount.toLocaleString() : '০.০০'}
+              ৳{activeDeal ? activeDeal.amount.toLocaleString() : '0.00'}
             </span>
             <div className="flex items-center gap-1 mt-1 shrink-0">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
@@ -838,7 +838,7 @@ const MoneyExchangeModule: React.FC<MoneyExchangeModuleProps> = ({
                 সচল নিরাপদ এক্সচেঞ্জ ডিল
               </h3>
               <span className="text-[10px] font-black bg-emerald-500/10 text-emerald-300 px-3 py-1 rounded-xl font-mono uppercase">
-                ধাপঃ {activeDeal.step} / ৪
+                ধাপঃ {activeDeal.step} / 4
               </span>
             </div>
 
@@ -914,7 +914,7 @@ const MoneyExchangeModule: React.FC<MoneyExchangeModuleProps> = ({
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block mb-1">প্রাপকের BNB নিবন্ধিত নম্বর বা মেম্বার আইডি</label>
                 <input
                   type="text"
-                  placeholder="যেমনঃ ০১৭xxxxxxxx বা মেম্বার আইডি"
+                  placeholder="যেমনঃ 017xxxxxxxx বা মেম্বার আইডি"
                   value={recipientInput}
                   onChange={e => setRecipientInput(e.target.value)}
                   className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs font-extrabold focus:bg-white outline-none"
@@ -970,7 +970,7 @@ const MoneyExchangeModule: React.FC<MoneyExchangeModuleProps> = ({
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block mb-1">আপনার ওয়ালেট সিকিউরিটি পিন (PIN)</label>
                 <input
                   type="password"
-                  placeholder="৪ বা ৫ ডিজিটের পিন লিখুন"
+                  placeholder="4 বা 5 ডিজিটের পিন লিখুন"
                   maxLength={5}
                   value={walletPinInput}
                   onChange={e => setWalletPinInput(e.target.value)}
@@ -983,7 +983,7 @@ const MoneyExchangeModule: React.FC<MoneyExchangeModuleProps> = ({
                 <p className="text-slate-800 font-extrabold flex items-center gap-1"><HelpCircle className="w-3.5 h-3.5 text-[#015E34]" /> নিয়োমাবলীঃ</p>
                 <p>• টাকা হোল্ডে রাখলে তা আপনার ব্যালেন্স থেকে সাময়িক লক হয়ে থাকবে।</p>
                 <p>• ডিল সফলভাবে শেষ হলে উক্ত লক ব্যালেন্সটি স্বয়ংক্রিয়ভাবে আপনার মেইন ব্যালেন্সে ফেরত দেওয়া হবে।</p>
-                <p>• ১৫ মিনিট অতিক্রান্ত হয়ে গেলে অতিরিক্ত প্রতি মিনিটের জন্য ১ টাকা জরিমানা কার্যকর হবে।</p>
+                <p>• 15 মিনিট অতিক্রান্ত হয়ে গেলে অতিরিক্ত প্রতি মিনিটের জন্য 1 টাকা জরিমানা কার্যকর হবে।</p>
               </div>
 
               {/* Submit Action */}
@@ -1142,7 +1142,7 @@ const MoneyExchangeModule: React.FC<MoneyExchangeModuleProps> = ({
 
               {/* Security Seal Note */}
               <div className="text-[10px] text-slate-400 text-center font-bold">
-                🔒 ১০০% নিরাপদ এনক্রিপ্টেড ডিজিটাল মানি রিসিট • BNB Bangladesh
+                🔒 100% নিরাপদ এনক্রিপ্টেড ডিজিটাল মানি রিসিট • BNB Bangladesh
               </div>
             </div>
 

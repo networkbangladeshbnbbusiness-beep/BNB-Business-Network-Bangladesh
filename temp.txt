@@ -1,0 +1,200 @@
+
+                    const numA = parseInt((a.memberId || '').replace(/\D/g, ''), 10) || 99999999;
+                    const numB = parseInt((b.memberId || '').replace(/\D/g, ''), 10) || 99999999;
+                    return numA - numB;
+                  } else if (headerMembersSortOrder === 'id_desc') {
+                    const numA = parseInt((a.memberId || '').replace(/\D/g, ''), 10) || 0;
+                    const numB = parseInt((b.memberId || '').replace(/\D/g, ''), 10) || 0;
+                    return numB - numA;
+                  } else if (headerMembersSortOrder === 'newest') {
+                    const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+                    const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+                    return timeB - timeA;
+                  }
+                  return totB - totA;
+                });
+
+                if (sorted.length === 0) {
+                  return (
+                    <div className="text-center py-12 bg-white rounded-2xl border border-slate-200 p-6 space-y-3">
+                      <Users className="w-12 h-12 text-slate-300 mx-auto animate-bounce" />
+                      <h4 className="text-sm font-black text-slate-700">কোনো মেম্বার খুঁজে পাওয়া যায়নি</h4>
+                      <p className="text-xs text-slate-500 font-medium">অনুগ্রহ করে সার্চ বা ফিল্টার কিওয়ার্ড পরিবর্তন করুন।</p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {sorted.map((usr, idx) => {
+                      const isAdminUser = usr.role === 'admin' || usr.role === 'sub_admin';
+                      return (
+                        <div 
+                          key={`${usr.uid || usr.id || usr.phone}-${idx}`}
+                          className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 shadow-2xs hover:border-[#009273]/40 transition space-y-3 relative overflow-hidden text-left"
+                        >
+                          {/* Top Accent bar for admins */}
+                          {isAdminUser && (
+                            <div className="absolute top-0 inset-x-0 h-1 bg-gradient-to-r from-amber-500 to-rose-500" />
+                          )}
+
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-2xl bg-teal-50 border border-teal-200 text-[#009273] font-black flex items-center justify-center shrink-0 text-sm">
+                                {usr.name ? usr.name.charAt(0).toUpperCase() : 'M'}
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <h4 className="text-xs sm:text-sm font-black text-slate-900 leading-tight">
+                                    {usr.name || 'অজ্ঞাত মেম্বার'}
+                                  </h4>
+                                  {usr.role === 'admin' ? (
+                                    <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-[9px] font-black rounded-md border border-amber-200">
+                                      এডমিন
+                                    </span>
+                                  ) : usr.role === 'sub_admin' ? (
+                                    <span className="px-2 py-0.5 bg-blue-100 text-blue-800 text-[9px] font-black rounded-md border border-blue-200">
+                                      সাব-এডমিন
+                                    </span>
+                                  ) : (
+                                    <span className="px-2 py-0.5 bg-slate-100 text-slate-700 text-[9px] font-bold rounded-md">
+                                      সদস্য
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] font-mono font-bold text-slate-600 mt-0.5">
+                                  📞 {usr.phone || 'ফোন নেই'}
+                                </p>
+                                <p className="text-[10px] text-slate-500 font-mono">
+                                  ID: <span className="font-bold text-slate-700">{usr.uid === 'admin_master' || usr.phone === '+8800011112222' || usr.memberId === 'MAIN_ADMIN' ? '👑 মেইন এডমিন (কোনো সিরিয়াল নেই)' : (usr.memberId || usr.uid?.substring(0, 8))}</span>
+                                  {usr.email ? ` • ${usr.email}` : ''}
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Verification Status */}
+                            <div className="text-right shrink-0">
+                              {usr.nidVerified || usr.isVerified ? (
+                                <span className="px-2 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 text-[9.5px] font-black rounded-lg flex items-center gap-1">
+                                  ✓ ভেরিফাইড
+                                </span>
+                              ) : (
+                                <span className="px-2 py-1 bg-amber-50 text-amber-700 border border-amber-200 text-[9.5px] font-extrabold rounded-lg">
+                                  ⚠ আনভেরিফাইড
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Balances Summary Row */}
+                          <div className="grid grid-cols-3 gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-150 text-[11px]">
+                            <div>
+                              <span className="text-[9px] text-slate-500 font-bold block">
+                                {isMainAdminUser(usr) ? 'মেইন ব্যালেন্স (নেট মূলধন)' : 'মেইন ব্যালেন্স'}
+                              </span>
+                              <span className="font-black text-slate-900 font-mono">৳ {getUserMainWalletBalance(usr).toLocaleString('bn-BD')}</span>
+                            </div>
+                            <div>
+                              <span className="text-[9px] text-slate-500 font-bold block">রিচার্জ ফান্ড</span>
+                              <span className="font-black text-teal-700 font-mono">৳ {(usr.telecomBalance || 0).toLocaleString('bn-BD')}</span>
+                            </div>
+                            <div>
+                              <span className="text-[9px] text-slate-500 font-bold block">সঞ্চয় / ফান্ড</span>
+                              <span className="font-black text-indigo-700 font-mono">৳ {(usr.savings || 0).toLocaleString('bn-BD')}</span>
+                            </div>
+                          </div>
+
+                          {/* Quick Action Buttons */}
+                          <div className="flex items-center gap-2 pt-1 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowHeaderMembersModal(false);
+                                setAdminTab('approvals');
+                                setApprovalsSubTab('users');
+                                setMemberSearchQuery(usr.phone || usr.name || '');
+                                setViewingGrid(false);
+                              }}
+                              className="flex-1 min-w-[130px] py-2 bg-[#009273] hover:bg-[#007f64] text-white font-black text-xs rounded-xl transition cursor-pointer shadow-2xs flex items-center justify-center gap-1.5"
+                            >
+                              <UserCheck className="w-3.5 h-3.5" />
+                              প্রোফাইল ও ব্যালেন্স
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                requestPrompt(
+                                  'মোবাইল নম্বর পরিবর্তন',
+                                  `সদস্য "${usr.name}" (মেম্বার আইডি: ${usr.memberId || 'N/A'}) এর নতুন মোবাইল নম্বর লিখুন:`,
+                                  usr.phone || '',
+                                  (newP) => {
+                                    if (!newP) return;
+                                    const cleanP = newP.replace(/\D/g, '');
+                                    if (cleanP.length < 11) {
+                                      alert('সঠিক ১১ ডিজিটের মোবাইল নম্বর প্রদান করুন।');
+                                      return;
+                                    }
+                                    handleDirectChangeUserPhone(usr, cleanP);
+                                  }
+                                );
+                              }}
+                              className="px-2.5 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold text-xs rounded-xl transition cursor-pointer flex items-center gap-1 shrink-0"
+                              title="মোবাইল নম্বর পরিবর্তন করুন"
+                            >
+                              <Edit3 className="w-3.5 h-3.5 text-amber-600" />
+                              <span>নম্বর বদল</span>
+                            </button>
+                            {usr.phone && (
+                              <a
+                                href={`https://wa.me/${usr.phone.replace(/\D/g, '')}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-2.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold text-xs rounded-xl transition cursor-pointer flex items-center gap-1"
+                                title="হোয়াটসঅ্যাপে চ্যাট করুন"
+                              >
+                                <Phone className="w-3.5 h-3.5 text-emerald-600" />
+                              </a>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteUser(usr)}
+                              className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-black text-xs rounded-xl transition cursor-pointer flex items-center gap-1 active:scale-95"
+                              title="অ্যাকাউন্ট স্থায়ীভাবে ডিলিট করুন"
+                            >
+                              <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                              <span>ডিলিট</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 bg-white border-t border-slate-200 text-center shrink-0 flex items-center justify-between px-5">
+              <span className="text-xs text-slate-500 font-bold">
+                মোট নিবন্ধিত মেম্বারঃ <strong className="text-slate-800">{users.length} জন</strong>
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowHeaderMembersModal(false)}
+                className="px-5 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-xs rounded-xl transition cursor-pointer"
+              >
+                বন্ধ করুন
+              </button>
+            </div>
+
+            {/* Sort Picker Selection Bottom Sheet Modal */}
+            {showSortPickerModal && (
+              <div className="fixed inset-0 z-[100001] bg-black/70 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-fade-in font-sans">
+                <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-4 sm:p-5 text-left space-y-3.5 shadow-2xl border border-slate-100 max-h-[85vh] flex flex-col">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3 shrink-0">
+                    <h4 className="text-sm font-black text-slate-800 flex items-center gap-2">
+                      <SlidersHorizontal className="w-4 h-4 text-[#009273]" />
+                      <span>সদস্যদের তালিকা ফিল্টার ও ক্রমানুসারে সাজান</span>
+                    </h4>
+                    <button
+                      

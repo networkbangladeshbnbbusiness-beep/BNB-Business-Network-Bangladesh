@@ -125,7 +125,7 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
     }
 
     if (!nomineePhone.trim() || nomineePhone.length < 7) {
-      setErrorCode('সঠিক নমিনির মোবাইল নম্বর লিখুন (ন্যূনতম ৭ ডিজিট)।');
+      setErrorCode('সঠিক নমিনির মোবাইল নম্বর লিখুন (ন্যূনতম 7 ডিজিট)।');
       return;
     }
 
@@ -138,7 +138,7 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
     if (monthlySavingsOption === 'custom') {
       const parsedAmt = parseInt(customSavingsAmount, 10);
       if (isNaN(parsedAmt) || parsedAmt < 500) {
-        setErrorCode('আপনার কাঙ্ক্ষিত মাসিক সঞ্চয় অনুগ্রহ করে সংখ্যায় লিখুন এবং এটি অবশ্যই সর্বনিম্ন ৫০০ টাকা হতে হবে।');
+        setErrorCode('আপনার কাঙ্ক্ষিত মাসিক সঞ্চয় অনুগ্রহ করে সংখ্যায় লিখুন এবং এটি অবশ্যই সর্বনিম্ন 500 টাকা হতে হবে।');
         return;
       }
       savingsTarget = parsedAmt;
@@ -302,7 +302,7 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
           {/* Section A: Verified Base Identity */}
           <div className="space-y-3 bg-slate-50/70 border border-slate-150 p-4 rounded-2.5xl">
             <h3 className="text-xs font-black text-slate-500 uppercase tracking-wider flex items-center gap-1.5 border-b border-slate-200 pb-1.5">
-              <UserIcon className="w-3.5 h-3.5 text-slate-400" /> ১. প্রাথমিক প্রোফাইল তথ্য (স্থায়ী ও অপরিবর্তনশীল)
+              <UserIcon className="w-3.5 h-3.5 text-slate-400" /> 1. প্রাথমিক প্রোফাইল তথ্য (স্থায়ী ও অপরিবর্তনশীল)
             </h3>
             
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-[11px] font-sans">
@@ -342,7 +342,7 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
           {/* Section B: Editable Fields */}
           <div className="space-y-3">
             <h3 className="text-xs font-black text-indigo-900 uppercase tracking-wider flex items-center gap-1.5 border-b border-indigo-100 pb-1.5">
-              <FileText className="w-3.5 h-3.5 text-indigo-600" /> ২. অতিরিক্ত সমবায় তথ্যাদি প্রদান (সারা বিশ্ব থেকে গ্রহণযোগ্য)
+              <FileText className="w-3.5 h-3.5 text-indigo-600" /> 2. অতিরিক্ত সমবায় তথ্যাদি প্রদান (সারা বিশ্ব থেকে গ্রহণযোগ্য)
             </h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-[11px] font-sans">

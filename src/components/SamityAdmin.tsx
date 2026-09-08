@@ -1,9 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { User, Transaction, SamityPolicyConfig, SamityFineTier } from '../types';
+import { User, Transaction, SamityPolicyConfig, SamityFineTier, SAMITY_MONTHS, SAMITY_YEARS, getEffectiveBalance, normalizePaidMonthsArray, getUniquePaidMonthsCount } from '../types';
+import { 
+  processBulkSamitySavingsAutoDeduction, 
+  adminProcessSamityMonthSettlement, 
+  adminRefundAllFutureAdvanceMonths,
+  isUserMonthPaid, 
+  getUnpaidSamityMonths, 
+  AutoDeductionResult 
+} from '../lib/samitySavingsEngine';
 import { sortTransactionsNewestFirst } from '../lib/transactionUtils';
 import { deleteUserCompletelyFromDatabase } from '../lib/memberUtils';
 import { db } from '../lib/firebase';
 import { doc, updateDoc, deleteDoc, collection, addDoc } from 'firebase/firestore';
+import SamityInvestmentsView from './SamityInvestmentsView';
 import { 
   PiggyBank, 
   BadgeAlert, 
@@ -33,23 +42,31 @@ import {
   Sliders,
   ShieldAlert,
   Save,
-  X
+  X,
+  CreditCard,
+  Zap,
+  RotateCcw,
+  CheckSquare,
+  Square,
+  AlertCircle,
+  TrendingUp,
+  Landmark
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 const DEFAULT_FINE_TIERS: SamityFineTier[] = [
-  { id: 'tier-1', fromDay: 1, toDay: 9, rangeLabel: '১ থেকে ৯ তারিখঃ', fineText: 'কোনো জরিমানা নেই (০ BDT)', fineAmount: 0, bgClass: 'bg-emerald-50/40 border-emerald-100 text-emerald-800' },
-  { id: 'tier-2', fromDay: 10, toDay: 19, rangeLabel: '১০ থেকে ১৯ তারিখঃ', fineText: '৳ ১০ জরিমানা', fineAmount: 10, bgClass: 'bg-amber-50/40 border-amber-100 text-amber-800' },
-  { id: 'tier-3', fromDay: 20, toDay: 29, rangeLabel: '২০ থেকে ২৯ তারিখঃ', fineText: '৳ ২০ জরিমানা', fineAmount: 20, bgClass: 'bg-orange-50/40 border-orange-100 text-orange-800' },
-  { id: 'tier-4', fromDay: 30, toDay: 39, rangeLabel: '৩০ থেকে ৩৯ তারিখঃ', fineText: '৳ ৩০ জরিমানা', fineAmount: 30, bgClass: 'bg-rose-50/40 border-rose-100 text-rose-800' },
-  { id: 'tier-5', fromDay: 40, toDay: 40, rangeLabel: '৪০তম দিনঃ', fineText: '৳ ৮০ জরিমানা', fineAmount: 80, bgClass: 'bg-red-50/40 border-red-150 text-red-800' },
-  { id: 'tier-6', fromDay: 41, toDay: 999, rangeLabel: '৪০তম দিনের পরঃ', fineText: '৳ ১০ প্রতিদিন জরিমানা', fineAmount: 10, bgClass: 'bg-slate-50 border-slate-150 text-slate-700', isDaily: true }
+  { id: 'tier-1', fromDay: 1, toDay: 9, rangeLabel: '1 থেকে 9 তারিখঃ', fineText: 'কোনো জরিমানা নেই (0 BDT)', fineAmount: 0, bgClass: 'bg-emerald-50/40 border-emerald-100 text-emerald-800' },
+  { id: 'tier-2', fromDay: 10, toDay: 19, rangeLabel: '10 থেকে 19 তারিখঃ', fineText: '৳ 10 জরিমানা', fineAmount: 10, bgClass: 'bg-amber-50/40 border-amber-100 text-amber-800' },
+  { id: 'tier-3', fromDay: 20, toDay: 29, rangeLabel: '20 থেকে 29 তারিখঃ', fineText: '৳ 20 জরিমানা', fineAmount: 20, bgClass: 'bg-orange-50/40 border-orange-100 text-orange-800' },
+  { id: 'tier-4', fromDay: 30, toDay: 39, rangeLabel: '30 থেকে 39 তারিখঃ', fineText: '৳ 30 জরিমানা', fineAmount: 30, bgClass: 'bg-rose-50/40 border-rose-100 text-rose-800' },
+  { id: 'tier-5', fromDay: 40, toDay: 40, rangeLabel: '40তম দিনঃ', fineText: '৳ 80 জরিমানা', fineAmount: 80, bgClass: 'bg-red-50/40 border-red-150 text-red-800' },
+  { id: 'tier-6', fromDay: 41, toDay: 999, rangeLabel: '40তম দিনের পরঃ', fineText: '৳ 10 প্রতিদিন জরিমানা', fineAmount: 10, bgClass: 'bg-slate-50 border-slate-150 text-slate-700', isDaily: true }
 ];
 
 const DEFAULT_CUSTOM_RULES: string[] = [
-  "২৫শে ডিসেম্বরের পূর্বে আপনার সঞ্চিত টাকা উত্তোলন করতে পারবেন না। আপনার জমাকৃত টাকা ডিসেম্বরের ২৫-৩০ তারিখের মধ্যে স্বয়ংক্রিয়ভাবে মেইন ব্যালেন্সে জমা হবে।",
-  "প্রতি মাসের ১ থেকে ৯ তারিখের মধ্যে স্বয়ংক্রিয়ভাবে অটো-ডেবিট কিস্তি জমা নেওয়া হয়।",
-  "১০ তারিখ থেকে বিলম্বে কিস্তি জমায় জরিমানা পলিসি প্রযোজ্য হবে।",
+  "25শে ডিসেম্বরের পূর্বে আপনার সঞ্চিত টাকা উত্তোলন করতে পারবেন না। আপনার জমাকৃত টাকা ডিসেম্বরের 25-30 তারিখের মধ্যে স্বয়ংক্রিয়ভাবে মেইন ব্যালেন্সে জমা হবে।",
+  "প্রতি মাসের 1 থেকে 9 তারিখের মধ্যে স্বয়ংক্রিয়ভাবে অটো-ডেবিট কিস্তি জমা নেওয়া হয়।",
+  "10 তারিখ থেকে বিলম্বে কিস্তি জমায় জরিমানা পলিসি প্রযোজ্য হবে।",
   "বিশেষ প্রয়োজনে অটো সঞ্চয় বন্ধ করতে এডমিন অনুমতির জন্য হেল্পলাইনে যোগাযোগ করুন।"
 ];
 
@@ -106,7 +123,24 @@ export default function SamityAdmin({
 }: SamityAdminProps) {
 
   // Active sub-section state inside BNB Investor admin panel
-  const [activeSubView, setActiveSubView] = useState<'main' | 'membership' | 'transactions' | 'ledger' | 'notices' | 'banners' | 'members' | 'policy_rules'>('main');
+  const [activeSubView, setActiveSubView] = useState<'main' | 'membership' | 'transactions' | 'ledger' | 'notices' | 'banners' | 'members' | 'policy_rules' | 'monthly_collection' | 'investments_manager'>('main');
+
+  // Monthly Savings Collection & Auto-Debit states
+  const [selectedCollectionYear, setSelectedCollectionYear] = useState<number>(new Date().getFullYear());
+  const [collectionSearchQuery, setCollectionSearchQuery] = useState<string>('');
+  const [collectionFilterStatus, setCollectionFilterStatus] = useState<'all' | 'unpaid' | 'current_unpaid' | 'paid'>('all');
+  const [memberSelectedMonthsMap, setMemberSelectedMonthsMap] = useState<Record<string, string[]>>({});
+  const [isBulkDeducting, setIsBulkDeducting] = useState<boolean>(false);
+  const [bulkResultModal, setBulkResultModal] = useState<{
+    totalEligible: number;
+    processedCount: number;
+    totalCollected: number;
+    skippedCount: number;
+    results: AutoDeductionResult[];
+  } | null>(null);
+  const [settlingMemberUid, setSettlingMemberUid] = useState<string | null>(null);
+  const [collectionSuccessMsg, setCollectionSuccessMsg] = useState<string>('');
+  const [collectionErrorMsg, setCollectionErrorMsg] = useState<string>('');
 
   // Member search & editing state
   const [memberSearchQuery, setMemberSearchQuery] = useState('');
@@ -127,11 +161,11 @@ export default function SamityAdmin({
   // Local state for BNB Investor Policy Config & Rules
   const [policyConfig, setPolicyConfig] = useState<SamityPolicyConfig>(() => ({
     policyTitle: appConfig?.samityPolicyConfig?.policyTitle || 'মাসিক বিনিয়োগ ও নীতিমালা',
-    policySubTitle: appConfig?.samityPolicyConfig?.policySubTitle || '১ম থেকে ২৫শে অক্টোবর পেমেন্ট সিস্টেম ও বিলম্ব চার্জসমূহ',
-    schemeStatusNote: appConfig?.samityPolicyConfig?.schemeStatusNote || 'আপনার একাউন্ট থেকে প্রতি মাসের ১ থেকে ৯ তারিখের মধ্যে স্বয়ংক্রিয়ভাবে মেইন ব্যালেন্স থেকে কিস্তি অটো-ডেবিট করা হবে।',
-    fixedAmountTitle: appConfig?.samityPolicyConfig?.fixedAmountTitle || '১. নির্ধারিত মাসিক বিনিয়োগের পরিমাণ',
+    policySubTitle: appConfig?.samityPolicyConfig?.policySubTitle || '1ম থেকে 25শে অক্টোবর পেমেন্ট সিস্টেম ও বিলম্ব চার্জসমূহ',
+    schemeStatusNote: appConfig?.samityPolicyConfig?.schemeStatusNote || 'আপনার একাউন্ট থেকে প্রতি মাসের 1 থেকে 9 তারিখের মধ্যে স্বয়ংক্রিয়ভাবে মেইন ব্যালেন্স থেকে কিস্তি অটো-ডেবিট করা হবে।',
+    fixedAmountTitle: appConfig?.samityPolicyConfig?.fixedAmountTitle || '1. নির্ধারিত মাসিক বিনিয়োগের পরিমাণ',
     fixedAmountNote: appConfig?.samityPolicyConfig?.fixedAmountNote || '💡 অ্যাকাউন্ট খোলার সময় আপনার নির্বাচিত এই কিস্তির পরিমাণ স্থায়ী। এটি সাধারণ ব্যবহারকারী নিজে পরিবর্তন করতে পারবেন না। প্রয়োজনে পরিবর্তন করার জন্য এডমিন প্যানেলের মাধ্যমে প্রধান কার্যালয়ের সাথে যোগাযোগ করুন।',
-    penaltyTitle: appConfig?.samityPolicyConfig?.penaltyTitle || '২. বিলম্ব পেমেন্ট ও জরিমানা পলিসি',
+    penaltyTitle: appConfig?.samityPolicyConfig?.penaltyTitle || '2. বিলম্ব পেমেন্ট ও জরিমানা পলিসি',
     penaltyTiers: appConfig?.samityPolicyConfig?.penaltyTiers && appConfig.samityPolicyConfig.penaltyTiers.length > 0 
       ? appConfig.samityPolicyConfig.penaltyTiers 
       : DEFAULT_FINE_TIERS,
@@ -140,8 +174,11 @@ export default function SamityAdmin({
       : DEFAULT_CUSTOM_RULES,
     pausePenaltyUntil15th: appConfig?.samityPolicyConfig?.pausePenaltyUntil15th ?? false,
     penaltyExemptionUntilDay: appConfig?.samityPolicyConfig?.penaltyExemptionUntilDay || 15,
-    penaltyExemptionNote: appConfig?.samityPolicyConfig?.penaltyExemptionNote || 'অ্যাপ সম্পূর্ণ প্রস্তুতকরণ কাজের জন্য এই মাসের জরিমানা ১৫ তারিখ পর্যন্ত স্থগিত রাখা হলো।',
+    penaltyExemptionNote: appConfig?.samityPolicyConfig?.penaltyExemptionNote || 'অ্যাপ সম্পূর্ণ প্রস্তুতকরণ কাজের জন্য এই মাসের জরিমানা 15 তারিখ পর্যন্ত স্থগিত রাখা হলো।',
+    exemptedMonths: appConfig?.samityPolicyConfig?.exemptedMonths || {},
+    exemptedMonthsConfig: appConfig?.samityPolicyConfig?.exemptedMonthsConfig || {},
   }));
+  const [selectedAdminPenaltyYear, setSelectedAdminPenaltyYear] = useState<number>(new Date().getFullYear());
   const [policySaveSuccess, setPolicySaveSuccess] = useState(false);
   const [policySaveError, setPolicySaveError] = useState('');
   const [isSavingPolicy, setIsSavingPolicy] = useState(false);
@@ -150,11 +187,11 @@ export default function SamityAdmin({
     if (appConfig?.samityPolicyConfig) {
       setPolicyConfig({
         policyTitle: appConfig.samityPolicyConfig.policyTitle || 'মাসিক বিনিয়োগ ও নীতিমালা',
-        policySubTitle: appConfig.samityPolicyConfig.policySubTitle || '১ম থেকে ২৫শে অক্টোবর পেমেন্ট সিস্টেম ও বিলম্ব চার্জসমূহ',
-        schemeStatusNote: appConfig.samityPolicyConfig.schemeStatusNote || 'আপনার একাউন্ট থেকে প্রতি মাসের ১ থেকে ৯ তারিখের মধ্যে স্বয়ংক্রিয়ভাবে মেইন ব্যালেন্স থেকে কিস্তি অটো-ডেবিট করা হবে।',
-        fixedAmountTitle: appConfig.samityPolicyConfig.fixedAmountTitle || '১. নির্ধারিত মাসিক বিনিয়োগের পরিমাণ',
+        policySubTitle: appConfig.samityPolicyConfig.policySubTitle || '1ম থেকে 25শে অক্টোবর পেমেন্ট সিস্টেম ও বিলম্ব চার্জসমূহ',
+        schemeStatusNote: appConfig.samityPolicyConfig.schemeStatusNote || 'আপনার একাউন্ট থেকে প্রতি মাসের 1 থেকে 9 তারিখের মধ্যে স্বয়ংক্রিয়ভাবে মেইন ব্যালেন্স থেকে কিস্তি অটো-ডেবিট করা হবে।',
+        fixedAmountTitle: appConfig.samityPolicyConfig.fixedAmountTitle || '1. নির্ধারিত মাসিক বিনিয়োগের পরিমাণ',
         fixedAmountNote: appConfig.samityPolicyConfig.fixedAmountNote || '💡 অ্যাকাউন্ট খোলার সময় আপনার নির্বাচিত এই কিস্তির পরিমাণ স্থায়ী। এটি সাধারণ ব্যবহারকারী নিজে পরিবর্তন করতে পারবেন না। প্রয়োজনে পরিবর্তন করার জন্য এডমিন প্যানেলের মাধ্যমে প্রধান কার্যালয়ের সাথে যোগাযোগ করুন।',
-        penaltyTitle: appConfig.samityPolicyConfig.penaltyTitle || '২. বিলম্ব পেমেন্ট ও জরিমানা পলিসি',
+        penaltyTitle: appConfig.samityPolicyConfig.penaltyTitle || '2. বিলম্ব পেমেন্ট ও জরিমানা পলিসি',
         penaltyTiers: appConfig.samityPolicyConfig.penaltyTiers && appConfig.samityPolicyConfig.penaltyTiers.length > 0 
           ? appConfig.samityPolicyConfig.penaltyTiers 
           : DEFAULT_FINE_TIERS,
@@ -163,7 +200,9 @@ export default function SamityAdmin({
           : DEFAULT_CUSTOM_RULES,
         pausePenaltyUntil15th: appConfig.samityPolicyConfig.pausePenaltyUntil15th ?? false,
         penaltyExemptionUntilDay: appConfig.samityPolicyConfig.penaltyExemptionUntilDay || 15,
-        penaltyExemptionNote: appConfig.samityPolicyConfig.penaltyExemptionNote || 'অ্যাপ সম্পূর্ণ প্রস্তুতকরণ কাজের জন্য এই মাসের জরিমানা ১৫ তারিখ পর্যন্ত স্থগিত রাখা হলো।',
+        penaltyExemptionNote: appConfig.samityPolicyConfig.penaltyExemptionNote || 'অ্যাপ সম্পূর্ণ প্রস্তুতকরণ কাজের জন্য এই মাসের জরিমানা 15 তারিখ পর্যন্ত স্থগিত রাখা হলো।',
+        exemptedMonths: appConfig.samityPolicyConfig.exemptedMonths || {},
+        exemptedMonthsConfig: appConfig.samityPolicyConfig.exemptedMonthsConfig || {},
       });
     }
   }, [appConfig?.samityPolicyConfig]);
@@ -278,24 +317,34 @@ export default function SamityAdmin({
     try {
       const userRef = doc(db, 'users', editingMember.uid);
       const canDisable = Boolean(editingMember.canDisableAutoSavings || editingMember.allowAutoSavingsToggle);
-      await updateDoc(userRef, {
+      const savingsVal = Number(editingMember.savings || 0);
+      const targetRateVal = Math.max(1, Number(editingMember.monthlySavingsTarget) || 1000);
+      const rawPaid = Array.isArray(editingMember.samityPaidMonths) ? editingMember.samityPaidMonths : [];
+      const normalizedPaid = normalizePaidMonthsArray(rawPaid, savingsVal, targetRateVal);
+
+      const updateData = {
         name: editingMember.name,
         phone: editingMember.phone,
         nid: editingMember.nid || '',
-        savings: Number(editingMember.savings || 0),
-        dpsBalance: Number(editingMember.dpsBalance || 0),
+        savings: savingsVal,
+        dpsBalance: savingsVal,
+        monthlySavingsTarget: targetRateVal,
+        samityPaidMonths: normalizedPaid,
         profitsBalance: Number(editingMember.profitsBalance || 0),
         dueLoan: Number(editingMember.dueLoan || 0),
         samityStatus: editingMember.samityStatus || 'none',
+        samityApproved: editingMember.samityStatus === 'approved',
         canDisableAutoSavings: canDisable,
         allowAutoSavingsToggle: canDisable
-      });
+      };
+
+      await updateDoc(userRef, updateData);
 
       // Also sync dedicated samity_applications doc if it exists
       try {
         await updateDoc(doc(db, 'samity_applications', editingMember.uid), {
-          status: editingMember.samityStatus || 'none',
-          samityStatus: editingMember.samityStatus || 'none'
+          ...updateData,
+          status: editingMember.samityStatus || 'none'
         });
       } catch (e) {
         // ignore if application doc doesn't exist
@@ -325,6 +374,142 @@ export default function SamityAdmin({
   };
 
   // Member delete handler
+
+  // Toggle a month selection for a specific member
+  const toggleMemberMonthSelection = (memberUid: string, monthId: string) => {
+    setMemberSelectedMonthsMap(prev => {
+      const current = prev[memberUid] || [];
+      if (current.includes(monthId)) {
+        return { ...prev, [memberUid]: current.filter(id => id !== monthId) };
+      } else {
+        return { ...prev, [memberUid]: [...current, monthId] };
+      }
+    });
+  };
+
+  // Select all unpaid months for a member in the selected year
+  const selectAllUnpaidForMember = (member: User, year: number) => {
+    const unpaid = getUnpaidSamityMonths(member, year, false);
+    setMemberSelectedMonthsMap(prev => ({
+      ...prev,
+      [member.uid]: unpaid.map(u => u.id)
+    }));
+  };
+
+  // Clear month selection for a member
+  const clearMemberMonthSelection = (memberUid: string) => {
+    setMemberSelectedMonthsMap(prev => ({
+      ...prev,
+      [memberUid]: []
+    }));
+  };
+
+  // Execute manual month settlement (deduct from main balance or direct deposit or unmark)
+  const handleMemberMonthSettlement = async (
+    member: User, 
+    deductFromMainBalance: boolean,
+    action: 'mark_paid' | 'unmark' = 'mark_paid'
+  ) => {
+    const selectedMonths = memberSelectedMonthsMap[member.uid] || [];
+    if (selectedMonths.length === 0) {
+      alert('অনুগ্রহ করে অন্তত একটি মাস নির্বাচন করুন।');
+      return;
+    }
+
+    const targetRate = Math.max(1, Number(member.monthlySavingsTarget) || 1000);
+    const totalAmt = selectedMonths.length * targetRate;
+    const memberBal = getEffectiveBalance(member);
+
+    if (action === 'mark_paid' && deductFromMainBalance && memberBal < totalAmt) {
+      alert(`সদস্যের মেইন ব্যালেন্সে পর্যাপ্ত টাকা নেই।\nবর্তমান মেইন ব্যালেন্স: ৳${memberBal.toLocaleString('bn-BD')}\nপ্রয়োজনীয় কিস্তি (${selectedMonths.length} মাস): ৳${totalAmt.toLocaleString('bn-BD')}\n\nসদস্যের মেইন ব্যালেন্সে রিচার্জ করার পর কর্তন করুন অথবা সরাসরি ক্যাশ জমা অপশন ব্যবহার করুন।`);
+      return;
+    }
+
+    const monthNames = selectedMonths.map(mId => {
+      const found = SAMITY_MONTHS.find(m => m.id === mId);
+      return found ? found.name : mId;
+    }).join(', ');
+
+    const confirmPrompt = action === 'unmark'
+      ? `আপনি কি নিশ্চিত যে ${member.name}-এর ${selectedCollectionYear} সালের (${monthNames}) মাসের পেইড স্ট্যাটাস বাতিল (Unmark) করতে চান?`
+      : deductFromMainBalance
+      ? `আপনি কি নিশ্চিত যে ${member.name}-এর মেইন ব্যালেন্স থেকে (${monthNames}) ${selectedCollectionYear} সালের সঞ্চয় বাবদ ৳${totalAmt.toLocaleString('bn-BD')} টাকা কেটে সঞ্চয়ে জমা করতে চান?`
+      : `আপনি কি নিশ্চিত যে ${member.name}-এর জন্য (${monthNames}) ${selectedCollectionYear} সালের সঞ্চয় ৳${totalAmt.toLocaleString('bn-BD')} টাকা সরাসরি ক্যাশ/এডমিন হিসেবে পেইড মার্ক করতে চান?`;
+
+    if (!window.confirm(confirmPrompt)) return;
+
+    setSettlingMemberUid(member.uid);
+    setCollectionSuccessMsg('');
+    setCollectionErrorMsg('');
+
+    try {
+      const res = await adminProcessSamityMonthSettlement({
+        userId: member.uid,
+        year: selectedCollectionYear,
+        monthIds: selectedMonths,
+        deductFromMainBalance,
+        action,
+        adminName: 'এডমিন'
+      });
+
+      if (res.success) {
+        setCollectionSuccessMsg(res.message);
+        clearMemberMonthSelection(member.uid);
+        setTimeout(() => setCollectionSuccessMsg(''), 6000);
+      } else {
+        setCollectionErrorMsg(res.message);
+        setTimeout(() => setCollectionErrorMsg(''), 6000);
+      }
+    } catch (err: any) {
+      setCollectionErrorMsg(err?.message || 'সঞ্চয় কিস্তি জমা প্রক্রিয়াকরণে সমস্যা হয়েছে।');
+      setTimeout(() => setCollectionErrorMsg(''), 6000);
+    } finally {
+      setSettlingMemberUid(null);
+    }
+  };
+
+  // Run bulk auto-deduction across all eligible members
+  const handleRunBulkAutoDeduction = async () => {
+    const confirmRun = window.confirm(
+      `🚀 আপনি কি সকল নিবন্ধিত সমবায় সদস্যের বকেয়া কিস্তি অটো-কাটিং চালাতে চান?\n\n- যেসব সদস্যের চলতি বা বিগত মাসের সঞ্চয় বাকি আছে\n- এবং যাদের মেইন ব্যালেন্সে পর্যাপ্ত টাকা আছে\nতাদের সম্পূর্ণ কিস্তির টাকা (1000/2000/5000) স্বয়ংক্রিয়ভাবে মেইন ব্যালেন্স থেকে কেটে সঞ্চয়ে জমা হবে।`
+    );
+    if (!confirmRun) return;
+
+    setIsBulkDeducting(true);
+    try {
+      const res = await processBulkSamitySavingsAutoDeduction(users, { targetYear: selectedCollectionYear });
+      setBulkResultModal(res);
+    } catch (err: any) {
+      alert('বাল্ক সঞ্চয় অটো-কাটিং প্রক্রিয়াকরণে সমস্যা হয়েছে: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setIsBulkDeducting(false);
+    }
+  };
+
+  const [isRefundingAdvance, setIsRefundingAdvance] = useState(false);
+
+  // Refund all future/advance months (October, November, etc.) to members' main balances
+  const handleRefundAdvanceMonths = async () => {
+    const confirmRefund = window.confirm(
+      `🔄 আপনি কি সকল সদস্যের একাউন্ট থেকে ভুলবশত কর্তিত অগ্রিম মাসের (অক্টোবর, নভেম্বর ইত্যাদি) কিস্তির টাকা মেইন ব্যালেন্সে রিফান্ড করতে চান?\n\n- সিস্টেম সকল সদস্যের সঞ্চয় চেক করবে\n- অক্টোবর/নভেম্বর বা ভবিষ্যৎ মাসের কিস্তি থাকলে তা বাতিল করবে\n- এবং কর্তিত টাকা তৎক্ষণাৎ সদস্যের মেইন ব্যালেন্সে ফেরত পাঠাবে।`
+    );
+    if (!confirmRefund) return;
+
+    setIsRefundingAdvance(true);
+    try {
+      const res = await adminRefundAllFutureAdvanceMonths(users);
+      if (res.totalRefundedMembers > 0) {
+        alert(`✅ মোট ${res.totalRefundedMembers} জন সদস্যের একাউন্টে সর্বমোট ৳${res.totalRefundedAmount.toLocaleString('bn-BD')} টাকা সফলভাবে মেইন ব্যালেন্সে রিফান্ড করা হয়েছে!`);
+      } else {
+        alert('তথ্য: কোনো সদস্যের একাউন্টে অগ্রিম মাসের কিস্তি পাওয়া যায়নি। সবাই সুরক্ষিত রয়েছে।');
+      }
+    } catch (err: any) {
+      alert('রিফান্ড প্রক্রিয়াকরণে ত্রুটি: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setIsRefundingAdvance(false);
+    }
+  };
+
   const handleDeleteMemberProfile = async (memberUid: string, memberName: string) => {
     if (window.confirm(`আপনি কি নিশ্চিত যে ${memberName} এর অ্যাকাউন্ট স্থায়ীভাবে ডিলিট/মুছে ফেলতে চান? এই কাজটি আর পূর্বাবস্থায় ফেরানো যাবে না।`)) {
       try {
@@ -363,6 +548,7 @@ export default function SamityAdmin({
                 {activeSubView === 'banners' && '🖼️ ইনভেস্টর হোম স্লাইডার ব্যানার সেটিংস'}
                 {activeSubView === 'members' && '⚙️ সমবায় সদস্য ডাটাবেজ & তথ্য এডিটর'}
                 {activeSubView === 'policy_rules' && '📜 ইনভেস্টার নীতি ও জরিমানা পলিসি কাস্টমাইজেশন'}
+                {activeSubView === 'monthly_collection' && '🗓️ 12 মাস সঞ্চয় কিস্তি আদায় ও অটো-কাটিং ম্যানেজার'}
               </h2>
             </div>
             <p className="text-[11px] text-slate-500 mt-0.5">
@@ -374,10 +560,18 @@ export default function SamityAdmin({
               {activeSubView === 'banners' && 'ইনভেস্টর মডিউলের হোম স্ক্রিনে প্রদর্শিত চমৎকার ব্যানার স্লাইডার কনফিগারেশন'}
               {activeSubView === 'members' && 'সকল নিবন্ধিত সদস্যের প্রোফাইল, ব্যালেন্স, এনআইডি এবং মোবাইল নাম্বার সরাসরি এডিট বা ডিলিট করুন'}
               {activeSubView === 'policy_rules' && 'BNB ইনভেস্টার ইউজার ড্যাশবোর্ডের সমস্ত নিয়মকানুন, কিস্তি পলিসি ও বিলম্ব জরিমানা স্কেল পরিবর্তন করুন'}
+              {activeSubView === 'monthly_collection' && 'সকল নিবন্ধিত সদস্যের 12 মাসের কিস্তির খতিয়ান, মেইন ব্যালেন্স থেকে অটো-কাটিং এবং ম্যানুয়াল কিস্তি সমন্বয়'}
             </p>
           </div>
         </div>
         <div className="flex gap-2 shrink-0 items-center flex-wrap">
+          <button
+            onClick={() => setActiveSubView('monthly_collection')}
+            className="text-[10.5px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-1.5 rounded-full flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
+          >
+            <Calendar className="w-3.5 h-3.5" />
+            12 মাস সঞ্চয় আদায়
+          </button>
           <button
             onClick={() => setActiveSubView('policy_rules')}
             className="text-[10.5px] font-bold bg-teal-600 hover:bg-teal-700 text-white px-3.5 py-1.5 rounded-full flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
@@ -417,7 +611,7 @@ export default function SamityAdmin({
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           <div className="bg-white border border-slate-200/80 p-4.5 rounded-2.5xl shadow-3xs">
             <div className="flex justify-between items-start">
-              <span className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider">১. সঞ্চয়ী আমানত স্থিতি</span>
+              <span className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider">1. সঞ্চয়ী আমানত স্থিতি</span>
               <span className="text-emerald-600 bg-emerald-50 p-1 rounded-lg"><PiggyBank className="w-3.5 h-3.5" /></span>
             </div>
             <h3 className="text-base sm:text-lg font-black font-sans text-emerald-600 mt-2">৳{totalSavings.toLocaleString('bn-BD')} BDT</h3>
@@ -426,7 +620,7 @@ export default function SamityAdmin({
 
           <div className="bg-white border border-slate-200/80 p-4.5 rounded-2.5xl shadow-3xs">
             <div className="flex justify-between items-start">
-              <span className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider">২. সমবায় লোন বকেয়া</span>
+              <span className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider">2. সমবায় লোন বকেয়া</span>
               <span className="text-rose-600 bg-rose-50 p-1 rounded-lg"><Coins className="w-3.5 h-3.5" /></span>
             </div>
             <h3 className="text-base sm:text-lg font-black font-sans text-rose-600 mt-2">৳{totalLoans.toLocaleString('bn-BD')} BDT</h3>
@@ -435,7 +629,7 @@ export default function SamityAdmin({
 
           <div className="bg-white border border-slate-200/80 p-4.5 rounded-2.5xl shadow-3xs">
             <div className="flex justify-between items-start">
-              <span className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider">৩. ডিপিএস আমানত স্থিতি</span>
+              <span className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider">3. ডিপিএস আমানত স্থিতি</span>
               <span className="text-sky-600 bg-sky-50 p-1 rounded-lg"><Sparkles className="w-3.5 h-3.5" /></span>
             </div>
             <h3 className="text-base sm:text-lg font-black font-sans text-sky-600 mt-2">৳{totalDps.toLocaleString('bn-BD')} BDT</h3>
@@ -444,7 +638,7 @@ export default function SamityAdmin({
 
           <div className="bg-white border border-slate-200/80 p-4.5 rounded-2.5xl shadow-3xs">
             <div className="flex justify-between items-start">
-              <span className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider">৪. বণ্টনকৃত লভ্যাংশ স্থিতি</span>
+              <span className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider">4. বণ্টনকৃত লভ্যাংশ স্থিতি</span>
               <span className="text-indigo-600 bg-indigo-50 p-1 rounded-lg"><Coins className="w-3.5 h-3.5" /></span>
             </div>
             <h3 className="text-base sm:text-lg font-black font-sans text-indigo-600 mt-2">৳{totalProfits.toLocaleString('bn-BD')} BDT</h3>
@@ -454,11 +648,11 @@ export default function SamityAdmin({
           <div className="bg-emerald-500 text-white p-4.5 rounded-2.5xl shadow-3xs relative overflow-hidden">
             <div className="absolute top-0 right-0 w-16 h-16 bg-white/10 rounded-full blur-xl transform translate-x-4 -translate-y-4" />
             <div className="flex justify-between items-start">
-              <span className="text-[10px] text-emerald-100 font-extrabold uppercase tracking-wider">৫. মোট ইকুইটি শেয়ার সংখ্যা</span>
+              <span className="text-[10px] text-emerald-100 font-extrabold uppercase tracking-wider">5. মোট ইকুইটি শেয়ার সংখ্যা</span>
               <span className="text-emerald-550 bg-white/20 p-1 rounded-lg"><CheckCircle2 className="w-3.5 h-3.5 text-white" /></span>
             </div>
             <h3 className="text-base sm:text-lg font-black font-sans mt-2">{totalShares.toLocaleString('bn-BD')} টি</h3>
-            <p className="text-[9.5px] text-emerald-100 mt-1 font-medium">১,০০০ সঞ্চয় = ১টি মালিকানা শেয়ার</p>
+            <p className="text-[9.5px] text-emerald-100 mt-1 font-medium">1,000 সঞ্চয় = 1টি মালিকানা শেয়ার</p>
           </div>
         </div>
       )}
@@ -481,9 +675,9 @@ export default function SamityAdmin({
             {/* Dashboard Navigation Grid - Strictly 4 Columns Per Row Grid */}
             <div>
               <div className="flex justify-between items-center mb-3">
-                <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider font-sans">কন্ট্রোল মডিউল নির্বাচন করুন (৭টি সেকশন)</h3>
+                <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider font-sans">কন্ট্রোল মডিউল নির্বাচন করুন (8টি সেকশন)</h3>
                 <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full border border-indigo-100">
-                  এক সারিতে ৪টি সেকশন
+                  এক সারিতে 4টি সেকশন
                 </span>
               </div>
 
@@ -680,6 +874,58 @@ export default function SamityAdmin({
                   </div>
                   <div className="mt-1.5 pt-1.5 border-t border-slate-100 flex items-center justify-between w-full text-[8.5px] sm:text-[10px] font-bold text-teal-600">
                     <span>খুলুন →</span>
+                  </div>
+                </button>
+
+                {/* Option 8: 12 Months Savings Collection & Auto-Debit Manager */}
+                <button
+                  onClick={() => setActiveSubView('monthly_collection')}
+                  className="group relative bg-gradient-to-br from-emerald-50/70 to-teal-50/70 hover:from-emerald-100/70 hover:to-teal-100/70 border-2 border-emerald-300 hover:border-emerald-500 rounded-xl sm:rounded-2xl p-2 sm:p-3 text-left transition-all duration-200 hover:shadow-md active:scale-98 cursor-pointer flex flex-col justify-between min-h-[110px] sm:min-h-[135px] w-full min-w-0"
+                >
+                  <div className="flex items-center justify-between w-full gap-0.5">
+                    <div className="w-7 h-7 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white flex items-center justify-center group-hover:scale-105 transition-all shrink-0 shadow-xs">
+                      <Calendar className="w-3.5 h-3.5 sm:w-5 sm:h-5" />
+                    </div>
+                    <span className="px-1 sm:px-1.5 py-0.5 bg-emerald-600 text-white text-[8px] sm:text-[9px] font-black rounded shadow-xs shrink-0">
+                      12 মাস কিস্তি
+                    </span>
+                  </div>
+                  <div className="mt-1.5 sm:mt-2.5 min-w-0">
+                    <h4 className="text-[11px] sm:text-[13.5px] font-black text-emerald-950 leading-tight tracking-tight line-clamp-1">
+                      12 মাস সঞ্চয় আদায়
+                    </h4>
+                    <p className="text-[8.5px] sm:text-[10.5px] text-emerald-700 mt-0.5 font-semibold line-clamp-1">
+                      মাস সিলেক্ট ও অটো-কাটিং
+                    </p>
+                  </div>
+                  <div className="mt-1.5 pt-1.5 border-t border-emerald-200/80 flex items-center justify-between w-full text-[8.5px] sm:text-[10px] font-black text-emerald-800">
+                    <span>ম্যানেজার খুলুন →</span>
+                  </div>
+                </button>
+
+                {/* Option 9: BNB Our Investments (আমাদের ইনভেস্ট পোস্ট ও পোর্টফোলিও ম্যানেজার) */}
+                <button
+                  onClick={() => setActiveSubView('investments_manager')}
+                  className="group relative bg-gradient-to-br from-amber-50/80 via-orange-50/70 to-yellow-50/80 hover:from-amber-100 hover:to-orange-100 border-2 border-amber-300 hover:border-amber-500 rounded-xl sm:rounded-2xl p-2 sm:p-3 text-left transition-all duration-200 hover:shadow-md active:scale-98 cursor-pointer flex flex-col justify-between min-h-[110px] sm:min-h-[135px] w-full min-w-0"
+                >
+                  <div className="flex items-center justify-between w-full gap-0.5">
+                    <div className="w-7 h-7 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl bg-gradient-to-br from-amber-500 via-orange-500 to-amber-600 text-white flex items-center justify-center group-hover:scale-105 transition-all shrink-0 shadow-xs">
+                      <TrendingUp className="w-3.5 h-3.5 sm:w-5 sm:h-5" />
+                    </div>
+                    <span className="px-1 sm:px-1.5 py-0.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white text-[8px] sm:text-[9px] font-black rounded shadow-xs shrink-0 animate-pulse">
+                      স্বর্ণ ও জমি
+                    </span>
+                  </div>
+                  <div className="mt-1.5 sm:mt-2.5 min-w-0">
+                    <h4 className="text-[11px] sm:text-[13.5px] font-black text-amber-950 leading-tight tracking-tight line-clamp-1">
+                      আমাদের ইনভেস্ট
+                    </h4>
+                    <p className="text-[8.5px] sm:text-[10.5px] text-amber-800 mt-0.5 font-semibold line-clamp-1">
+                      ফেসবুক স্টাইলে পোস্ট ও লাভ
+                    </p>
+                  </div>
+                  <div className="mt-1.5 pt-1.5 border-t border-amber-200/80 flex items-center justify-between w-full text-[8.5px] sm:text-[10px] font-black text-amber-900">
+                    <span>পোস্ট ম্যানেজার →</span>
                   </div>
                 </button>
 
@@ -978,7 +1224,7 @@ export default function SamityAdmin({
                     )}
 
                     <div>
-                      <label className="block text-[10px] font-extrabold text-slate-500 uppercase tracking-widest mb-1.5">১. সমবায় মেম্বার নির্বাচন</label>
+                      <label className="block text-[10px] font-extrabold text-slate-500 uppercase tracking-widest mb-1.5">1. সমবায় মেম্বার নির্বাচন</label>
                       <select
                         value={reconUserUid}
                         onChange={(e) => setReconUserUid(e.target.value)}
@@ -993,7 +1239,7 @@ export default function SamityAdmin({
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-extrabold text-slate-500 uppercase tracking-widest mb-1.5">২. সমন্বয়ের খাত</label>
+                      <label className="block text-[10px] font-extrabold text-slate-500 uppercase tracking-widest mb-1.5">2. সমন্বয়ের খাত</label>
                       <select
                         value={reconAction}
                         onChange={(e) => setReconAction(e.target.value as any)}
@@ -1016,7 +1262,7 @@ export default function SamityAdmin({
 
                     <div className="grid grid-cols-1 gap-4">
                       <div>
-                        <label className="block text-[10px] font-extrabold text-slate-500 uppercase tracking-widest mb-1.5">৩. সমন্বয়ের পরিমাণ (৳ BDT)</label>
+                        <label className="block text-[10px] font-extrabold text-slate-500 uppercase tracking-widest mb-1.5">3. সমন্বয়ের পরিমাণ (৳ BDT)</label>
                         <input
                           type="number"
                           required
@@ -1027,12 +1273,12 @@ export default function SamityAdmin({
                         />
                       </div>
                       <div>
-                        <label className="block text-[10px] font-extrabold text-slate-500 uppercase tracking-widest mb-1.5 font-sans">৪. রশিদ নম্বর বা ইন্টারনাল রেফারেন্স</label>
+                        <label className="block text-[10px] font-extrabold text-slate-500 uppercase tracking-widest mb-1.5 font-sans">4. রশিদ নম্বর বা ইন্টারনাল রেফারেন্স</label>
                         <input
                           type="text"
                           value={reconNotes}
                           onChange={(e) => setReconNotes(e.target.value)}
-                          placeholder="উদাঃ রশিদ বই নং ৩, ক্যাশ কাউন্টার"
+                          placeholder="উদাঃ রশিদ বই নং 3, ক্যাশ কাউন্টার"
                           className="block w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-indigo-400 placeholder-slate-400 font-medium"
                         />
                       </div>
@@ -1090,7 +1336,7 @@ export default function SamityAdmin({
 
               {/* Notice declaration input */}
               <div className="space-y-2 text-left">
-                <label className="block text-xs font-black text-slate-700">🏢 ১. ইনভেস্টর সেকশন লাইভ ঘোষণা (Scrolling Notice Ticker)</label>
+                <label className="block text-xs font-black text-slate-700">🏢 1. ইনভেস্টর সেকশন লাইভ ঘোষণা (Scrolling Notice Ticker)</label>
                 <textarea
                   rows={3}
                   value={tickerText}
@@ -1103,7 +1349,7 @@ export default function SamityAdmin({
 
               {/* Terms declaration input */}
               <div className="space-y-2 text-left">
-                <label className="block text-xs font-black text-slate-700">📋 ২. নতুন সদস্যপদ আবেদনের শর্তাবলী ও গাইডলাইন (Membership Terms)</label>
+                <label className="block text-xs font-black text-slate-700">📋 2. নতুন সদস্যপদ আবেদনের শর্তাবলী ও গাইডলাইন (Membership Terms)</label>
                 <textarea
                   rows={4}
                   value={termsText}
@@ -1434,7 +1680,19 @@ export default function SamityAdmin({
                     </div>
 
                     {/* Action buttons */}
-                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200/60">
+                    <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-200/60 flex-wrap">
+                      <button
+                        onClick={() => {
+                          setCollectionSearchQuery(member.name);
+                          setActiveSubView('monthly_collection');
+                        }}
+                        className="flex items-center gap-1 text-[10.5px] font-extrabold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/80 px-2.5 py-1.5 rounded-xl transition cursor-pointer"
+                        title="এই সদস্যের 12 মাসের কিস্তি খতিয়ান ও কালেকশন খুলুন"
+                      >
+                        <Calendar className="w-3.5 h-3.5" />
+                        12 মাস সঞ্চয় খতিয়ান
+                      </button>
+                      <div className="flex items-center gap-2">
                       <button
                         onClick={() => setEditingMember({ ...member })}
                         className="flex items-center gap-1 text-[10.5px] font-extrabold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-xl transition cursor-pointer"
@@ -1449,6 +1707,7 @@ export default function SamityAdmin({
                         <Trash2 className="w-3.5 h-3.5" />
                         ডিলিট করুন
                       </button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -1549,6 +1808,25 @@ export default function SamityAdmin({
                           onChange={(e) => setEditingMember({ ...editingMember, dueLoan: Number(e.target.value) })}
                           className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none"
                         />
+                      </div>
+                    </div>
+
+                    {/* Monthly Savings Target */}
+                    <div className="bg-teal-50/80 border border-teal-200/90 rounded-2xl p-3 space-y-1.5">
+                      <label className="block text-[11px] font-black text-teal-950">
+                        💰 মাসিক সঞ্চয় কিস্তি লক্ষ্য (Monthly Target BDT)
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="100"
+                          step="100"
+                          value={editingMember.monthlySavingsTarget || 1000}
+                          onChange={(e) => setEditingMember({ ...editingMember, monthlySavingsTarget: Number(e.target.value) || 1000 })}
+                          className="w-full px-3 py-2 bg-white border border-teal-300 rounded-xl text-xs font-black text-teal-950 font-mono focus:outline-none focus:ring-1 focus:ring-teal-500"
+                          placeholder="উদাঃ 500, 1000, 2000, 3000, 5000"
+                        />
+                        <span className="text-xs font-bold text-teal-800 shrink-0">টাকা/মাস</span>
                       </div>
                     </div>
 
@@ -1684,7 +1962,7 @@ export default function SamityAdmin({
               <div className="bg-slate-50/80 border border-slate-200 p-4.5 rounded-2.5xl space-y-4">
                 <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
                   <Sliders className="w-4 h-4 text-teal-600" />
-                  ১. ইনভেস্টার নীতিমালার সাধারণ হেডার ও নোটিশ
+                  1. ইনভেস্টার নীতিমালার সাধারণ হেডার ও নোটিশ
                 </h4>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1704,7 +1982,7 @@ export default function SamityAdmin({
                       type="text"
                       value={policyConfig.policySubTitle || ''}
                       onChange={(e) => setPolicyConfig({ ...policyConfig, policySubTitle: e.target.value })}
-                      placeholder="যেমন: ১ম থেকে ২৫শে অক্টোবর পেমেন্ট সিস্টেম ও বিলম্ব চার্জসমূহ"
+                      placeholder="যেমন: 1ম থেকে 25শে অক্টোবর পেমেন্ট সিস্টেম ও বিলম্ব চার্জসমূহ"
                       className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:border-teal-500"
                     />
                   </div>
@@ -1716,7 +1994,7 @@ export default function SamityAdmin({
                     rows={2}
                     value={policyConfig.schemeStatusNote || ''}
                     onChange={(e) => setPolicyConfig({ ...policyConfig, schemeStatusNote: e.target.value })}
-                    placeholder="আপনার একাউন্ট থেকে প্রতি মাসের ১ থেকে ৯ তারিখের মধ্যে স্বয়ংক্রিয়ভাবে মেইন ব্যালেন্স থেকে কিস্তি অটো-ডেবিট করা হবে।"
+                    placeholder="আপনার একাউন্ট থেকে প্রতি মাসের 1 থেকে 9 তারিখের মধ্যে স্বয়ংক্রিয়ভাবে মেইন ব্যালেন্স থেকে কিস্তি অটো-ডেবিট করা হবে।"
                     className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-teal-500"
                   />
                 </div>
@@ -1726,16 +2004,16 @@ export default function SamityAdmin({
               <div className="bg-slate-50/80 border border-slate-200 p-4.5 rounded-2.5xl space-y-4">
                 <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
                   <PiggyBank className="w-4 h-4 text-emerald-600" />
-                  ২. নির্ধারিত মাসিক বিনিয়োগ সেকশন কনফিগারেশন
+                  2. নির্ধারিত মাসিক বিনিয়োগ সেকশন কনফিগারেশন
                 </h4>
 
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-700 mb-1">সেকশন ১ শিরোনাম</label>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">সেকশন 1 শিরোনাম</label>
                   <input
                     type="text"
                     value={policyConfig.fixedAmountTitle || ''}
                     onChange={(e) => setPolicyConfig({ ...policyConfig, fixedAmountTitle: e.target.value })}
-                    placeholder="১. নির্ধারিত মাসিক বিনিয়োগের পরিমাণ"
+                    placeholder="1. নির্ধারিত মাসিক বিনিয়োগের পরিমাণ"
                     className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:border-teal-500"
                   />
                 </div>
@@ -1757,7 +2035,7 @@ export default function SamityAdmin({
                 <div className="flex justify-between items-center">
                   <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
                     <BadgeAlert className="w-4 h-4 text-rose-600" />
-                    ৩. বিলম্ব পেমেন্ট ও জরিমানা স্কেলসমূহ
+                    3. বিলম্ব পেমেন্ট ও জরিমানা স্কেলসমূহ
                   </h4>
                   <button
                     type="button"
@@ -1766,8 +2044,8 @@ export default function SamityAdmin({
                         id: 'tier-' + Date.now(),
                         fromDay: 10,
                         toDay: 15,
-                        rangeLabel: '১০ থেকে ১৫ তারিখঃ',
-                        fineText: '৳ ১০ জরিমানা',
+                        rangeLabel: '10 থেকে 15 তারিখঃ',
+                        fineText: '৳ 10 জরিমানা',
                         fineAmount: 10,
                         bgClass: 'bg-amber-50/40 border-amber-100 text-amber-800'
                       };
@@ -1783,7 +2061,189 @@ export default function SamityAdmin({
                   </button>
                 </div>
 
-                {/* 🚀 সাময়িক বিলম্ব জরিমানা স্থগিত (১৫ তারিখ পর্যন্ত ছাড় সুইচ) */}
+                {/* 🗓️ 12 মাসের বিলম্ব জরিমানা ক্যালেন্ডার ও ছাড় ব্যবস্থাপনা (12-Month Penalty Waiver Calendar Manager) */}
+                <div className="p-4 sm:p-5 bg-gradient-to-br from-slate-900 via-teal-950 to-slate-900 text-white rounded-2xl border-2 border-amber-400/40 shadow-md space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/15 pb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-2xl">🗓️</span>
+                      <div>
+                        <h4 className="text-sm font-black text-amber-300">
+                          12 মাসের বিলম্ব জরিমানা নিয়ন্ত্রণ ক্যালেন্ডার ও ছাড় পাওয়ার ম্যানেজার
+                        </h4>
+                        <p className="text-[10.5px] text-teal-200">
+                          1-9 তারিখ 100% ফ্রি (৳0 জরিমানা)। এডমিন নির্দিষ্ট মাসে সুইচ অফ/স্থগিত করলে ওই মাসে মেম্বারদের জরিমানা আসবে না।
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Year Selector */}
+                    <div className="flex items-center gap-1 bg-white/10 p-1 rounded-xl border border-white/20">
+                      {[2025, 2026, 2027, 2028].map((yr) => (
+                        <button
+                          key={yr}
+                          type="button"
+                          onClick={() => setSelectedAdminPenaltyYear(yr)}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-black transition cursor-pointer ${
+                            selectedAdminPenaltyYear === yr
+                              ? 'bg-amber-400 text-slate-950 shadow-xs'
+                              : 'text-slate-200 hover:bg-white/10'
+                          }`}
+                        >
+                          {yr}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 4-Step Visual Flowchart */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-left">
+                    <div className="bg-white/10 border border-white/15 p-2.5 rounded-xl">
+                      <div className="text-emerald-400 font-black text-xs flex items-center gap-1.5 mb-0.5">
+                        <span className="w-4 h-4 rounded-full bg-emerald-500 text-slate-950 text-[10px] font-black flex items-center justify-center">1</span>
+                        <span>1-9 তারিখ</span>
+                      </div>
+                      <p className="text-[10px] text-slate-200">সকলের জন্য ৳0 জরিমানা (ফ্রি গ্রেস পিরিয়ড)।</p>
+                    </div>
+                    <div className="bg-white/10 border border-white/15 p-2.5 rounded-xl">
+                      <div className="text-amber-400 font-black text-xs flex items-center gap-1.5 mb-0.5">
+                        <span className="w-4 h-4 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black flex items-center justify-center">2</span>
+                        <span>10 তারিখ থেকে</span>
+                      </div>
+                      <p className="text-[10px] text-slate-200">কিস্তি না দিলে স্বয়ংক্রিয় বিলম্ব জরিমানা যোগ হবে।</p>
+                    </div>
+                    <div className="bg-amber-400/20 border border-amber-400/50 p-2.5 rounded-xl">
+                      <div className="text-amber-300 font-black text-xs flex items-center gap-1.5 mb-0.5">
+                        <span className="w-4 h-4 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black flex items-center justify-center">3</span>
+                        <span>এডমিন স্থগিত সুইচ</span>
+                      </div>
+                      <p className="text-[10px] text-amber-100">9 তারিখের মধ্যে সুইচ অফ করলে ওই মাসে ৳0 জরিমানা।</p>
+                    </div>
+                    <div className="bg-white/10 border border-white/15 p-2.5 rounded-xl">
+                      <div className="text-sky-400 font-black text-xs flex items-center gap-1.5 mb-0.5">
+                        <span className="w-4 h-4 rounded-full bg-sky-400 text-slate-950 text-[10px] font-black flex items-center justify-center">4</span>
+                        <span>পরের মাসে স্বয়ংক্রিয়</span>
+                      </div>
+                      <p className="text-[10px] text-slate-200">পরের মাসে স্বয়ংক্রিয়ভাবে পুনরায় স্বাভাবিক নিয়ম চালু হবে।</p>
+                    </div>
+                  </div>
+
+                  {/* 12 Months Grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 pt-1">
+                    {[
+                      { key: '01', name: 'জানুয়ারি', days: 31, icon: '❄️' },
+                      { key: '02', name: 'ফেব্রুয়ারি', days: 28, icon: '🌸' },
+                      { key: '03', name: 'মার্চ', days: 31, icon: '🌿' },
+                      { key: '04', name: 'এপ্রিল', days: 30, icon: '☀️' },
+                      { key: '05', name: 'মে', days: 31, icon: '🥭' },
+                      { key: '06', name: 'জুন', days: 30, icon: '🌧️' },
+                      { key: '07', name: 'জুলাই', days: 31, icon: '☔' },
+                      { key: '08', name: 'আগস্ট', days: 31, icon: '🌾' },
+                      { key: '09', name: 'সেপ্টেম্বর', days: 30, icon: '☁️' },
+                      { key: '10', name: 'অক্টোবর', days: 31, icon: '🍁' },
+                      { key: '11', name: 'নভেম্বর', days: 30, icon: '🌾' },
+                      { key: '12', name: 'ডিসেম্বর', days: 31, icon: '⛄' },
+                    ].map((m, idx) => {
+                      const fullKey = `${selectedAdminPenaltyYear}-${m.key}`;
+                      const now = new Date();
+                      const isCurrent = selectedAdminPenaltyYear === now.getFullYear() && idx === now.getMonth();
+                      const isExempt = policyConfig.exemptedMonthsConfig?.[fullKey]?.isExempted ?? (policyConfig.exemptedMonths?.[fullKey] || (isCurrent && policyConfig.pausePenaltyUntil15th));
+                      const exemptDay = policyConfig.exemptedMonthsConfig?.[fullKey]?.exemptUntilDay || (isExempt ? 31 : 9);
+
+                      return (
+                        <div
+                          key={m.key}
+                          className={`p-2.5 rounded-xl border text-left flex flex-col justify-between transition-all ${
+                            isExempt
+                              ? 'bg-amber-500/20 border-amber-400 text-amber-100 ring-1 ring-amber-400/40'
+                              : 'bg-white/10 border-white/15 text-slate-200'
+                          }`}
+                        >
+                          <div>
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="font-black text-xs text-white flex items-center gap-1">
+                                <span>{m.icon}</span>
+                                <span>{m.name}</span>
+                              </span>
+                              {isCurrent && (
+                                <span className="px-1 py-0.2 bg-amber-400 text-slate-950 font-black text-[9px] rounded">
+                                  চলতি
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[9.5px] text-slate-300 block mt-0.5">
+                              {isExempt ? `🛡️ জরিমানা স্থগিত (${exemptDay === 31 ? 'পুরো মাস' : `${exemptDay}ই পর্যন্ত`})` : '⚡ স্বাভাবিক নিয়ম'}
+                            </span>
+                          </div>
+
+                          <div className="mt-2 pt-2 border-t border-white/10 flex items-center justify-between gap-1.5">
+                            <select
+                              value={exemptDay}
+                              disabled={!isExempt}
+                              onChange={(e) => {
+                                const newDay = Number(e.target.value);
+                                setPolicyConfig(prev => ({
+                                  ...prev,
+                                  exemptedMonthsConfig: {
+                                    ...(prev.exemptedMonthsConfig || {}),
+                                    [fullKey]: {
+                                      isExempted: true,
+                                      exemptUntilDay: newDay,
+                                      note: `${selectedAdminPenaltyYear} সালের ${m.name} মাসে ${newDay === 31 ? 'পুরো মাস' : `${newDay}ই তারিখ পর্যন্ত`} জরিমানা স্থগিত।`
+                                    }
+                                  }
+                                }));
+                              }}
+                              className="text-[10px] bg-slate-900 text-slate-100 border border-white/20 rounded px-1 py-0.5 disabled:opacity-40"
+                            >
+                              <option value={31}>পুরো মাস (31)</option>
+                              <option value={15}>15ই পর্যন্ত</option>
+                              <option value={20}>20ই পর্যন্ত</option>
+                            </select>
+
+                            {/* Mini Toggle Switch */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nextState = !isExempt;
+                                setPolicyConfig(prev => {
+                                  const updatedCfg = {
+                                    ...(prev.exemptedMonthsConfig || {}),
+                                    [fullKey]: {
+                                      isExempted: nextState,
+                                      exemptUntilDay: nextState ? 31 : 9,
+                                      note: nextState ? `${selectedAdminPenaltyYear} সালের ${m.name} মাসে জরিমানা স্থগিত করা হয়েছে।` : ''
+                                    }
+                                  };
+                                  const updatedSimple = {
+                                    ...(prev.exemptedMonths || {}),
+                                    [fullKey]: nextState
+                                  };
+                                  return {
+                                    ...prev,
+                                    exemptedMonths: updatedSimple,
+                                    exemptedMonthsConfig: updatedCfg,
+                                    ...(isCurrent ? { pausePenaltyUntil15th: nextState } : {})
+                                  };
+                                });
+                              }}
+                              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                                isExempt ? 'bg-emerald-500' : 'bg-slate-600'
+                              }`}
+                            >
+                              <span
+                                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                                  isExempt ? 'translate-x-4' : 'translate-x-0'
+                                }`}
+                              />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 🚀 সাময়িক বিলম্ব জরিমানা স্থগিত (15 তারিখ পর্যন্ত ছাড় সুইচ) */}
                 <div className={`p-4 rounded-2xl border transition-all ${
                   policyConfig.pausePenaltyUntil15th
                     ? 'bg-amber-500/10 border-amber-500/50 text-amber-950 ring-2 ring-amber-400/20 shadow-sm'
@@ -1793,20 +2253,20 @@ export default function SamityAdmin({
                     <div className="space-y-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
-                          🛡️ সাময়িক জরিমানা স্থগিত / ১৫ই পর্যন্ত সময় বৃদ্ধি
+                          🛡️ চলতি মাসের জরিমানা তাৎক্ষণিক স্থগিত সুইচ
                         </span>
                         {policyConfig.pausePenaltyUntil15th ? (
                           <span className="px-2 py-0.5 bg-emerald-600 text-white font-black text-[10px] rounded-full animate-pulse shadow-2xs">
-                            ✓ জরিমানা স্থগিত (১৫ই পর্যন্ত ৳০ জরিমানা)
+                            ✓ জরিমানা স্থগিত ({policyConfig.penaltyExemptionUntilDay || 15}ই পর্যন্ত ৳0 জরিমানা)
                           </span>
                         ) : (
                           <span className="px-2 py-0.5 bg-slate-200 text-slate-700 font-bold text-[10px] rounded-full">
-                            স্বাভাবিক নিয়ম (৯ তারিখ পর্যন্ত ফ্রি)
+                            স্বাভাবিক নিয়ম (9 তারিখ পর্যন্ত ফ্রি)
                           </span>
                         )}
                       </div>
                       <p className="text-[11px] text-slate-600 leading-relaxed">
-                        অ্যাপ সম্পূর্ণ সেটআপ/প্রস্তুত করা পর্যন্ত জরিমানা মওকুফ রাখতে সুইচটি চালু করুন। চালু থাকলে মেম্বারদের থেকে ১৫ তারিখ (বা আপনার সেটিং অনুযায়ী) পর্যন্ত কোনো জরিমানা নেওয়া হবে না। ১৫ তারিখের পর সুইচ বন্ধ থাকলে আবার নিয়মিত ৯ তারিখের পর থেকে জরিমানা কার্যকর হবে।
+                        চলতি মাসের জরিমানা এক ক্লিকে মওকুফ বা স্থগিত রাখতে সুইচটি অন করুন।
                       </p>
                     </div>
 
@@ -1836,7 +2296,7 @@ export default function SamityAdmin({
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                           <label className="block text-[11px] font-bold text-slate-800 mb-1">
-                            কত তারিখ পর্যন্ত জরিমানা স্থগিত থাকবে? (ডিফল্ট: ১৫)
+                            কত তারিখ পর্যন্ত জরিমানা স্থগিত থাকবে? (ডিফল্ট: 15)
                           </label>
                           <input
                             type="number"
@@ -1856,7 +2316,7 @@ export default function SamityAdmin({
                           </label>
                           <input
                             type="text"
-                            value={policyConfig.penaltyExemptionNote || 'অ্যাপ সম্পূর্ণ প্রস্তুতকরণ কাজের জন্য এই মাসের জরিমানা ১৫ তারিখ পর্যন্ত স্থগিত রাখা হলো।'}
+                            value={policyConfig.penaltyExemptionNote || 'অ্যাপ সম্পূর্ণ প্রস্তুতকরণ কাজের জন্য এই মাসের জরিমানা 15 তারিখ পর্যন্ত স্থগিত রাখা হলো।'}
                             onChange={(e) => setPolicyConfig(prev => ({
                               ...prev,
                               penaltyExemptionNote: e.target.value
@@ -1875,7 +2335,7 @@ export default function SamityAdmin({
                     type="text"
                     value={policyConfig.penaltyTitle || ''}
                     onChange={(e) => setPolicyConfig({ ...policyConfig, penaltyTitle: e.target.value })}
-                    placeholder="২. বিলম্ব পেমেন্ট ও জরিমানা পলিসি"
+                    placeholder="2. বিলম্ব পেমেন্ট ও জরিমানা পলিসি"
                     className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:border-teal-500 mb-3"
                   />
                 </div>
@@ -1980,7 +2440,7 @@ export default function SamityAdmin({
                           className="w-3.5 h-3.5 text-teal-600 rounded"
                         />
                         <label htmlFor={`daily-chk-${idx}`} className="text-[10.5px] font-bold text-slate-600">
-                          এটি প্রতিদিনের দৈনিক জরিমানা (যেমন: ৪০তম দিনের পর প্রতিদিন ৳১০)
+                          এটি প্রতিদিনের দৈনিক জরিমানা (যেমন: 40তম দিনের পর প্রতিদিন ৳10)
                         </label>
                       </div>
                     </div>
@@ -1993,7 +2453,7 @@ export default function SamityAdmin({
                 <div className="flex justify-between items-center">
                   <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
                     <FileText className="w-4 h-4 text-purple-600" />
-                    ৪. ইনভেস্টার নীতিমালার অতিরিক্ত নিয়মকানুন (নিয়ম তালিকা)
+                    4. ইনভেস্টার নীতিমালার অতিরিক্ত নিয়মকানুন (নিয়ম তালিকা)
                   </h4>
                   <button
                     type="button"
@@ -2055,6 +2515,525 @@ export default function SamityAdmin({
               </div>
 
             </form>
+          </div>
+        )}
+
+
+        {/* VIEW H: 12-MONTH SAVINGS COLLECTION & AUTO-DEBIT MANAGER */}
+        {activeSubView === 'monthly_collection' && (
+          <div className="bg-white border border-slate-200/80 rounded-3xl p-5 shadow-3xs space-y-6 animate-fade-in text-left">
+            {/* Header / Breadcrumb */}
+            <div className="border-b border-slate-150 pb-4 mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse" />
+                  🗓️ 12 মাস সঞ্চয় কিস্তি আদায় ও অটো-কাটিং ম্যানেজার
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  নিবন্ধিত সদস্যদের 12 মাসের সঞ্চয় ট্র্যাক করুন, নির্দিষ্ট মাস সিলেক্ট করে মেইন ব্যালেন্স থেকে কর্তন বা ম্যানুয়াল পেইড করুন
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {/* Year Selector */}
+                <div className="flex items-center gap-1 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-xl">
+                  <span className="text-[10px] font-bold text-emerald-800">বছরঃ</span>
+                  <select
+                    value={selectedCollectionYear}
+                    onChange={(e) => setSelectedCollectionYear(Number(e.target.value))}
+                    className="bg-transparent text-xs font-black text-emerald-950 focus:outline-none cursor-pointer"
+                  >
+                    {SAMITY_YEARS.map(yr => (
+                      <option key={yr} value={yr}>{yr} সাল {yr === new Date().getFullYear() ? '(চলতি)' : ''}</option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  onClick={() => setActiveSubView('main')}
+                  className="text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-3.5 py-1.5 rounded-xl transition cursor-pointer"
+                >
+                  ← কন্ট্রোল সেন্টার
+                </button>
+              </div>
+            </div>
+
+            {/* Alert Messages */}
+            {collectionSuccessMsg && (
+              <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-bold rounded-2xl flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{collectionSuccessMsg}</span>
+              </motion.div>
+            )}
+
+            {collectionErrorMsg && (
+              <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="p-3.5 bg-rose-50 border border-rose-200 text-rose-900 text-xs font-bold rounded-2xl flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{collectionErrorMsg}</span>
+              </motion.div>
+            )}
+
+            {/* HERO BANNER: ONE-CLICK BULK AUTO-DEDUCTION ENGINE */}
+            <div className="bg-gradient-to-br from-emerald-900 via-teal-900 to-slate-900 rounded-3xl p-4 sm:p-5 text-white shadow-md relative overflow-hidden border border-emerald-700/50">
+              <div className="absolute right-0 top-0 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
+                <div className="space-y-1.5 max-w-xl">
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 bg-emerald-500/30 text-emerald-300 border border-emerald-400/30 rounded-full text-[10px] font-black uppercase tracking-wide">
+                      ⚡ অটো-সঞ্চয় কালেকশন ইঞ্জিন
+                    </span>
+                    <span className="text-[10px] text-emerald-300 font-mono">
+                      {selectedCollectionYear} সাল
+                    </span>
+                  </div>
+                  <h4 className="text-sm sm:text-base font-black text-white">
+                    সকল যোগ্য সদস্যের বকেয়া কিস্তি অটো-কাটিং চালান
+                  </h4>
+                  <p className="text-[11px] text-emerald-100/80 leading-relaxed">
+                    যেসব সদস্য সমবায় সমিতিতে নিবন্ধিত, যাদের চলতি বা বিগত মাসের সঞ্চয় বাকি এবং <strong>মেইন ব্যালেন্সে পর্যাপ্ত টাকা আছে</strong>, সিস্টেম তাদের মেইন ব্যালেন্স থেকে এক ক্লিকে পূর্ণ কিস্তির টাকা (1000/2000/5000) কেটে সঞ্চয়ে জমা করবে এবং স্বয়ংক্রিয় নোটিফিকেশন পাঠাবে।
+                  </p>
+                </div>
+                <div className="shrink-0 flex flex-col sm:flex-row gap-2">
+                  <button
+                    type="button"
+                    onClick={handleRefundAdvanceMonths}
+                    disabled={isRefundingAdvance}
+                    className="w-full sm:w-auto px-4 py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs rounded-2xl shadow-lg transition transform active:scale-95 cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                    title="ভুলবশত কর্তিত ভবিষ্যৎ মাসের (অক্টোবর/নভেম্বর) কিস্তি মেইন ব্যালেন্সে ফেরত দিন"
+                  >
+                    {isRefundingAdvance ? (
+                      <>
+                        <RotateCcw className="w-4 h-4 animate-spin" />
+                        রিফান্ড হচ্ছে...
+                      </>
+                    ) : (
+                      <>
+                        <RotateCcw className="w-4 h-4" />
+                        🔄 ভুল কর্তিত অগ্রিম কিস্তি রিফান্ড
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={handleRunBulkAutoDeduction}
+                    disabled={isBulkDeducting}
+                    className="w-full sm:w-auto px-5 py-3 bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-black text-xs rounded-2xl shadow-lg transition transform active:scale-95 cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {isBulkDeducting ? (
+                      <>
+                        <RotateCcw className="w-4 h-4 animate-spin" />
+                        অটো-কাটিং চলছে...
+                      </>
+                    ) : (
+                      <>
+                        <Zap className="w-4 h-4 fill-slate-950" />
+                        🚀 এক ক্লিকে অটো-কাটিং চালান
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Metrics Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 text-center">
+                <span className="text-[9px] text-slate-400 font-extrabold uppercase block">নিবন্ধিত সমবায় সদস্য</span>
+                <span className="text-sm font-black text-slate-900 font-mono mt-0.5 block">
+                  {users.filter(u => u.samityStatus === 'approved' || u.isSamityMember).length} জন
+                </span>
+              </div>
+              <div className="bg-emerald-50/50 border border-emerald-200/80 rounded-2xl p-3 text-center">
+                <span className="text-[9px] text-emerald-700 font-extrabold uppercase block">মোট সঞ্চয় জমা স্থিতি</span>
+                <span className="text-sm font-black text-emerald-700 font-mono mt-0.5 block">
+                  ৳{users.reduce((sum, u) => sum + (Number(u.savings) || 0), 0).toLocaleString('bn-BD')}
+                </span>
+              </div>
+              <div className="bg-amber-50/50 border border-amber-200/80 rounded-2xl p-3 text-center">
+                <span className="text-[9px] text-amber-700 font-extrabold uppercase block">চলতি মাস ({SAMITY_MONTHS[new Date().getMonth()].name}) বাকি</span>
+                <span className="text-sm font-black text-amber-700 font-mono mt-0.5 block">
+                  {users.filter(u => {
+                    const isM = u.samityStatus === 'approved' || u.isSamityMember;
+                    if (!isM) return false;
+                    const curMonthId = SAMITY_MONTHS[new Date().getMonth()].id;
+                    return !isUserMonthPaid(u, new Date().getFullYear(), curMonthId, new Date().getMonth());
+                  }).length} জন
+                </span>
+              </div>
+              <div className="bg-indigo-50/50 border border-indigo-200/80 rounded-2xl p-3 text-center">
+                <span className="text-[9px] text-indigo-700 font-extrabold uppercase block">চলতি মাসে পরিশোধিত</span>
+                <span className="text-sm font-black text-indigo-700 font-mono mt-0.5 block">
+                  {users.filter(u => {
+                    const isM = u.samityStatus === 'approved' || u.isSamityMember;
+                    if (!isM) return false;
+                    const curMonthId = SAMITY_MONTHS[new Date().getMonth()].id;
+                    return isUserMonthPaid(u, new Date().getFullYear(), curMonthId, new Date().getMonth());
+                  }).length} জন
+                </span>
+              </div>
+            </div>
+
+            {/* Filter Tabs & Search Bar */}
+            <div className="space-y-3 pt-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                {/* Search Bar */}
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                  <input
+                    type="text"
+                    placeholder="সদস্যের নাম, মোবাইল নাম্বার বা মেম্বার আইডি দিয়ে খুঁজুন..."
+                    value={collectionSearchQuery}
+                    onChange={(e) => setCollectionSearchQuery(e.target.value)}
+                    className="w-full pl-10 pr-9 py-2 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-medium text-slate-800 focus:outline-none focus:border-emerald-500 focus:bg-white transition"
+                  />
+                  {collectionSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setCollectionSearchQuery('')}
+                      className="absolute right-3 top-2.5 p-0.5 rounded-full hover:bg-slate-200 text-slate-400 hover:text-slate-600 transition cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Filter Pills */}
+                <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
+                  {[
+                    { id: 'all', label: 'সকল সদস্য' },
+                    { id: 'current_unpaid', label: `চলতি মাস (${SAMITY_MONTHS[new Date().getMonth()].name}) বাকি` },
+                    { id: 'unpaid', label: 'বকেয়া আছে' },
+                    { id: 'paid', label: 'সম্পূর্ণ পেইড' },
+                  ].map(f => (
+                    <button
+                      key={f.id}
+                      onClick={() => setCollectionFilterStatus(f.id as any)}
+                      className={`px-3 py-1.5 rounded-xl text-[11px] font-bold whitespace-nowrap transition cursor-pointer ${
+                        collectionFilterStatus === f.id
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Member Cards List with 12 Months Matrix */}
+            <div className="space-y-4 pb-96 sm:pb-[480px]">
+              {users
+                .filter(u => {
+                  const matchesSearch = 
+                    u.name.toLowerCase().includes(collectionSearchQuery.toLowerCase()) ||
+                    u.phone.includes(collectionSearchQuery) ||
+                    (u.memberId && u.memberId.includes(collectionSearchQuery));
+                  
+                  if (!matchesSearch) return false;
+
+                  const isSamity = u.samityStatus === 'approved' || u.isSamityMember || (u.monthlySavingsTarget && u.monthlySavingsTarget > 0);
+                  if (!isSamity) return false;
+
+                  const unpaidMonths = getUnpaidSamityMonths(u, selectedCollectionYear, false);
+                  const curMonthId = SAMITY_MONTHS[new Date().getMonth()].id;
+                  const isCurMonthUnpaid = !isUserMonthPaid(u, new Date().getFullYear(), curMonthId, new Date().getMonth());
+
+                  if (collectionFilterStatus === 'current_unpaid') return isCurMonthUnpaid;
+                  if (collectionFilterStatus === 'unpaid') return unpaidMonths.length > 0;
+                  if (collectionFilterStatus === 'paid') return unpaidMonths.length === 0;
+
+                  return true;
+                })
+                .map((member, mIdx) => {
+                  const targetRate = Math.max(1, Number(member.monthlySavingsTarget) || 1000);
+                  const liveBal = getEffectiveBalance(member);
+                  const memberSavings = Number(member.savings) || 0;
+                  const paidCountInYear = SAMITY_MONTHS.filter((m, idx) => isUserMonthPaid(member, selectedCollectionYear, m.id, idx)).length;
+                  const selectedMonths = memberSelectedMonthsMap[member.uid] || [];
+                  const selectedTotalAmount = selectedMonths.length * targetRate;
+                  const hasEnoughBalance = liveBal >= selectedTotalAmount;
+                  const isSettling = settlingMemberUid === member.uid;
+
+                  return (
+                    <div key={`${member.uid}-${mIdx}`} className="bg-slate-50/80 border border-slate-200 rounded-3xl p-4 sm:p-5 space-y-4 hover:border-emerald-300 transition shadow-3xs">
+                      {/* Top Row: User Avatar + Basic Details + Balances */}
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200/80 pb-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-11 h-11 bg-gradient-to-br from-emerald-500 to-teal-600 text-white rounded-2xl font-black flex items-center justify-center text-base shadow-sm shrink-0">
+                            {member.name.charAt(0)}
+                          </div>
+                          <div>
+                            <h4 className="text-xs sm:text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                              {member.name}
+                              <span className="text-[9.5px] bg-slate-200 text-slate-700 px-2 py-0.5 rounded-full font-mono font-extrabold">
+                                ID: {member.memberId || member.uid.substring(0, 6)}
+                              </span>
+                            </h4>
+                            <div className="flex items-center gap-3 text-[11px] text-slate-500 mt-0.5">
+                              <span>📞 {member.phone}</span>
+                              {member.nid && <span className="font-mono text-slate-400">🪪 {member.nid}</span>}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Financial Metrics Summary */}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200/80 text-center">
+                            <span className="text-[8px] text-slate-400 font-extrabold uppercase block">মাসিক কিস্তি</span>
+                            <span className="text-xs font-black text-slate-800 font-mono">৳{targetRate.toLocaleString('bn-BD')}</span>
+                          </div>
+                          <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200/80 text-center">
+                            <span className="text-[8px] text-slate-400 font-extrabold uppercase block">মেইন ব্যালেন্স</span>
+                            <span className="text-xs font-black text-indigo-600 font-mono">৳{liveBal.toLocaleString('bn-BD')}</span>
+                          </div>
+                          <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200/80 text-center">
+                            <span className="text-[8px] text-slate-400 font-extrabold uppercase block">মোট সঞ্চয়</span>
+                            <span className="text-xs font-black text-emerald-600 font-mono">৳{memberSavings.toLocaleString('bn-BD')}</span>
+                          </div>
+                          <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200/80 text-center">
+                            <span className="text-[8px] text-slate-400 font-extrabold uppercase block">{selectedCollectionYear} পরিশোধিত</span>
+                            <span className="text-xs font-black text-teal-600 font-mono">{paidCountInYear} / 12 মাস</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 12-Month Matrix Selection Grid */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                            📅 <strong>{selectedCollectionYear} সালের 12 মাসের কিস্তি স্ট্যাটাস ও নির্বাচনঃ</strong>
+                          </span>
+                          <div className="flex items-center gap-1.5 text-[10px]">
+                            <button
+                              type="button"
+                              onClick={() => selectAllUnpaidForMember(member, selectedCollectionYear)}
+                              className="text-emerald-700 hover:text-emerald-800 font-bold bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded-lg transition cursor-pointer"
+                            >
+                              ✓ সব বকেয়া সিলেক্ট
+                            </button>
+                            {selectedMonths.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => clearMemberMonthSelection(member.uid)}
+                                className="text-slate-500 hover:text-slate-700 font-bold bg-slate-200 px-2 py-0.5 rounded-lg transition cursor-pointer"
+                              >
+                                ক্লিয়ার ({selectedMonths.length})
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* 12 Month Grid Cards */}
+                        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-1.5">
+                          {SAMITY_MONTHS.map((m, idx) => {
+                            const isPaid = isUserMonthPaid(member, selectedCollectionYear, m.id, idx);
+                            const isCurrentMonth = selectedCollectionYear === new Date().getFullYear() && idx === new Date().getMonth();
+                            const isSelected = selectedMonths.includes(m.id);
+
+                            return (
+                              <button
+                                key={m.id}
+                                type="button"
+                                onClick={() => toggleMemberMonthSelection(member.uid, m.id)}
+                                className={`relative p-2 rounded-2xl border text-left transition duration-150 cursor-pointer flex flex-col justify-between min-h-[58px] ${
+                                  isSelected
+                                    ? 'bg-emerald-100/80 border-emerald-500 ring-2 ring-emerald-500/50 shadow-xs'
+                                    : isPaid
+                                    ? 'bg-emerald-50/50 border-emerald-200 text-emerald-900'
+                                    : isCurrentMonth
+                                    ? 'bg-amber-50/70 border-amber-300 text-amber-950'
+                                    : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between w-full">
+                                  <span className="text-[11px] font-black">{m.name}</span>
+                                  {isSelected ? (
+                                    <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
+                                  ) : (
+                                    <Square className="w-3.5 h-3.5 text-slate-300" />
+                                  )}
+                                </div>
+                                <div className="flex items-center justify-between mt-1">
+                                  <span className={`text-[8.5px] font-bold px-1.5 py-0.2 rounded-md ${
+                                    isPaid
+                                      ? 'bg-emerald-600 text-white'
+                                      : isCurrentMonth
+                                      ? 'bg-amber-500 text-slate-950 font-black'
+                                      : 'bg-slate-200 text-slate-600'
+                                  }`}>
+                                    {isPaid ? '✓ পেইড' : isCurrentMonth ? 'চলতি মাস' : 'বাকি'}
+                                  </span>
+                                  <span className="text-[8px] font-mono text-slate-400 font-bold">
+                                    ৳{targetRate}
+                                  </span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Bottom Action Bar for Selected Months */}
+                      {selectedMonths.length > 0 ? (
+                        <div className="bg-emerald-50/60 border border-emerald-200 rounded-2xl p-3 flex flex-col md:flex-row md:items-center justify-between gap-3 animate-fade-in">
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs font-black text-emerald-950">
+                                নির্বাচিত মাসঃ ({selectedMonths.length}টি মাস)
+                              </span>
+                              <span className="text-xs font-mono font-black text-emerald-800 bg-white px-2 py-0.5 rounded-lg border border-emerald-200">
+                                মোট কিস্তিঃ ৳{selectedTotalAmount.toLocaleString('bn-BD')}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-600 font-semibold">
+                              সদস্যের মেইন ব্যালেন্স: <strong>৳{liveBal.toLocaleString('bn-BD')}</strong>
+                              {hasEnoughBalance ? (
+                                <span className="text-emerald-700 font-bold ml-1.5">
+                                  ✓ পর্যাপ্ত ব্যালেন্স আছে (অবশিষ্ট থাকবে ৳{(liveBal - selectedTotalAmount).toLocaleString('bn-BD')})
+                                </span>
+                              ) : (
+                                <span className="text-rose-600 font-bold ml-1.5">
+                                  ⚠ ব্যালেন্স অপর্যাপ্ত (কম আছে ৳{(selectedTotalAmount - liveBal).toLocaleString('bn-BD')})
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => handleMemberMonthSettlement(member, true, 'mark_paid')}
+                              disabled={isSettling || !hasEnoughBalance}
+                              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-xl shadow-xs transition active:scale-95 cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                              title={hasEnoughBalance ? 'মেইন ব্যালেন্স থেকে কর্তন করে সঞ্চয়ে জমা করুন' : 'পর্যাপ্ত ব্যালেন্স নেই'}
+                            >
+                              <CreditCard className="w-3.5 h-3.5" />
+                              {isSettling ? 'প্রক্রিয়াকরণ...' : 'মেইন ব্যালেন্স থেকে কর্তন ও জমা'}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleMemberMonthSettlement(member, false, 'mark_paid')}
+                              disabled={isSettling}
+                              className="px-3 py-2 bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 text-xs font-bold rounded-xl shadow-xs transition active:scale-95 cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                              title="সরাসরি ক্যাশ বা এডমিন হিসেবে পেইড মার্ক করুন"
+                            >
+                              <Check className="w-3.5 h-3.5 text-emerald-600" />
+                              সরাসরি জমা / পেইড মার্ক
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleMemberMonthSettlement(member, false, 'unmark')}
+                              disabled={isSettling}
+                              className="px-2.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold rounded-xl transition active:scale-95 cursor-pointer disabled:opacity-50"
+                              title="নির্বাচিত মাসের পেইড স্ট্যাটাস বাতিল (Unmark) করুন"
+                            >
+                              পেইড বাতিল (Unmark)
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-slate-400 bg-white/80 border border-dashed border-slate-200 rounded-xl p-2 text-center font-medium">
+                          💡 যেকোনো মাস নির্বাচন করতে উপরের মাসের কার্ডে ক্লিক করুন অথবা "সব বকেয়া সিলেক্ট" বাটনে চাপুন।
+                        </div>
+                      )}
+
+                    </div>
+                  );
+                })}
+            </div>
+
+            {/* Bulk Result Summary Modal */}
+            {bulkResultModal && (
+              <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+                <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white rounded-3xl p-6 max-w-lg w-full space-y-4 shadow-2xl border border-slate-200 max-h-[85vh] overflow-y-auto">
+                  <div className="flex justify-between items-center border-b border-slate-150 pb-3">
+                    <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                      🎉 বাল্ক অটো-কাটিং ফলাফল রিপোর্ট
+                    </h3>
+                    <button onClick={() => setBulkResultModal(null)} className="text-slate-400 hover:text-slate-600 text-sm font-bold cursor-pointer">✕</button>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2.5 text-center">
+                    <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-200">
+                      <span className="text-[9px] text-slate-400 font-extrabold uppercase block">মোট সদস্য স্ক্যান</span>
+                      <span className="text-sm font-black text-slate-900 font-mono">{bulkResultModal.totalEligible} জন</span>
+                    </div>
+                    <div className="bg-emerald-50 p-2.5 rounded-2xl border border-emerald-200">
+                      <span className="text-[9px] text-emerald-700 font-extrabold uppercase block">সফল কিস্তি কর্তন</span>
+                      <span className="text-sm font-black text-emerald-700 font-mono">{bulkResultModal.processedCount} জন</span>
+                    </div>
+                    <div className="bg-teal-50 p-2.5 rounded-2xl border border-teal-200">
+                      <span className="text-[9px] text-teal-700 font-extrabold uppercase block">মোট ফান্ড জমা</span>
+                      <span className="text-sm font-black text-teal-800 font-mono">৳{bulkResultModal.totalCollected.toLocaleString('bn-BD')}</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 pt-2">
+                    <h4 className="text-xs font-bold text-slate-800">সদস্যভিত্তিক বিস্তারিত বিবরণঃ</h4>
+                    <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1">
+                      {bulkResultModal.results.map((r, i) => (
+                        <div key={i} className={`p-2.5 rounded-xl border text-xs flex items-center justify-between ${
+                          r.success 
+                            ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+                            : 'bg-slate-50 border-slate-200 text-slate-500'
+                        }`}>
+                          <div>
+                            <span className="font-bold">{r.userName}</span>
+                            <span className="text-[10px] block text-slate-500">{r.message}</span>
+                          </div>
+                          {r.success && (
+                            <span className="font-black text-emerald-700 font-mono shrink-0">
+                              +৳{r.deductedAmount.toLocaleString('bn-BD')}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="pt-2 flex justify-end">
+                    <button
+                      onClick={() => setBulkResultModal(null)}
+                      className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-black rounded-xl cursor-pointer"
+                    >
+                      ঠিক আছে, বন্ধ করুন
+                    </button>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+
+          </div>
+        )}
+
+        {/* VIEW I: BNB OUR INVESTMENTS (আমাদের ইনভেস্ট পোস্ট ও পোর্টফোলিও ম্যানেজার) */}
+        {activeSubView === 'investments_manager' && (
+          <div className="bg-white border border-slate-200/80 rounded-3xl p-3 sm:p-5 shadow-3xs space-y-4 animate-fade-in text-left">
+            <div className="border-b border-slate-150 pb-3 mb-2 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 bg-amber-500 rounded-full animate-pulse" />
+                  আমাদের ইনভেস্ট (স্বর্ণ, জমি ও প্রজেক্ট পোস্ট ম্যানেজার)
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  ফেসবুক স্টাইলে নতুন ইনভেস্টমেন্ট পোস্ট তৈরি করুন, ক্রয়-বিক্রয় লাভ আপডেট করুন ও মুছে ফেলুন
+                </p>
+              </div>
+              <button
+                onClick={() => setActiveSubView('main')}
+                className="text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-xl transition cursor-pointer shrink-0"
+              >
+                ← কন্ট্রোল সেন্টারে যান
+              </button>
+            </div>
+
+            <SamityInvestmentsView
+              user={users.find(u => u.role === 'admin') || users[0] || { uid: 'admin', name: 'Admin', role: 'admin' } as User}
+              onBack={() => setActiveSubView('main')}
+              isAdmin={true}
+            />
           </div>
         )}
 

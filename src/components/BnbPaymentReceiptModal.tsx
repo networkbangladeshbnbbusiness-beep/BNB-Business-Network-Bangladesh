@@ -1,5 +1,21 @@
 import React, { useRef, useState } from 'react';
-import { CheckCircle2, Download, Copy, Check, Share2, X, Send, History, Camera, ShieldCheck, AlertCircle } from 'lucide-react';
+import { 
+  CheckCircle2, 
+  Download, 
+  Copy, 
+  Check, 
+  Share2, 
+  X, 
+  Send, 
+  Camera, 
+  ShieldCheck, 
+  AlertCircle,
+  MessageCircle,
+  SendHorizontal,
+  FileText,
+  Smartphone,
+  ExternalLink
+} from 'lucide-react';
 import html2canvas from 'html2canvas';
 
 export interface PaymentReceiptData {
@@ -8,19 +24,30 @@ export interface PaymentReceiptData {
   amount: number;
   fee?: number;
   totalAmount?: number;
-  status?: 'success' | 'pending' | 'completed' | 'failed';
+  status?: 'success' | 'pending' | 'completed' | 'failed' | 'rejected';
   
-  // Beneficiary / Receiver details
+  // Beneficiary / Receiver / Member details
   beneficiaryName?: string;
   beneficiaryAccount?: string; // ID or Account No
   senderPhone?: string;
-  beneficiaryBank?: string;
-  beneficiaryBranch?: string;
+  phone?: string;
+  userPhone?: string;
+  
+  // Bank details if applicable
+  bankName?: string;
+  accountName?: string;
+  accountNumber?: string;
+  branch?: string;
+  branchName?: string;
+  routingNumber?: string;
+  routingNo?: string;
   
   // Extra details
   paymentMethod?: string;
   transactionDate?: string;
+  createdAt?: string;
   description?: string;
+  adminNotice?: string;
 }
 
 interface BnbPaymentReceiptModalProps {
@@ -37,32 +64,119 @@ export const BnbPaymentReceiptModal: React.FC<BnbPaymentReceiptModalProps> = ({
   onClose,
   data,
   appLogo,
-  onNewTransaction,
-  onViewHistory
+  onNewTransaction
 }) => {
   const receiptRef = useRef<HTMLDivElement>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [showShareChooser, setShowShareChooser] = useState(false);
 
   if (!isOpen || !data) return null;
 
-  const isSuccess = data.status === 'success' || data.status === 'completed' || !data.status;
   const isPending = data.status === 'pending';
-  const isFailed = data.status === 'failed';
+  const isFailed = data.status === 'failed' || data.status === 'rejected';
+  const isSuccess = data.status === 'success' || data.status === 'completed' || (!isPending && !isFailed);
 
-  const amountFormatted = (data.amount || 0).toLocaleString('bn-BD');
-  const feeFormatted = (data.fee || 0).toLocaleString('bn-BD');
-  const totalFormatted = (data.totalAmount || (data.amount + (data.fee || 0))).toLocaleString('bn-BD');
+  const amountNum = Number(data.amount || 0);
+  const feeNum = Number(data.fee || 0);
+  const totalNum = Number(data.totalAmount || (amountNum + feeNum));
 
-  const displayDate = data.transactionDate || new Date().toLocaleString('bn-BD', {
-    day: 'numeric',
-    month: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: 'numeric',
-    second: 'numeric',
-    hour12: true
-  });
+  const amountFormatted = amountNum.toLocaleString('en-US', { minimumFractionDigits: 2 });
+  const feeFormatted = feeNum.toLocaleString('en-US', { minimumFractionDigits: 2 });
+  const totalFormatted = totalNum.toLocaleString('en-US', { minimumFractionDigits: 2 });
+
+  const displayPhone = data.senderPhone || data.phone || data.userPhone || 'N/A';
+  const receiverName = data.beneficiaryName || data.accountName || 'BNB সদস্য';
+  const receiverId = data.beneficiaryAccount || '';
+  const txId = data.transactionId || 'SENDBNB-' + Math.floor(100000 + Math.random() * 900000);
+  const typeLabel = data.typeLabel || data.paymentMethod || 'অ্যাড মানি (bKash)';
+
+  const rawDate = data.transactionDate || data.createdAt;
+  const displayDate = rawDate 
+    ? (new Date(rawDate).toString() !== 'Invalid Date' 
+        ? new Date(rawDate).toLocaleString('en-US', {
+            year: 'numeric',
+            month: 'numeric',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: 'numeric',
+            second: 'numeric',
+            hour12: true
+          }) 
+        : rawDate)
+    : new Date().toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: 'numeric',
+        second: 'numeric',
+        hour12: true
+      });
+
+  const isBankTx = !!(data.bankName || data.accountNumber || data.branch || (data.paymentMethod && data.paymentMethod.toLowerCase().includes('bank')));
+  const bankName = data.bankName || data.paymentMethod || 'Dutch-Bangla Bank PLC. (DBBL)';
+  const bankAccNo = data.accountNumber || data.beneficiaryAccount || '';
+  const bankBranch = data.branch || data.branchName || 'প্রধান শাখা (Main Branch)';
+  const routingNo = data.routingNumber || data.routingNo || '';
+
+  // Generate 1-by-1 Serialized text for clipboard copy & instant messaging
+  const generateSerializedReceiptText = () => {
+    const statusText = isPending 
+      ? 'অপেক্ষমান (Pending)' 
+      : isSuccess 
+        ? 'সফল (Success / Approved)' 
+        : 'বাতিল (Rejected / Failed)';
+
+    let lines: string[] = [
+      '🧾 লেনদেন রসিদ (BNB Digital Network)',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      `1️⃣ লেনদেনের ধরন: ${typeLabel}`,
+      `2️⃣ প্রাপক/সদস্য: ${receiverName}${receiverId ? ` (আইডি: ${receiverId})` : ''}`,
+      `3️⃣ মোবাইল নম্বর: ${displayPhone}`
+    ];
+
+    let currentStep = 4;
+
+    if (isBankTx && bankAccNo) {
+      lines.push(`${currentStep}️⃣ ব্যাংক নাম: ${bankName}`);
+      currentStep++;
+      lines.push(`${currentStep}️⃣ অ্যাকাউন্ট নম্বর: ${bankAccNo}`);
+      currentStep++;
+      if (bankBranch) {
+        lines.push(`${currentStep}️⃣ শাখা: ${bankBranch}`);
+        currentStep++;
+      }
+      if (routingNo) {
+        lines.push(`${currentStep}️⃣ রাউটিং নম্বর: ${routingNo}`);
+        currentStep++;
+      }
+    }
+
+    lines.push(`${currentStep}️⃣ লেনদেন পরিমাণ: ৳${amountFormatted} BDT`);
+    currentStep++;
+
+    lines.push(`${currentStep}️⃣ সার্ভিস চার্জ: ${feeNum > 0 ? `৳${feeFormatted} BDT` : '৳0.00 (ফ্রি)'}`);
+    currentStep++;
+
+    lines.push(`${currentStep}️⃣ মোট কেটে নেওয়া হয়েছে: ৳${totalFormatted} BDT`);
+    currentStep++;
+
+    lines.push(`${currentStep}️⃣ ট্রানজেকশন আইডি (TxID): ${txId}`);
+    currentStep++;
+
+    lines.push(`${currentStep}️⃣ লেনদেনের তারিখ ও সময়: ${displayDate}`);
+    currentStep++;
+
+    lines.push(`${currentStep}️⃣ বর্তমান স্ট্যাটাস: ${statusText}`);
+    currentStep++;
+
+    lines.push(`${currentStep}️⃣ ডিজিটাল প্ল্যাটফর্ম: Business Network Bangladesh (BNB)`);
+    lines.push('━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+    return lines.join('\n');
+  };
 
   const handleCopy = (text: string, fieldName: string) => {
     if (!text) return;
@@ -71,24 +185,15 @@ export const BnbPaymentReceiptModal: React.FC<BnbPaymentReceiptModalProps> = ({
     setTimeout(() => setCopiedField(null), 2000);
   };
 
+  // Requirement 4: Copy All Text 1-by-1 in serial format
   const handleCopyAllText = () => {
-    const textToCopy = `=== BNB লেনদেন রসিদ ===
-ধরন: ${data.typeLabel || 'BNB লেনদেন'}
-তারিখ: ${displayDate}
-প্রাপক: ${data.beneficiaryName || 'N/A'} (আইডি/একাউন্ট: ${data.beneficiaryAccount || 'N/A'})
-মোবাইল নম্বর: ${data.senderPhone || 'N/A'}
-পরিমাণ: ৳${data.amount} BDT
-চার্জ: ৳${data.fee || 0}
-মোট কাটা হয়েছে: ৳${data.totalAmount || data.amount} BDT
-ট্রানজেকশন আইডি (TxID): ${data.transactionId || 'N/A'}
-স্ট্যাটাস: ${isSuccess ? 'সফল (Success)' : isPending ? 'অপেক্ষমান (Pending)' : 'ব্যর্থ (Failed)'}
-স্টোর: Business Network Bangladesh (BNB)`;
-    
+    const textToCopy = generateSerializedReceiptText();
     navigator.clipboard.writeText(textToCopy);
     setCopiedField('all_text');
-    setTimeout(() => setCopiedField(null), 2500);
+    setTimeout(() => setCopiedField(null), 3000);
   };
 
+  // Requirement 4: Download Receipt as PNG Image to Gallery
   const handleDownloadImage = async () => {
     if (!receiptRef.current) return;
     setDownloading(true);
@@ -97,13 +202,18 @@ export const BnbPaymentReceiptModal: React.FC<BnbPaymentReceiptModalProps> = ({
         scale: 3,
         useCORS: true,
         backgroundColor: '#ffffff',
-        logging: false
+        logging: false,
+        allowTaint: true
       });
-      const image = canvas.toDataURL('image/png');
+      const image = canvas.toDataURL('image/png', 1.0);
       const link = document.createElement('a');
       link.href = image;
-      link.download = `BNB-Receipt-${data.transactionId || Date.now()}.png`;
+      link.download = `BNB-Receipt-${txId}.png`;
+      document.body.appendChild(link);
       link.click();
+      document.body.removeChild(link);
+      setCopiedField('download_success');
+      setTimeout(() => setCopiedField(null), 3000);
     } catch (err) {
       console.error('Failed to capture receipt PNG image:', err);
     } finally {
@@ -111,243 +221,459 @@ export const BnbPaymentReceiptModal: React.FC<BnbPaymentReceiptModalProps> = ({
     }
   };
 
+  // Requirement 3: Share receipt image & serialized text via WhatsApp, IMO, Web Share
+  const handleShareReceipt = async () => {
+    setSharing(true);
+    const serializedText = generateSerializedReceiptText();
+
+    try {
+      // 1. Try native Web Share API with Image File if supported
+      if (receiptRef.current && navigator.share) {
+        try {
+          const canvas = await html2canvas(receiptRef.current, {
+            scale: 2,
+            useCORS: true,
+            backgroundColor: '#ffffff',
+            logging: false
+          });
+
+          const blob = await new Promise<Blob | null>((resolve) => 
+            canvas.toBlob(resolve, 'image/png', 0.95)
+          );
+
+          if (blob && navigator.canShare) {
+            const file = new File([blob], `BNB-Receipt-${txId}.png`, { type: 'image/png' });
+            if (navigator.canShare({ files: [file] })) {
+              await navigator.share({
+                title: 'BNB লেনদেন রসিদ',
+                text: serializedText,
+                files: [file]
+              });
+              setSharing(false);
+              return;
+            }
+          }
+
+          // Fallback to text sharing via Web Share
+          await navigator.share({
+            title: 'BNB লেনদেন রসিদ',
+            text: serializedText
+          });
+          setSharing(false);
+          return;
+        } catch (shareErr: any) {
+          if (shareErr.name === 'AbortError') {
+            setSharing(false);
+            return;
+          }
+        }
+      }
+
+      // 2. If Web Share is not available, open the sleek Share Sheet Chooser
+      setShowShareChooser(true);
+    } catch (e) {
+      console.warn("Direct share not available, falling back to share chooser", e);
+      setShowShareChooser(true);
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  const handleShareToWhatsApp = () => {
+    const text = generateSerializedReceiptText();
+    const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
+    window.open(waUrl, '_blank');
+    setShowShareChooser(false);
+  };
+
+  const handleShareToTelegram = () => {
+    const text = generateSerializedReceiptText();
+    const tgUrl = `https://t.me/share/url?url=&text=${encodeURIComponent(text)}`;
+    window.open(tgUrl, '_blank');
+    setShowShareChooser(false);
+  };
+
+  const handleShareToImoOrAny = () => {
+    const text = generateSerializedReceiptText();
+    navigator.clipboard.writeText(text);
+    setCopiedField('all_text');
+    setShowShareChooser(false);
+    setTimeout(() => setCopiedField(null), 3000);
+  };
+
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/80 backdrop-blur-md p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-200">
-      <div className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden my-auto border border-slate-100 flex flex-col">
+    <div className="fixed inset-0 z-[99999] flex flex-col items-center justify-start sm:justify-center bg-slate-950/85 backdrop-blur-md p-0 sm:p-4 overflow-y-auto w-full h-full min-h-screen text-slate-900 font-sans animate-fade-in">
+      
+      {/* Full-Screen Mobile Card / Centered Desktop Card */}
+      <div className="relative w-full max-w-md bg-white min-h-screen sm:min-h-0 sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col p-4 sm:p-5 my-auto border border-slate-100 space-y-3">
         
         {/* Top Floating Close Button */}
         <button
+          type="button"
           onClick={onClose}
-          className="absolute top-3 right-3 z-20 p-2 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 transition"
+          className="absolute top-3.5 right-3.5 z-20 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-500 hover:text-slate-800 flex items-center justify-center transition cursor-pointer shadow-xs border border-slate-200"
           title="বন্ধ করুন"
         >
-          <X className="w-5 h-5" />
+          <X className="w-4 h-4" />
         </button>
 
-        <div className="p-5 sm:p-6 space-y-4">
-          
-          {/* Top Status Header */}
-          <div className="flex flex-col items-center text-center space-y-2 pt-1">
-            <div className="relative">
-              <div className={`w-16 h-16 sm:w-20 sm:h-20 rounded-full flex items-center justify-center border-4 shadow-md ${
-                isFailed 
-                  ? 'bg-rose-50 border-rose-200 text-rose-600' 
-                  : isPending 
-                  ? 'bg-amber-50 border-amber-200 text-amber-600' 
-                  : 'bg-emerald-50 border-emerald-300 text-emerald-600'
-              }`}>
-                {isFailed ? (
-                  <X className="w-9 h-9 sm:w-11 sm:h-11 stroke-[2.5]" />
-                ) : isPending ? (
-                  <AlertCircle className="w-9 h-9 sm:w-11 sm:h-11 stroke-[2.5] animate-pulse" />
-                ) : (
-                  <CheckCircle2 className="w-10 h-10 sm:w-12 sm:h-12 stroke-[2.5]" />
-                )}
+        {/* 1. Header Icon & Status Notification Banner */}
+        <div className="text-center pt-2 space-y-2">
+          {/* Circular Badge Icon (Warning / Check / Failed) */}
+          <div className="relative w-16 h-16 mx-auto flex items-center justify-center">
+            {isPending ? (
+              <div className="w-16 h-16 rounded-full bg-amber-50 border-4 border-amber-200/90 flex items-center justify-center shadow-inner relative animate-pulse">
+                <AlertCircle className="w-8 h-8 text-amber-500" />
+                <div className="absolute -bottom-1 -right-1 bg-amber-500 text-white rounded-full p-0.5 shadow-xs">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                </div>
               </div>
-              <span className={`absolute bottom-0 right-0 w-5 h-5 sm:w-6 sm:h-6 rounded-full border-2 border-white flex items-center justify-center ${
-                isFailed ? 'bg-rose-500' : isPending ? 'bg-amber-500' : 'bg-emerald-500'
-              }`}>
-                <ShieldCheck className="w-3 h-3 text-white" />
-              </span>
-            </div>
+            ) : isFailed ? (
+              <div className="w-16 h-16 rounded-full bg-rose-50 border-4 border-rose-200 flex items-center justify-center shadow-inner relative">
+                <X className="w-8 h-8 text-rose-500" />
+                <div className="absolute -bottom-1 -right-1 bg-rose-600 text-white rounded-full p-0.5 shadow-xs">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                </div>
+              </div>
+            ) : (
+              <div className="w-16 h-16 rounded-full bg-emerald-50 border-4 border-emerald-200 flex items-center justify-center shadow-inner relative">
+                <CheckCircle2 className="w-8 h-8 text-emerald-600" />
+                <div className="absolute -bottom-1 -right-1 bg-emerald-600 text-white rounded-full p-0.5 shadow-xs">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                </div>
+              </div>
+            )}
+          </div>
 
-            <h2 className={`text-lg sm:text-xl font-black tracking-tight ${
-              isFailed ? 'text-rose-700' : isPending ? 'text-amber-800' : 'text-emerald-800'
-            }`}>
-              {isFailed 
-                ? 'লেনদেনটি সম্পন্ন হতে পারেনি!' 
-                : isPending 
-                ? 'লেনদেন আবেদনটি জমা হয়েছে!' 
-                : 'লেনদেনটি সফলভাবে সম্পন্ন হয়েছে!'}
-            </h2>
+          {/* Heading */}
+          <h2 className="text-lg sm:text-xl font-black text-[#993b00] tracking-tight">
+            {isPending 
+              ? 'লেনদেন আবেদনটি জমা হয়েছে!' 
+              : isFailed 
+                ? 'লেনদেন আবেদনটি বাতিল হয়েছে!' 
+                : 'লেনদেন সফলভাবে সম্পন্ন হয়েছে!'}
+          </h2>
 
-            {/* Camera Notification Badge */}
-            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold shadow-3xs">
-              <Camera className="w-3.5 h-3.5 text-emerald-600" />
-              <span>দয়া করে এই রসিদের একটি স্ক্রিনশট বা ছবি সংরক্ষণ করুন</span>
+          {/* Instruction Pill (Matching Screenshot) */}
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50/90 border border-emerald-200 rounded-xl text-[11px] sm:text-xs font-bold text-emerald-800 shadow-2xs">
+            <Camera className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            <span>দয়া করে এই রসিদের একটি স্ক্রিনশট বা ছবি সংরক্ষণ করুন</span>
+          </div>
+        </div>
+
+        {/* 2. THE RECEIPT CONTAINER (Captured for Download & Share) */}
+        <div 
+          ref={receiptRef}
+          className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-4.5 shadow-xs space-y-3 relative text-slate-800 text-xs sm:text-[12.5px]"
+        >
+          {/* Receipt Top Badge & Timestamp */}
+          <div className="text-center space-y-1 pb-1">
+            <span className="inline-block px-3.5 py-1 bg-indigo-50 border border-indigo-100 text-indigo-700 font-black text-xs sm:text-sm rounded-full shadow-2xs">
+              {typeLabel}
+            </span>
+            <div className="text-slate-500 text-[11px] font-semibold font-mono">
+              তারিখ: {displayDate}
             </div>
           </div>
 
-          {/* Printable / Capturable Receipt Card */}
-          <div
-            ref={receiptRef}
-            className="bg-slate-50/80 border border-slate-200/90 rounded-2xl p-4 sm:p-5 space-y-3.5 text-slate-800 shadow-3xs select-text"
-          >
-            {/* Header / Type Badge & Date */}
-            <div className="text-center space-y-1">
-              <div className="inline-block bg-indigo-50 border border-indigo-100 text-indigo-700 font-bold text-xs sm:text-sm py-1 px-4 rounded-full shadow-3xs tracking-wide">
-                {data.typeLabel || 'BNB TO BNB সেন্ড মানি'}
-              </div>
-              <div className="text-[11px] sm:text-xs text-slate-500 font-medium">
-                তারিখঃ <span className="font-semibold text-slate-700">{displayDate}</span>
+          <div className="border-b border-dashed border-slate-200" />
+
+          {/* Itemized Details List */}
+          <div className="space-y-2 font-medium">
+            
+            {/* Receiver / Beneficiary Row */}
+            <div className="flex justify-between items-center gap-2">
+              <span className="text-slate-500 font-medium whitespace-nowrap">প্রাপক (Receiver):</span>
+              <div className="font-extrabold text-slate-900 text-right flex items-center justify-end gap-1 flex-wrap">
+                <span>{receiverName}</span>
+                {receiverId && (
+                  <span className="text-slate-500 font-normal text-[11px]">(আইডি: {receiverId})</span>
+                )}
+                {receiverId && (
+                  <button
+                    type="button"
+                    onClick={() => handleCopy(receiverId, 'receiver_id')}
+                    className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-slate-700 transition cursor-pointer"
+                    title="আইডি কপি করুন"
+                  >
+                    {copiedField === 'receiver_id' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                  </button>
+                )}
               </div>
             </div>
 
-            <div className="border-b border-dashed border-slate-300" />
-
-            {/* Transaction Rows */}
-            <div className="space-y-2.5 text-xs sm:text-sm">
-              
-              {/* Receiver Row */}
-              <div className="flex justify-between items-start gap-2">
-                <span className="text-slate-500 font-medium whitespace-nowrap">প্রাপক (Receiver):</span>
-                <div className="text-right font-bold text-slate-900 flex items-center justify-end gap-1 flex-wrap">
-                  <span>{data.beneficiaryName || 'BNB সদস্য'}</span>
-                  {data.beneficiaryAccount && (
-                    <span className="text-slate-500 font-normal text-xs">(আইডি: {data.beneficiaryAccount})</span>
-                  )}
-                  {data.beneficiaryAccount && (
-                    <button
-                      onClick={() => handleCopy(data.beneficiaryAccount || '', 'receiver_id')}
-                      className="p-1 hover:bg-slate-200 rounded text-slate-500 transition"
-                      title="আইডি কপি করুন"
-                    >
-                      {copiedField === 'receiver_id' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
-                    </button>
-                  )}
+            {/* Mobile Number Row */}
+            {displayPhone && displayPhone !== 'N/A' && (
+              <div className="flex justify-between items-center gap-2">
+                <span className="text-slate-500 font-medium whitespace-nowrap">মোবাইল নম্বর:</span>
+                <div className="font-extrabold text-slate-900 flex items-center gap-1 font-mono">
+                  <span>{displayPhone}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleCopy(displayPhone, 'phone')}
+                    className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-slate-700 transition cursor-pointer"
+                    title="মোবাইল নম্বর কপি করুন"
+                  >
+                    {copiedField === 'phone' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                  </button>
                 </div>
               </div>
+            )}
 
-              {/* Sender Phone or Beneficiary Phone Row */}
-              {data.senderPhone && (
+            {/* Optional Bank Transfer Information */}
+            {isBankTx && bankAccNo && (
+              <>
                 <div className="flex justify-between items-center gap-2">
-                  <span className="text-slate-500 font-medium">মোবাইল নম্বর:</span>
-                  <div className="font-bold text-slate-900 flex items-center gap-1 font-mono">
-                    <span>{data.senderPhone}</span>
+                  <span className="text-slate-500 font-medium whitespace-nowrap">ব্যাংক নাম:</span>
+                  <span className="font-extrabold text-indigo-900 text-right">{bankName}</span>
+                </div>
+                <div className="flex justify-between items-center gap-2">
+                  <span className="text-slate-500 font-medium whitespace-nowrap">অ্যাকাউন্ট নম্বর:</span>
+                  <div className="font-black text-indigo-950 flex items-center gap-1 font-mono">
+                    <span>{bankAccNo}</span>
                     <button
-                      onClick={() => handleCopy(data.senderPhone || '', 'phone')}
-                      className="p-1 hover:bg-slate-200 rounded text-slate-500 transition"
-                      title="মোবাইল নম্বর কপি করুন"
+                      type="button"
+                      onClick={() => handleCopy(bankAccNo, 'bank_acc')}
+                      className="p-1 hover:bg-indigo-50 rounded text-indigo-600 transition cursor-pointer"
+                      title="অ্যাকাউন্ট নম্বর কপি করুন"
                     >
-                      {copiedField === 'phone' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                      {copiedField === 'bank_acc' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
                     </button>
                   </div>
                 </div>
-              )}
+                {bankBranch && (
+                  <div className="flex justify-between items-center gap-2">
+                    <span className="text-slate-500 font-medium whitespace-nowrap">শাখা:</span>
+                    <span className="font-bold text-slate-800 text-right">{bankBranch}</span>
+                  </div>
+                )}
+                {routingNo && (
+                  <div className="flex justify-between items-center gap-2">
+                    <span className="text-slate-500 font-medium whitespace-nowrap">রাউটিং নং:</span>
+                    <span className="font-mono font-bold text-slate-800">{routingNo}</span>
+                  </div>
+                )}
+              </>
+            )}
 
-              {/* Amount Row */}
-              <div className="flex justify-between items-center gap-2">
-                <span className="text-slate-500 font-medium">লেনদেন পরিমাণ (Amount):</span>
-                <span className="font-extrabold text-slate-900 font-mono">৳{amountFormatted} BDT</span>
-              </div>
-
-              {/* Service Charge Row */}
-              <div className="flex justify-between items-center gap-2">
-                <span className="text-slate-500 font-medium">সার্ভিস চার্জ (Charge):</span>
-                <span className="font-bold text-emerald-700">
-                  {data.fee && data.fee > 0 ? `৳${feeFormatted} BDT` : '৳০.০০ (ফ্রি)'}
-                </span>
-              </div>
-
-              {/* Total Deducted Row */}
-              <div className="flex justify-between items-center gap-2 pt-1 border-t border-slate-200/60">
-                <span className="text-slate-700 font-bold">মোট কেটে নেওয়া হয়েছে:</span>
-                <span className="font-black text-slate-900 text-sm sm:text-base font-mono">৳{totalFormatted} BDT</span>
-              </div>
-
-            </div>
-
-            <div className="border-b border-dashed border-slate-300" />
-
-            {/* Transaction ID Box with One-Click Copy */}
+            {/* Amount Row */}
             <div className="flex justify-between items-center gap-2">
-              <span className="text-xs text-slate-500 font-medium whitespace-nowrap">ট্রানজেকশন আইডি (TxID):</span>
-              <div className="bg-emerald-100/80 border border-emerald-300/80 rounded-lg px-2.5 py-1 flex items-center gap-1.5 text-emerald-900 font-mono font-bold text-xs sm:text-sm">
-                <span>{data.transactionId || 'SENDBNB-937483'}</span>
-                <button
-                  onClick={() => handleCopy(data.transactionId || '', 'txid')}
-                  className="p-1 hover:bg-emerald-200 rounded text-emerald-800 transition"
-                  title="ট্রানজেকশন আইডি কপি করুন"
-                >
-                  {copiedField === 'txid' ? <Check className="w-3.5 h-3.5 text-emerald-700" /> : <Copy className="w-3.5 h-3.5" />}
-                </button>
-              </div>
-            </div>
-
-            {/* Status Row */}
-            <div className="flex justify-between items-center gap-2">
-              <span className="text-xs text-slate-500 font-medium">লেনদেন স্ট্যাটাস (Status):</span>
-              <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold flex items-center gap-1 ${
-                isFailed 
-                  ? 'bg-rose-100 text-rose-800 border border-rose-200' 
-                  : isPending 
-                  ? 'bg-amber-100 text-amber-800 border border-amber-200' 
-                  : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-              }`}>
-                <span>{isFailed ? 'ব্যর্থ (Failed)' : isPending ? 'অপেক্ষমান (Pending)' : 'সফল (Success)'}</span>
+              <span className="text-slate-500 font-medium whitespace-nowrap">লেনদেন পরিমাণ (Amount):</span>
+              <span className="font-black text-slate-900 font-mono text-sm sm:text-base">
+                ৳{amountFormatted} BDT
               </span>
             </div>
 
-            {/* Footer Brand Seal inside receipt screenshot */}
-            <div className="pt-2 text-center border-t border-slate-200/80">
-              <div className="flex items-center justify-center space-x-1.5 text-[10px] text-slate-400 font-medium uppercase tracking-wider">
-                <span>Business Network Bangladesh (BNB)</span>
-                <span>•</span>
-                <span>ডিজিটাল লেনদেন সিস্টেম</span>
-              </div>
+            {/* Service Charge Row */}
+            <div className="flex justify-between items-center gap-2">
+              <span className="text-slate-500 font-medium whitespace-nowrap">সার্ভিস চার্জ (Charge):</span>
+              <span className="font-bold text-emerald-700">
+                {feeNum > 0 ? `৳${feeFormatted} BDT` : '৳0.00 (ফ্রি)'}
+              </span>
             </div>
 
+            {/* Total Deducted Row */}
+            <div className="flex justify-between items-center gap-2 pt-1 border-t border-slate-100">
+              <span className="text-slate-700 font-bold whitespace-nowrap">মোট কেটে নেওয়া হয়েছে:</span>
+              <span className="font-black text-slate-900 text-sm sm:text-base font-mono">
+                ৳{totalFormatted} BDT
+              </span>
+            </div>
           </div>
 
-          {/* Copy All Toast Feedback */}
-          {copiedField === 'all_text' && (
-            <div className="bg-slate-800 text-white text-xs font-bold py-1.5 px-3 rounded-xl text-center animate-in fade-in zoom-in duration-150">
-              ✓ সমস্ত লেনদেন তথ্য ক্লিপবোর্ডে কপি হয়েছে!
-            </div>
-          )}
+          <div className="border-b border-dashed border-slate-200" />
 
-          {/* Action Buttons */}
-          <div className="space-y-2 pt-1">
-            
-            {/* Download & Copy Buttons Row */}
-            <div className="grid grid-cols-2 gap-2">
+          {/* Transaction ID Box with One-Click Copy (Green Pill Matching Screenshot) */}
+          <div className="flex justify-between items-center gap-2">
+            <span className="text-xs text-slate-500 font-medium whitespace-nowrap">ট্রানজেকশন আইডি (TxID):</span>
+            <div className="bg-[#e6f9f0] border border-[#a3e8cc] rounded-lg px-2.5 py-1 flex items-center gap-1.5 text-[#065f46] font-mono font-black text-xs sm:text-sm shadow-2xs">
+              <span>{txId}</span>
               <button
-                onClick={handleDownloadImage}
-                disabled={downloading}
-                className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-sm active:scale-95 disabled:opacity-50"
+                type="button"
+                onClick={() => handleCopy(txId, 'txid')}
+                className="p-0.5 hover:bg-[#c2f2dc] rounded text-[#065f46] transition cursor-pointer"
+                title="ট্রানজেকশন আইডি কপি করুন"
               >
-                <Download className="w-4 h-4" />
-                <span>{downloading ? 'ডাউনলোড হচ্ছে...' : 'ছবি ডাউনলোড'}</span>
-              </button>
-
-              <button
-                onClick={handleCopyAllText}
-                className="py-2.5 px-3 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-xs active:scale-95"
-              >
-                <Copy className="w-4 h-4 text-indigo-600" />
-                <span>লেখা কপি করুন</span>
+                {copiedField === 'txid' ? <Check className="w-3.5 h-3.5 text-emerald-700" /> : <Copy className="w-3.5 h-3.5" />}
               </button>
             </div>
+          </div>
 
-            {/* Primary Action Buttons (Matching Screenshot) */}
+          {/* Status Row */}
+          <div className="flex justify-between items-center gap-2">
+            <span className="text-xs text-slate-500 font-medium whitespace-nowrap">লেনদেন স্ট্যাটাস (Status):</span>
+            <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold flex items-center gap-1 ${
+              isFailed 
+                ? 'bg-rose-100 text-rose-800 border border-rose-200' 
+                : isPending 
+                  ? 'bg-[#fef3c7] text-[#92400e] border border-[#fde68a]' 
+                  : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+            }`}>
+              <span>
+                {isFailed 
+                  ? 'বাতিল (Failed)' 
+                  : isPending 
+                    ? 'অপেক্ষমান (Pending)' 
+                    : 'সফল (Success)'}
+              </span>
+            </span>
+          </div>
+
+          {/* Footer Brand Seal */}
+          <div className="pt-2 text-center border-t border-slate-100">
+            <div className="flex items-center justify-center space-x-1.5 text-[9.5px] sm:text-[10px] text-slate-400 font-medium uppercase tracking-wider">
+              <span>BUSINESS NETWORK BANGLADESH (BNB)</span>
+              <span>•</span>
+              <span>ডিজিটাল লেনদেন সিস্টেম</span>
+            </div>
+          </div>
+        </div>
+
+        {/* 3. TOAST FEEDBACK NOTIFICATIONS */}
+        {copiedField === 'all_text' && (
+          <div className="bg-slate-900 text-white text-xs font-bold py-2 px-3 rounded-xl text-center shadow-lg border border-slate-700 animate-in fade-in zoom-in duration-150 flex items-center justify-center gap-1.5">
+            <Check className="w-4 h-4 text-emerald-400" />
+            <span>✓ সমস্ত লেনদেন তথ্য 1 বাই 1 সিরিয়ালে কপি করা হয়েছে!</span>
+          </div>
+        )}
+
+        {copiedField === 'download_success' && (
+          <div className="bg-emerald-800 text-white text-xs font-bold py-2 px-3 rounded-xl text-center shadow-lg border border-emerald-600 animate-in fade-in zoom-in duration-150 flex items-center justify-center gap-1.5">
+            <Check className="w-4 h-4 text-white" />
+            <span>✓ রসিদের ছবি সফলভাবে গ্যালারিতে ডাউনলোড হয়েছে!</span>
+          </div>
+        )}
+
+        {/* 4. ACTION BUTTONS */}
+        <div className="space-y-2 pt-1">
+          
+          {/* Row 1: [ছবি ডাউনলোড] + [লেখা কপি করুন] (Requirement 4) */}
+          <div className="grid grid-cols-2 gap-2">
             <button
+              type="button"
+              onClick={handleDownloadImage}
+              disabled={downloading}
+              className="py-2.5 px-3 rounded-xl bg-[#168a53] hover:bg-[#127043] active:scale-95 text-white text-xs sm:text-[13px] font-bold flex items-center justify-center gap-1.5 transition shadow-sm cursor-pointer disabled:opacity-50"
+            >
+              <Download className="w-4 h-4" />
+              <span>{downloading ? 'ডাউনলোড হচ্ছে...' : 'ছবি ডাউনলোড'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleCopyAllText}
+              className="py-2.5 px-3 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 active:scale-95 text-slate-700 text-xs sm:text-[13px] font-bold flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer"
+            >
+              <Copy className="w-4 h-4 text-indigo-600" />
+              <span>লেখা কপি করুন</span>
+            </button>
+          </div>
+
+          {/* Row 2: [রসিদ শেয়ার করুন (WhatsApp / IMO / Share)] (Requirement 3: Replaces 'নতুন লেনদেন করুন') */}
+          <button
+            type="button"
+            onClick={handleShareReceipt}
+            disabled={sharing}
+            className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-800 active:scale-[0.99] text-white text-xs sm:text-sm font-extrabold flex items-center justify-center gap-2 transition shadow-md cursor-pointer border border-emerald-500/30"
+          >
+            <Share2 className="w-4 h-4 text-emerald-100" />
+            <span>{sharing ? 'শেয়ার প্রস্তুত হচ্ছে...' : 'রসিদ শেয়ার করুন (WhatsApp / IMO / Share)'}</span>
+          </button>
+
+          {/* Bottom Quick Navigation / Dismiss Bar */}
+          <div className="flex items-center justify-between pt-1 text-xs">
+            <button
+              type="button"
               onClick={() => {
                 onClose();
                 if (onNewTransaction) onNewTransaction();
               }}
-              className="w-full py-3 px-4 rounded-xl bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-xs sm:text-sm font-extrabold flex items-center justify-center gap-2 transition shadow-3xs active:scale-[0.99]"
+              className="text-indigo-600 hover:text-indigo-800 font-bold hover:underline py-1 px-2 cursor-pointer flex items-center gap-1"
             >
-              <Send className="w-4 h-4 text-indigo-600" />
-              <span>নতুন লেনদেন করুন</span>
+              <SendHorizontal className="w-3.5 h-3.5" />
+              <span>নতুন লেনদেন করতে চান?</span>
             </button>
 
             <button
-              onClick={() => {
-                onClose();
-                if (onViewHistory) onViewHistory();
-              }}
-              className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-extrabold flex items-center justify-center gap-2 transition shadow-sm active:scale-[0.99]"
+              type="button"
+              onClick={onClose}
+              className="text-slate-500 hover:text-slate-800 font-bold hover:underline py-1 px-2 cursor-pointer"
             >
-              <History className="w-4 h-4" />
-              <span>লেনদেন খতিয়ান দেখুন</span>
+              বন্ধ করুন ✕
             </button>
-
           </div>
 
         </div>
+
+        {/* 5. SHARE CHOOSER POPUP (For 1-click sharing to WhatsApp, IMO, Telegram, Socials) */}
+        {showShareChooser && (
+          <div className="fixed inset-0 z-[100000] bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 animate-fade-in text-left">
+            <div className="bg-white rounded-2xl max-w-sm w-full p-4 shadow-2xl border border-slate-200 space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                <div className="flex items-center gap-1.5 text-slate-900 font-black text-sm">
+                  <Share2 className="w-4 h-4 text-emerald-600" />
+                  <span>রসিদ শেয়ার করার মাধ্যম সিলেক্ট করুন</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowShareChooser(false)}
+                  className="text-slate-400 hover:text-slate-600 font-bold text-sm cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2">
+                {/* WhatsApp Share Button */}
+                <button
+                  type="button"
+                  onClick={handleShareToWhatsApp}
+                  className="w-full p-2.5 bg-[#25D366]/10 hover:bg-[#25D366]/20 border border-[#25D366]/30 text-[#128C7E] rounded-xl font-black text-xs flex items-center justify-between transition cursor-pointer"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">💬</span>
+                    <span>হোয়াটসঅ্যাপে শেয়ার করুন (WhatsApp)</span>
+                  </div>
+                  <ExternalLink className="w-3.5 h-3.5 text-[#128C7E]" />
+                </button>
+
+                {/* Telegram Share Button */}
+                <button
+                  type="button"
+                  onClick={handleShareToTelegram}
+                  className="w-full p-2.5 bg-[#0088cc]/10 hover:bg-[#0088cc]/20 border border-[#0088cc]/30 text-[#0088cc] rounded-xl font-black text-xs flex items-center justify-between transition cursor-pointer"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">✈️</span>
+                    <span>টেলিগ্রামে শেয়ার করুন (Telegram)</span>
+                  </div>
+                  <ExternalLink className="w-3.5 h-3.5 text-[#0088cc]" />
+                </button>
+
+                {/* IMO / Messenger / Other Apps Copy Option */}
+                <button
+                  type="button"
+                  onClick={handleShareToImoOrAny}
+                  className="w-full p-2.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-900 rounded-xl font-black text-xs flex items-center justify-between transition cursor-pointer"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">📱</span>
+                    <span>ইমু / মেসেঞ্জারের জন্য লেখা কপি করুন (IMO / Apps)</span>
+                  </div>
+                  <Copy className="w-3.5 h-3.5 text-indigo-700" />
+                </button>
+              </div>
+
+              <div className="text-[11px] text-slate-500 text-center pt-1">
+                লেখা কপি করে যেকোনো অ্যাপের চ্যাটবক্সে পেস্ট করে পাঠাতে পারবেন।
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>
   );
 };
+
 export default BnbPaymentReceiptModal;

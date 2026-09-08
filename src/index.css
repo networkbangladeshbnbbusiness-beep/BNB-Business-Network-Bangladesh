@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Hind Siliguri", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Inter", monospace;
+  --font-sans: "Hind Siliguri", "Noto Sans Bengali", "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Plus Jakarta Sans", "Inter", monospace;
 
   /* Custom App Palette Mappings for fully visible rendering */
   --color-emerald-250: #a7f3d0;

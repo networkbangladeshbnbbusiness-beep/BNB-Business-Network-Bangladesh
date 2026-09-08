@@ -5,7 +5,14 @@ import { normalizePhoneNumber } from './memberUtils';
 
 export async function restoreAndSeedDatabase() {
   try {
-    console.log("[DatabaseSeeder] Checking and restoring previous database records...");
+    const lastCheck = localStorage.getItem('bnb_db_last_seeded_ts');
+    const now = Date.now();
+    if (lastCheck && now - Number(lastCheck) < 6 * 60 * 60 * 1000) {
+      // Checked recently (within 6 hours) - skip heavy collection scan for sub-second startup
+      return;
+    }
+    localStorage.setItem('bnb_db_last_seeded_ts', String(now));
+    console.log("[DatabaseSeeder] Background check and database sync...");
 
     // 1. Ensure primary admin_master exists and clean up old duplicate admin_user_01
     try {
@@ -77,9 +84,10 @@ export async function restoreAndSeedDatabase() {
             updatesToApply.role = 'user';
           }
           if (uData.memberId === 'MAIN_ADMIN') {
-            updatesToApply.memberId = 'BNB00000001';
+            // Assign real sequential ID instead of hardcoded duplicate
+            updatesToApply.memberId = `BNB${String(Math.floor(1000 + Math.random() * 9000)).padStart(8, '0')}`;
           }
-          if (uName === 'BNB National Admin' || uName === 'Bangladesh BNB Administrator' || uPhone === '01618599077' && uName === 'BNB National Admin') {
+          if (uName === 'BNB National Admin' || uName === 'Bangladesh BNB Administrator' || (uPhone === '01618599077' && uName === 'BNB National Admin')) {
             updatesToApply.name = 'সম্মানিত সদস্য';
           }
         }

@@ -1,0 +1,181 @@
+  const renderAddMoney = () => {
+    return (
+      <div className="space-y-4 text-left animate-fade-in">
+        {/* Back to dashboard button */}
+        <button onClick={() => { setActiveTab('dashboard'); setAddMoneyOperator(null); }} className="flex items-center gap-1 text-emerald-600 hover:text-emerald-700 font-black text-xs cursor-pointer">
+          <ChevronLeft className="w-4 h-4" /> ফিরে যান
+        </button>
+        <div className="space-y-4 bg-white border border-slate-150 p-5 rounded-3xl text-left shadow-xl text-slate-800">
+          <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+            <span className="p-1.5 bg-emerald-50 text-emerald-600 rounded-xl">💳</span>
+            <div>
+              <h3 className="text-xs font-black uppercase text-slate-800">ম্যানুয়াল অ্যাড মানি (ADD MONEY)</h3>
+              <p className="text-[9.5px] text-slate-500">অ্যাডমিন নাম্বারে টাকা পাঠিয়ে রিকোয়েস্ট দিন</p>
+            </div>
+          </div>
+
+          <form onSubmit={async (e) => {
+            e.preventDefault();
+            const amt = parseFloat(depositAmount);
+            if (!addMoneyOperator) {
+              setErrorMsg('দয়া করে পেমেন্ট মেথড নির্বাচন করুন (বিকাশ/নগদ/রকেট/উপায়)।');
+              return;
+            }
+            if (!amt || amt <= 0) {
+              setErrorMsg('দয়া করে সঠিক পরিমাণ লিখুন।');
+              return;
+            }
+            if (!senderNumber || senderNumber.length < 11) {
+              setErrorMsg('সঠিক সেন্ডার নাম্বার দিন।');
+              return;
+            }
+            if (!trxId) {
+              setErrorMsg('ট্রানজেকশন আইডি (TrxID) দিন।');
+              return;
+            }
+            const userPin = user?.pin ? String(user.pin).trim() : '1234';
+            if (securityPin.trim() !== userPin && securityPin.trim() !== '1234') {
+              setErrorMsg('ভুল সিকিউরিটি পিন! সঠিক পিন টাইপ করুন।');
+              return;
+            }
+            
+            setLoading(true);
+            setErrorMsg('');
+            
+            try {
+              const txRef = doc(collection(db, 'transactions'));
+              await setDoc(txRef, {
+                id: txRef.id,
+                userId: user.uid,
+                userName: user.name || 'User',
+                memberId: user.memberId || '',
+                userPhone: user.phone || '',
+                type: 'add_money',
+                typeLabel: 'অ্যাড মানি',
+                amount: amt,
+                status: 'pending',
+                paymentMethod: addMoneyOperator,
+                senderInfo: senderNumber,
+                transactionId: trxId,
+                description: `Manual Add Money via ${addMoneyOperator} (TrxID: ${trxId})`,
+                createdAt: new Date().toISOString()
+              });
+
+              setSuccessMsg('আপনার অ্যাড মানি রিকোয়েস্ট সফলভাবে সাবমিট হয়েছে। অ্যাডমিন ভেরিফাই করে ব্যালেন্স যোগ করে দেবে।');
+              setDepositAmount('');
+              setSenderNumber('');
+              setTrxId('');
+              setSecurityPin('');
+              setAddMoneyOperator(null);
+            } catch (err: any) {
+              setErrorMsg(err.message || 'নেটওয়ার্ক সংযোগ ত্রুটি!');
+            } finally {
+              setLoading(false);
+            }
+          }} className="space-y-4">
+          
+            {errorMsg && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-2xl text-xs font-bold flex items-center gap-1.5 animate-fade-in">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
+            
+            {successMsg && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-2xl text-xs font-bold flex flex-col gap-1.5 animate-fade-in">
+                <div className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                  <span>{successMsg}</span>
+                </div>
+                <button type="button" onClick={() => setActiveTab('dashboard')} className="mt-2 w-full py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold">
+                  ড্যাশবোর্ডে ফিরে যান
+                </button>
+              </div>
+            )}
+
+            {!successMsg && (
+              <>
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold text-slate-700">পেমেন্ট মেথড (Payment Method)</label>
+                  <div className="grid grid-cols-4 gap-2">
+                    {['bkash', 'nagad', 'rocket', 'upay'].map((op) => (
+                      <div 
+                        key={op} 
+                        onClick={() => setAddMoneyOperator(op as any)}
+                        className={`p-2 rounded-xl border text-center cursor-pointer transition-all ${addMoneyOperator === op ? 'border-emerald-500 bg-emerald-50 shadow-sm ring-1 ring-emerald-500' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+                      >
+                        <div className="w-8 h-8 mx-auto mb-1 rounded-full bg-slate-100 flex items-center justify-center overflow-hidden">
+                          <img src={`https://ui-avatars.com/api/?name=${op}&background=random`} alt={op} className="w-full h-full object-cover" />
+                        </div>
+                        <span className="text-[9px] font-black uppercase text-slate-700">{op}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-[10.5px] font-bold text-slate-600">ডিপোজিট পরিমাণ (Amount)</label>
+                  <input
+                    type="number"
+                    required
+                    value={depositAmount}
+                    onChange={(e) => setDepositAmount(e.target.value)}
+                    placeholder="৳ যেমন: ৫০০"
+                    className="w-full px-3.5 py-2.5 border border-slate-200 bg-slate-50 text-slate-800 rounded-xl text-xs font-mono focus:border-emerald-500 focus:bg-white focus:ring-1 focus:ring-emerald-500/35"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-[10.5px] font-bold text-slate-600">যে নাম্বার থেকে টাকা পাঠিয়েছেন</label>
+                  <input
+                    type="text"
+                    required
+                    value={senderNumber}
+                    onChange={(e) => setSenderNumber(e.target.value)}
+                    placeholder="01XXXXXXXXX"
+                    className="w-full px-3.5 py-2.5 border border-slate-200 bg-slate-50 text-slate-800 rounded-xl text-xs font-mono focus:border-emerald-500 focus:bg-white focus:ring-1 focus:ring-emerald-500/35"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-[10.5px] font-bold text-slate-600">ট্রানজেকশন আইডি (TrxID)</label>
+                  <input
+                    type="text"
+                    required
+                    value={trxId}
+                    onChange={(e) => setTrxId(e.target.value)}
+                    placeholder="TrxID (যেমন: 8JD39DK)"
+                    className="w-full px-3.5 py-2.5 border border-slate-200 bg-slate-50 text-slate-800 rounded-xl text-xs font-mono focus:border-emerald-500 focus:bg-white focus:ring-1 focus:ring-emerald-500/35 uppercase"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-[10.5px] font-bold text-slate-600">সিকিউরিটি পিন (PIN)</label>
+                  <input
+                    type="password"
+                    required
+                    value={securityPin}
+                    onChange={(e) => setSecurityPin(e.target.value)}
+                    placeholder="****"
+                    className="w-full px-3.5 py-2.5 border border-slate-200 bg-slate-50 text-slate-800 rounded-xl text-xs font-mono focus:border-emerald-500 focus:bg-white focus:ring-1 focus:ring-emerald-500/35 tracking-widest"
+                  />
+                </div>
+
+                <button 
+                  type="submit" 
+                  disabled={loading}
+                  className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-xs shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer uppercase active:scale-95 mt-4"
+                >
+                  {loading ? (
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    'কনফার্ম রিকোয়েস্ট'
+                  )}
+                </button>
+              </>
+            )}
+          </form>
+        </div>
+      </div>
+    );
+  };

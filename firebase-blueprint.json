@@ -223,9 +223,47 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "token", "updatedAt"]
+    },
+    "DeviceReleaseRequest": {
+      "title": "DeviceReleaseRequest",
+      "description": "Member complain and device release requests when phone is lost or broken",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userPhone": { "type": "string" },
+        "memberId": { "type": "string" },
+        "reason": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "userName", "userPhone", "reason", "status", "createdAt"]
+    },
+    "SamityInvestment": {
+      "title": "SamityInvestment",
+      "description": "Portfolio investment and buy/sell profit logs across gold, real estate, land and agriculture",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "category": { "type": "string", "enum": ["gold", "land", "agro", "business", "other"] },
+        "status": { "type": "string", "enum": ["active", "sold", "new"] },
+        "description": { "type": "string" },
+        "buyAmount": { "type": "number" },
+        "sellAmount": { "type": "number" },
+        "profitAmount": { "type": "number" },
+        "location": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "title", "category", "status", "description", "buyAmount", "createdAt"]
     }
   },
   "firestore": {
+    "device_release_requests/{requestId}": {
+      "schema": "DeviceReleaseRequest",
+      "description": "Stores user device reset / zero-device complaints and requests"
+    },
     "users/{userId}": {
       "schema": "User",
       "description": "Stores cooperative user records including security PIN configurations"
@@ -273,6 +311,10 @@
     "agentLocations/{userId}": {
       "schema": "AgentLocation",
       "description": "Real-time single latest high-precision GPS position per agent/user"
+    },
+    "samity_investments/{investmentId}": {
+      "schema": "SamityInvestment",
+      "description": "Stores company portfolio investments like gold, real estate, farm projects and transparency Facebook-style posts"
     },
     "users/{userId}/fcmTokens/{tokenId}": {
       "schema": "FcmToken",

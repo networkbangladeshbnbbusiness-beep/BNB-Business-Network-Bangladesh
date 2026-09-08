@@ -36,15 +36,15 @@ interface QardLiveTickerProps {
 // Preset verified premium members directory to simulate enterprise load
 const PRESET_RECEIVERS = [
   { name: "কামরুল হাসান", amount: 10000, category: "অ্যাডমিন সদস্য", address: "ঢাকা জোন-A", date: "এইমাত্র" },
-  { name: "সুজন মিয়া", amount: 5000, category: "সিলভার মেম্বার", address: "সিলেট ডিভিশন", date: "৩ মিনিট আগে" },
-  { name: "আব্দুল কুদ্দুস", amount: 5000, category: "সাধারণ সদস্য", address: "চট্টগ্রাম পোর্ট", date: "৭ মিনিট আগে" },
-  { name: "আরিফুল ইসলাম", amount: 2000, category: "নিড গ্রুপ সদস্য", address: "রাজশাহী সদর", date: "১৫ মিনিট আগে" },
-  { name: "আজহারুল ইসলাম", amount: 5000, category: "গোল্ড মেম্বার", address: "বরিশাল জোন", date: "২৮ মিনিট আগে" },
-  { name: "হাফিজুর রহমান", amount: 15000, category: "প্লাটিনাম মেম্বার", address: "রংপুর জোন", date: "৪৫ মিনিট আগে" },
-  { name: "মাসুম বিল্লাহ", amount: 5000, category: "সাধারণ সদস্য", address: "খুলনা সদর", date: "১ ঘন্টা আগে" },
-  { name: "মেহেদী হাসান", amount: 10000, category: "অ্যাডমিন সদস্য", address: "ময়মনসিংহ জোন", date: "২ ঘন্টা আগে" },
-  { name: "জাহিদুল ইসলাম", amount: 1000, category: "নিড গ্রুপ সদস্য", address: "গাজীপুর জোন", date: "৩ ঘন্টা আগে" },
-  { name: "তরিকুল ইসলাম", amount: 5000, category: "সাধারণ সদস্য", address: "কুমিল্লা সদর", date: "৪ ঘন্টা আগে" },
+  { name: "সুজন মিয়া", amount: 5000, category: "সিলভার মেম্বার", address: "সিলেট ডিভিশন", date: "3 মিনিট আগে" },
+  { name: "আব্দুল কুদ্দুস", amount: 5000, category: "সাধারণ সদস্য", address: "চট্টগ্রাম পোর্ট", date: "7 মিনিট আগে" },
+  { name: "আরিফুল ইসলাম", amount: 2000, category: "নিড গ্রুপ সদস্য", address: "রাজশাহী সদর", date: "15 মিনিট আগে" },
+  { name: "আজহারুল ইসলাম", amount: 5000, category: "গোল্ড মেম্বার", address: "বরিশাল জোন", date: "28 মিনিট আগে" },
+  { name: "হাফিজুর রহমান", amount: 15000, category: "প্লাটিনাম মেম্বার", address: "রংপুর জোন", date: "45 মিনিট আগে" },
+  { name: "মাসুম বিল্লাহ", amount: 5000, category: "সাধারণ সদস্য", address: "খুলনা সদর", date: "1 ঘন্টা আগে" },
+  { name: "মেহেদী হাসান", amount: 10000, category: "অ্যাডমিন সদস্য", address: "ময়মনসিংহ জোন", date: "2 ঘন্টা আগে" },
+  { name: "জাহিদুল ইসলাম", amount: 1000, category: "নিড গ্রুপ সদস্য", address: "গাজীপুর জোন", date: "3 ঘন্টা আগে" },
+  { name: "তরিকুল ইসলাম", amount: 5000, category: "সাধারণ সদস্য", address: "কুমিল্লা সদর", date: "4 ঘন্টা আগে" },
 ];
 
 export const QardLiveTicker: React.FC<QardLiveTickerProps> = ({
@@ -229,7 +229,7 @@ export const QardLiveTicker: React.FC<QardLiveTickerProps> = ({
       <div className="relative z-10 flex items-center justify-between text-[8px] sm:text-[9px] text-slate-500 font-sans pt-2 border-t border-slate-800/70">
         <span className="flex items-center gap-1">
           <ShieldCheck className="w-3 h-3 text-emerald-500" />
-          ১০০% কর্পোরেট নিশ্চয়তা
+          100% কর্পোরেট নিশ্চয়তা
         </span>
         <span className="font-mono text-slate-450 font-bold tracking-wider">
           Total Users: 10,000+

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import UnifiedBackButton from './UnifiedBackButton';
 import { 
   Lock, 
   HelpCircle, 
@@ -42,6 +43,7 @@ import {
   onSnapshot 
 } from 'firebase/firestore';
 import { User as UserType, Transaction } from '../types';
+import { useBackHandler } from '../lib/navigationManager';
 
 interface SafeDealsEscrowViewProps {
   liveUser: UserType;
@@ -82,7 +84,7 @@ export default function SafeDealsEscrowView({
       snapshot.forEach(docSnap => {
         list.push({ id: docSnap.id, ...docSnap.data() } as Transaction);
       });
-      list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
       setTxHistory(list);
     } catch (e) {
       console.error("Error fetching escrow tx:", e);
@@ -257,6 +259,21 @@ export default function SafeDealsEscrowView({
   const [searchingTicket, setSearchingTicket] = useState(false);
   const [supportTickets, setSupportTickets] = useState<any[]>([]);
 
+  // Safe Deals internal back handler
+  useBackHandler(() => {
+    if (showDisputeModal) { setShowDisputeModal(false); return true; }
+    if (showSupportHistoryModal) { setShowSupportHistoryModal(false); return true; }
+    if (showShipForm) { setShowShipForm(false); return true; }
+    if (showSendModal) { setShowSendModal(false); return true; }
+    if (showReceiveModal) { setShowReceiveModal(false); return true; }
+    if (showHelpModal) { setShowHelpModal(false); return true; }
+    if (showSectionTxHistory) { setShowSectionTxHistory(false); return true; }
+    if (selectedOrder) { setSelectedOrder(null); return true; }
+    if (voucherData) { setVoucherData(null); return true; }
+    if (confirmModalData) { setConfirmModalData(null); return true; }
+    return false;
+  }, true, 25);
+
   // Sync support tickets real-time
   useEffect(() => {
     if (!liveUser?.uid) return;
@@ -309,8 +326,8 @@ export default function SafeDealsEscrowView({
 
     const bNum = (num: any) => {
       const numbers: Record<string, string> = {
-        '0': '০', '1': '১', '2': '২', '3': '৩', '4': '৪',
-        '5': '৫', '6': '৬', '7': '৭', '8': '৮', '9': '৯'
+        '0': '0', '1': '1', '2': '2', '3': '3', '4': '4',
+        '5': '5', '6': '6', '7': '7', '8': '8', '9': '9'
       };
       return num.toString().split('').map((char: string) => numbers[char] || char).join('');
     };
@@ -320,10 +337,10 @@ export default function SafeDealsEscrowView({
 
   // Convert English number to Bengali number helper
   const englishToBengaliNumber = (num: any) => {
-    if (num === undefined || num === null) return '০';
+    if (num === undefined || num === null) return '0';
     const numbers: Record<string, string> = {
-      '0': '০', '1': '১', '2': '২', '3': '৩', '4': '৪',
-      '5': '৫', '6': '৬', '7': '৭', '8': '৮', '9': '৯'
+      '0': '0', '1': '1', '2': '2', '3': '3', '4': '4',
+      '5': '5', '6': '6', '7': '7', '8': '8', '9': '9'
     };
     return num.toString().split('').map((char: string) => numbers[char] || char).join('');
   };
@@ -773,14 +790,23 @@ export default function SafeDealsEscrowView({
         {/* Simple back arrow button inside the scrollable content container */}
         <div className="flex items-center justify-between gap-1 w-full flex-nowrap">
           <div className="flex items-center gap-1">
-            <button 
-              type="button"
-              onClick={() => onBack ? onBack() : window.history.back()}
-              className="flex items-center gap-1 px-2 py-1.5 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-[10px] sm:text-xs font-black rounded-xl shadow-4xs cursor-pointer transition-all shrink-0"
-            >
-              <ArrowLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[2.5]" /> 
-              <span><span className="hidden xs:inline">BNB </span>নিরাপদ লেনদেন</span>
-            </button>
+            <UnifiedBackButton
+              onClick={() => {
+                if (showDisputeModal) { setShowDisputeModal(false); return; }
+                if (showSupportHistoryModal) { setShowSupportHistoryModal(false); return; }
+                if (showShipForm) { setShowShipForm(false); return; }
+                if (showSendModal) { setShowSendModal(false); return; }
+                if (showReceiveModal) { setShowReceiveModal(false); return; }
+                if (showHelpModal) { setShowHelpModal(false); return; }
+                if (showSectionTxHistory) { setShowSectionTxHistory(false); return; }
+                if (selectedOrder) { setSelectedOrder(null); return; }
+                if (voucherData) { setVoucherData(null); return; }
+                if (confirmModalData) { setConfirmModalData(null); return; }
+                if (onBack) onBack();
+              }}
+              variant="dark"
+              title="পিছনে যান"
+            />
 
             <button 
               type="button"
@@ -1246,7 +1272,7 @@ export default function SafeDealsEscrowView({
                     type="number"
                     required
                     min="100"
-                    placeholder="নূন্যতম ১০০ টাকা"
+                    placeholder="নূন্যতম 100 টাকা"
                     value={sendAmount}
                     onChange={(e) => setSendAmount(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-slate-900 rounded-xl text-sm font-black focus:border-blue-500 font-mono"
@@ -1268,7 +1294,7 @@ export default function SafeDealsEscrowView({
 
                 {/* Security Pin */}
                 <div className="space-y-1">
-                  <label className="block text-xs font-extrabold text-slate-600">আপনার ৪ ডিজিটের নিরাপত্তা পিন নাম্বার *</label>
+                  <label className="block text-xs font-extrabold text-slate-600">আপনার 4 ডিজিটের নিরাপত্তা পিন নাম্বার *</label>
                   <input 
                     type="password"
                     required
@@ -1579,7 +1605,7 @@ export default function SafeDealsEscrowView({
                                   const file = e.target.files?.[0];
                                   if (file) {
                                     if (file.size > 2 * 1024 * 1024) {
-                                      alert('রসিদ ছবির সাইজ সর্বোচ্চ ২ মেগাবাইট হতে পারে!');
+                                      alert('রসিদ ছবির সাইজ সর্বোচ্চ 2 মেগাবাইট হতে পারে!');
                                       return;
                                     }
                                     setShipmentScreenshotName(file.name);
@@ -1717,18 +1743,18 @@ export default function SafeDealsEscrowView({
 
               <div className="space-y-3.5 text-xs text-slate-600 font-bold leading-relaxed font-sans">
                 <div className="space-y-1">
-                  <h4 className="text-slate-800 font-extrabold">১. এসক্রো বা নিরাপদ হোল্ড কি?</h4>
+                  <h4 className="text-slate-800 font-extrabold">1. এসক্রো বা নিরাপদ হোল্ড কি?</h4>
                   <p className="text-[11px] text-slate-500">নিরাপদ লেনদেন হল সমবায় ইউনিয়নের ডিজিটাল সমাধান। এখানে ক্রেতার টাকা বিক্রেতাকে সাথে সাথে দেওয়া হয় না। পণ্য ক্রেতা ভালোমতো হাতে বুঝে নিয়ে ওয়ালেটে 'পণ্য পেয়েছি' নিশ্চিত করলেই কেবল বিক্রেতা পেমেন্ট লাভ করেন।</p>
                 </div>
 
                 <div className="space-y-1">
-                  <h4 className="text-slate-800 font-extrabold">২. বিক্রেতা ট্র্যাকিং কিভাবে দিবেন?</h4>
+                  <h4 className="text-slate-800 font-extrabold">2. বিক্রেতা ট্র্যাকিং কিভাবে দিবেন?</h4>
                   <p className="text-[11px] text-slate-500">বিক্রেতা যখন পণ্যটি কোনো কুরিয়ারে বুকিং দেন, তখন সাথে সাথে প্রাপ্ত রসিদ বা মোমো নম্বর কুরিয়ার নাম সহ ইনপুট দিবেন। এটি দিলে স্ট্যাটাস পণ্য পাঠানো- তে হালনাগাদ হয়ে যায়।</p>
                 </div>
 
                 <div className="space-y-1">
-                  <h4 className="text-slate-800 font-extrabold">৩. ৭২ ঘণ্টার অটোমেটিক এডমিন সহায়তা</h4>
-                  <p className="text-[11px] text-slate-500">বিক্রেতা পণ্য সরবারাহ সম্পন্ন করার পরও যদি ক্রেতা ৭২ ঘণ্টার ভেতর টাকা রিলিজ না করেন বা কোনো অভিযোগ না পাঠান, তবে সমবায় এডমিন তদন্ত সাপেক্ষে লেনদেনটি সুরাহা করে থাকেন।</p>
+                  <h4 className="text-slate-800 font-extrabold">3. 72 ঘণ্টার অটোমেটিক এডমিন সহায়তা</h4>
+                  <p className="text-[11px] text-slate-500">বিক্রেতা পণ্য সরবারাহ সম্পন্ন করার পরও যদি ক্রেতা 72 ঘণ্টার ভেতর টাকা রিলিজ না করেন বা কোনো অভিযোগ না পাঠান, তবে সমবায় এডমিন তদন্ত সাপেক্ষে লেনদেনটি সুরাহা করে থাকেন।</p>
                 </div>
 
                 <div className="space-y-12 block pt-2">

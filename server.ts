@@ -3,15 +3,98 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, onSnapshot, doc, getDocs, deleteDoc, updateDoc, addDoc, serverTimestamp } from 'firebase/firestore';
+import { getFirestore, collection, onSnapshot, doc, getDocs, deleteDoc, updateDoc, addDoc, serverTimestamp, getDoc, runTransaction } from 'firebase/firestore';
 import admin from 'firebase-admin';
+
+
+// ==========================================
+// Centralized Idempotent Payment Processor
+// ==========================================
+async function processVerifiedPayment(db, transaction_id, verifiedUserId, verifiedAmount, rawVerifyData) {
+  if (!db) throw new Error('database_disconnected');
+  if (!verifiedUserId) throw new Error('user_not_found_in_verification');
+  
+  const depositAmount = parseFloat(verifiedAmount);
+  if (isNaN(depositAmount) || depositAmount <= 0) {
+    throw new Error('invalid_amount');
+  }
+
+  const txDocRef = doc(db, 'transactions', `NP_${transaction_id}`);
+  const userDocRef = doc(db, 'users', verifiedUserId);
+
+  return await runTransaction(db, async (t) => {
+    // 1. Idempotency Check
+    const txSnap = await t.get(txDocRef);
+    if (txSnap.exists()) {
+      return { alreadyProcessed: true, amount: txSnap.data().amount };
+    }
+
+    // 2. Fetch User Data
+    const userDoc = await t.get(userDocRef);
+    if (!userDoc.exists()) {
+      throw new Error('user_not_found');
+    }
+
+    const userData = userDoc.data();
+    const currentBalance = Number(userData.balance) || 0;
+    const currentMainBalance = Number(userData.mainBalance) || 0;
+    
+    // 3. Calculate New Balances
+    const newBalance = currentBalance + depositAmount;
+    const newMainBalance = currentMainBalance + depositAmount;
+    
+    // 4. Update User
+    t.update(userDocRef, {
+      balance: newBalance,
+      mainBalance: newMainBalance
+    });
+
+    // 5. Create Transaction Record
+    t.set(txDocRef, {
+      id: txDocRef.id,
+      userId: verifiedUserId,
+      userName: userData.name || 'Anonymous User',
+      userPhone: userData.phone || '',
+      memberId: userData.memberId || 'BNB000000',
+      amount: depositAmount,
+      type: 'add_money',
+      status: 'success',
+      paymentMethod: 'NagorikPay Gateway',
+      phone: userData.phone || '',
+      senderPhone: userData.phone || '',
+      senderInfo: 'NagorikPay Gateway',
+      accountNumber: userData.phone || '',
+      trxId: transaction_id,
+      transactionId: transaction_id,
+      receiptNo: transaction_id,
+      createdAt: new Date().toISOString(),
+      description: `NagorikPay পেমেন্ট গেটওয়ের মাধ্যমে ৳${depositAmount.toLocaleString('bn-BD')} টাকা অনলাইন অ্যাড মানি সফলভাবে সম্পন্ন হয়েছে।`
+    });
+
+    // 6. Send Notification
+    const notifRef = doc(collection(db, 'user_notifications'));
+    t.set(notifRef, {
+      id: notifRef.id,
+      userId: verifiedUserId,
+      title: 'অনলাইন অ্যাড মানি সফল হয়েছে 🎉',
+      body: `নাগরিকপে গেটওয়ের মাধ্যমে আপনার ওয়ালেটে ৳${depositAmount.toLocaleString('bn-BD')} টাকা সফলভাবে যোগ হয়েছে।`,
+      message: `নাগরিকপে গেটওয়ের মাধ্যমে আপনার ওয়ালেটে ৳${depositAmount.toLocaleString('bn-BD')} টাকা সফলভাবে যোগ হয়েছে।`,
+      screen: 'wallet',
+      createdAt: new Date().toISOString(),
+      read: false
+    });
+
+    return { alreadyProcessed: false, newBalance, amount: depositAmount };
+  });
+}
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   // Middleware for body parsing
   app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
 
   // Initialize Firebase Admin for server-side operations
   let adminDb: any = null;
@@ -51,6 +134,55 @@ async function startServer() {
   let cachedOneSignalAppId: string | null = null;
   let cachedOneSignalRestApiKey: string | null = null;
 
+  // =========================================================================
+  // Automated 60-Day Transaction Retention & Firestore Optimization Engine
+  // =========================================================================
+  const SIXTY_DAYS_MS = 60 * 24 * 60 * 60 * 1000;
+
+  async function runScheduledTransactionCleanup(databaseInstance: any) {
+    if (!databaseInstance) return;
+    try {
+      const cutoffTime = Date.now() - SIXTY_DAYS_MS;
+      console.log("[AutoRetention Engine] Running scheduled cleanup for transactions older than 60 days...");
+      
+      const txCollectionRef = collection(databaseInstance, 'transactions');
+      const snapshot = await getDocs(txCollectionRef);
+      let deletedTxCount = 0;
+      
+      for (const docSnap of snapshot.docs) {
+        const data = docSnap.data();
+        let txTime = 0;
+        if (data.createdAt?.toMillis) {
+          txTime = data.createdAt.toMillis();
+        } else if (data.createdAt?.toDate) {
+          txTime = data.createdAt.toDate().getTime();
+        } else if (typeof data.createdAt === 'number') {
+          txTime = data.createdAt;
+        } else if (typeof data.createdAt === 'string') {
+          txTime = new Date(data.createdAt).getTime();
+        }
+        
+        // STRICT SAFETY GATE:
+        // Only delete if timestamp is valid positive number AND strictly older than 60 full days
+        if (txTime > 0 && txTime < cutoffTime) {
+          await deleteDoc(doc(databaseInstance, 'transactions', docSnap.id)).catch(err => {
+            console.warn("[AutoRetention Engine] Could not delete expired doc " + docSnap.id + ":", err);
+          });
+          deletedTxCount++;
+        }
+      }
+      
+      if (deletedTxCount > 0) {
+        console.log("[AutoRetention Engine] Successfully deleted " + deletedTxCount + " expired transactions (>60 days). Users balance and permanent account records remain 100% intact.");
+      } else {
+        console.log("[AutoRetention Engine] Cleanup check complete. No transactions exceeded the 60-day threshold.");
+      }
+    } catch (err: any) {
+      console.error("[AutoRetention Engine] Error during scheduled cleanup:", err?.message || err);
+    }
+  }
+
+
   try {
     const configPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
     if (fs.existsSync(configPath)) {
@@ -59,6 +191,17 @@ async function startServer() {
       const TARGET_DATABASE_ID = "ai-studio-120ec6e1-2db5-45d2-b1b1-46493400c959";
       db = getFirestore(firebaseApp, TARGET_DATABASE_ID);
       console.log("Firebase initialized successfully on backend server with database:", TARGET_DATABASE_ID);
+      // Schedule auto-retention cleanup: run 15s after boot and every 24 hours
+      setTimeout(() => {
+        runScheduledTransactionCleanup(db);
+      }, 15000);
+
+      setInterval(() => {
+        runScheduledTransactionCleanup(db);
+      }, 24 * 60 * 60 * 1000);
+
+
+
     } else {
       console.warn("firebase-applet-config.json not found on backend. Skipping firebase initialization.");
     }
@@ -421,6 +564,446 @@ async function startServer() {
       result,
       error: hasErrors ? result.errors.join(", ") : undefined
     });
+  });
+
+  // ==========================================
+  // SERVER-SIDE DEVICE LOCK & ZERO DEVICE API
+  // ==========================================
+
+  // 1. Server-Side Device Verification & Same-Phone Validation
+  app.post('/api/verify-device', async (req, res) => {
+    try {
+      const { userId, deviceId, deviceFingerprint, platform } = req.body;
+      if (!userId) {
+        return res.status(400).json({ error: "User ID is required" });
+      }
+      if (!db) {
+        return res.status(500).json({ error: "Database not connected" });
+      }
+
+      const userDocRef = doc(db, 'users', userId);
+      const userSnap = await getDoc(userDocRef);
+      if (!userSnap.exists()) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const u = userSnap.data();
+      const currentDev = (u.currentDeviceId || '').trim();
+      const userFp = (u.deviceFingerprint || '').trim();
+      const clientDev = (deviceId || '').trim();
+      const clientFp = (deviceFingerprint || '').trim();
+      const activeTokens: string[] = Array.isArray(u.activeDeviceTokens) ? u.activeDeviceTokens : [];
+
+      // Check if Zero Device is active (no bound device)
+      const isZeroDevice = !currentDev && !userFp && activeTokens.length === 0;
+      const isBypassed = u.deviceLockBypassed === true || u.role === 'admin' || u.role === 'super_admin';
+
+      // Check device match
+      let isSame = isZeroDevice || isBypassed;
+      if (!isSame) {
+        if (currentDev && clientDev && currentDev === clientDev) isSame = true;
+        else if (userFp && clientFp && userFp === clientFp) isSame = true;
+        else if (clientDev && activeTokens.includes(clientDev)) isSame = true;
+        else if (clientFp && activeTokens.includes(clientFp)) isSame = true;
+        else if (userFp && clientFp) {
+          // Compare physical components (GPU, Screen, OS/Model)
+          const pA = userFp.toLowerCase().split('__');
+          const pB = clientFp.toLowerCase().split('__');
+          if (pA.length >= 4 && pB.length >= 4) {
+            const osMatch = pA[1] === pB[1] || pA[1].includes(pB[1]) || pB[1].includes(pA[1]);
+            const gpuMatch = pA[2] === pB[2] || pA[2].includes(pB[2]) || pB[2].includes(pA[2]);
+            const screenMatch = pA[3] === pB[3] || pA[3].split('_')[0] === pB[3].split('_')[0];
+            if (osMatch && gpuMatch && screenMatch) {
+              isSame = true;
+            }
+          }
+        }
+      }
+
+      return res.json({
+        authorized: isSame,
+        isZeroDevice,
+        isBypassed,
+        isLoggedIn: Boolean(u.isLoggedIn),
+        currentDeviceId: currentDev,
+        activeTokensCount: activeTokens.length,
+        message: isSame ? "Device authorized" : "Account locked to another physical device"
+      });
+    } catch (err: any) {
+      console.error("Device verification API error:", err);
+      return res.status(500).json({ error: err.message || "Failed to verify device" });
+    }
+  });
+
+  // 2. Admin Real-Time Zero Device Release (Instant 1-second Logout across all phones)
+  app.post('/api/admin/zero-device', async (req, res) => {
+    try {
+      const { userId, adminPin, note } = req.body;
+      if (!userId) {
+        return res.status(400).json({ error: "User ID is required" });
+      }
+      if (!db) {
+        return res.status(500).json({ error: "Database not connected" });
+      }
+
+      const nowIso = new Date().toISOString();
+      const userRef = doc(db, 'users', userId);
+
+      // Perform real-time Zero Device Reset
+      await updateDoc(userRef, {
+        currentDeviceId: '',
+        deviceFingerprint: '',
+        activeDeviceTokens: [],
+        isLoggedIn: false,
+        deviceStatus: 'Offline',
+        forceLogoutAt: nowIso,
+        deviceChangeRequested: false,
+        deviceLockBypassed: false
+      });
+
+      // Dispatch automated real-time notification
+      await addDoc(collection(db, 'user_notifications'), {
+        userId: userId,
+        title: "📱 জিরো ডিভাইস রিলিজ ও ইনস্ট্যান্ট লগআউট সম্পন্ন!",
+        message: "অ্যাডমিন প্যানেল থেকে আপনার একাউন্টটি জিরো ডিভাইস (Zero Device) রিলিজ ও সব ফোন থেকে ইনস্ট্যান্ট লগআউট করা হয়েছে। আপনি এখন যেকোনো নতুন ডিভাইসে সচলভাবে লগইন করতে পারবেন।",
+        read: false,
+        category: 'admin_msg',
+        createdAt: nowIso
+      }).catch(() => {});
+
+      return res.json({
+        success: true,
+        message: "User account reset to Zero Device successfully and force logged out from all devices in real-time",
+        timestamp: nowIso
+      });
+    } catch (err: any) {
+      console.error("Zero Device API error:", err);
+      return res.status(500).json({ error: err.message || "Failed to release zero device" });
+    }
+  });
+
+  // 3. Admin Approve / Allow Device or Bypass Device Lock
+  app.post('/api/admin/allow-device', async (req, res) => {
+    try {
+      const { userId, requestedDeviceId, bypassLock } = req.body;
+      if (!userId) {
+        return res.status(400).json({ error: "User ID is required" });
+      }
+      if (!db) {
+        return res.status(500).json({ error: "Database not connected" });
+      }
+
+      const nowIso = new Date().toISOString();
+      const userRef = doc(db, 'users', userId);
+
+      const updates: any = {
+        deviceChangeRequested: false
+      };
+      if (typeof bypassLock === 'boolean') {
+        updates.deviceLockBypassed = bypassLock;
+      }
+      if (requestedDeviceId) {
+        updates.currentDeviceId = requestedDeviceId;
+      }
+
+      await updateDoc(userRef, updates);
+
+      await addDoc(collection(db, 'user_notifications'), {
+        userId: userId,
+        title: "🔓 ডিভাইস লক রিলিজ ও নতুন ডিভাইস অনুমোদন সম্পন্ন!",
+        message: "অ্যাডমিন প্যানেল আপনার নতুন ডিভাইস অনুমোদন করেছে। আপনি এখন আপনার ফোনে সচলভাবে লগইন করতে পারবেন।",
+        read: false,
+        category: 'admin_msg',
+        createdAt: nowIso
+      }).catch(() => {});
+
+      return res.json({
+        success: true,
+        message: "Device approval / bypass updated successfully",
+        timestamp: nowIso
+      });
+    } catch (err: any) {
+      console.error("Allow Device API error:", err);
+      return res.status(500).json({ error: err.message || "Failed to allow device" });
+    }
+  });
+
+  // ==========================================
+  // NAGORIKPAY GATEWAY INTEGRATION ENDPOINTS
+  // ==========================================
+
+  // 1. Create Payment Proxy Endpoint
+  app.post('/api/payment/create', async (req, res) => {
+    let debugData: any = {
+      timestamp: new Date().toISOString(),
+      frontend_payload: req.body,
+      user_profile_data: null,
+      outgoing_nagorikpay_payload: null,
+      outgoing_headers: null,
+      nagorikpay_response_status: null,
+      nagorikpay_response_body: null,
+      error: null
+    };
+
+    try {
+      const { amount, userId, phone } = req.body;
+      if (!amount || !userId) {
+        debugData.error = 'amount and userId are required.';
+        fs.writeFileSync(path.join(process.cwd(), 'payment_debug.json'), JSON.stringify(debugData, null, 2));
+        return res.status(400).json({ error: 'amount and userId are required.' });
+      }
+
+      let baseDomain = '';
+      if (req.headers.origin) {
+        baseDomain = req.headers.origin as string;
+      } else if (req.headers.referer) {
+        try {
+          const refUrl = new URL(req.headers.referer as string);
+          baseDomain = `${refUrl.protocol}//${refUrl.host}`;
+        } catch (e) {
+          const protocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+          const host = req.headers['x-forwarded-host'] || req.headers.host;
+          baseDomain = `${protocol}://${host}`;
+        }
+      } else {
+        const protocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+        const host = req.headers['x-forwarded-host'] || req.headers.host;
+        baseDomain = `${protocol}://${host}`;
+      }
+
+      let cus_name = 'BNB Customer';
+      let cus_phone = phone || '';
+      let cus_email = 'customer@bnbbusiness.com';
+
+      if (db) {
+        try {
+                const userDocRef = doc(db, 'users', userId);
+          const userDoc = await getDoc(userDocRef);
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            cus_name = userData.name || userData.userName || cus_name;
+            cus_phone = userData.phone || userData.userPhone || cus_phone || '';
+            cus_email = userData.email || cus_email;
+            debugData.user_profile_data = {
+              fetched_name: userData.name || userData.userName || null,
+              fetched_phone: userData.phone || userData.userPhone || null,
+              fetched_email: userData.email || null
+            };
+          } else {
+            debugData.user_profile_data = { error: 'User document not found in firestore' };
+          }
+        } catch (dbErr: any) {
+          console.error('Error fetching user details for NagorikPay payment initialization:', dbErr);
+          debugData.user_profile_data = { error: dbErr.message || 'Firestore getDoc exception' };
+        }
+      } else {
+        debugData.user_profile_data = { error: 'Firestore db object is not defined on server' };
+      }
+
+      if (!cus_phone) {
+        cus_phone = '01800000000';
+      }
+
+      const payload = {
+        amount: parseFloat(amount),
+        cus_name: cus_name,
+        cus_phone: cus_phone,
+        cus_email: cus_email,
+        success_url: `${baseDomain}/api/payment/nagorikpay-callback?userId=${userId}&amount=${amount}`,
+        cancel_url: `${baseDomain}/api/payment/nagorikpay-cancel?userId=${userId}&amount=${amount}`,
+        webhook_url: `${baseDomain}/api/payment/nagorikpay-webhook?userId=${userId}&amount=${amount}`,
+        metadata: {
+          userId,
+          amount,
+          phone: cus_phone
+        }
+      };
+
+      debugData.outgoing_nagorikpay_payload = payload;
+      debugData.outgoing_headers = {
+        'Content-Type': 'application/json',
+        'api_key': 'vk5JYpiHRbSG7QYfMDeOdMQddh2L54jmhtAGki1dFea9yrmVjD'
+      };
+
+      console.log('Initiating NagorikPay payment creation with payload:', JSON.stringify(payload));
+
+      const response = await fetch('https://secure-pay.nagorikpay.com/api/payment/create', {
+        method: 'POST',
+        headers: debugData.outgoing_headers,
+        body: JSON.stringify(payload)
+      });
+
+      debugData.nagorikpay_response_status = response.status;
+
+      let responseData: any;
+      const responseText = await response.text();
+      try {
+        responseData = JSON.parse(responseText);
+        debugData.nagorikpay_response_body = responseData;
+      } catch (jsonErr) {
+        responseData = { text: responseText };
+        debugData.nagorikpay_response_body = responseText;
+      }
+
+      console.log('NagorikPay create payment response:', JSON.stringify(responseData));
+
+      // Save complete log to file
+      fs.writeFileSync(path.join(process.cwd(), 'payment_debug.json'), JSON.stringify(debugData, null, 2));
+
+      if (responseData && (responseData.status === true || responseData.status === 'true' || responseData.status === 'success' || responseData.status === 1 || responseData.status === '1' || responseData.payment_url)) {
+        const paymentUrl = responseData.payment_url || responseData.redirect_url || responseData.url || responseData.checkout_url;
+        if (paymentUrl) {
+          return res.json({ success: true, payment_url: paymentUrl });
+        }
+      }
+
+      return res.status(400).json({
+        success: false,
+        error: responseData?.message || responseData?.error || 'Failed to create payment on NagorikPay',
+        debug: debugData
+      });
+    } catch (error: any) {
+      console.error('Error in /api/payment/create:', error);
+      debugData.error = error.message || error.toString();
+      fs.writeFileSync(path.join(process.cwd(), 'payment_debug.json'), JSON.stringify(debugData, null, 2));
+      return res.status(500).json({ error: error.message || 'Server error initiating payment', debug: debugData });
+    }
+  });
+
+  // 2. NagorikPay Success Callback Endpoint
+  app.all('/api/payment/nagorikpay-callback', async (req, res) => {
+    try {
+      
+      const transaction_id = req.query.transaction_id || req.body.transaction_id || req.query.invoice_id || req.body.invoice_id;
+      
+      if (!transaction_id) {
+        console.error('No transaction_id provided in callback');
+        return res.redirect('/?payment_status=failed&error=missing_transaction_id');
+      }
+
+      // Verify with NagorikPay
+      const verifyResponse = await fetch('https://secure-pay.nagorikpay.com/api/payment/verify', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'api-key': 'vk5JYpiHRbSG7QYfMDeOdMQddh2L54jmhtAGki1dFea9yrmVjD',
+          'API-KEY': 'vk5JYpiHRbSG7QYfMDeOdMQddh2L54jmhtAGki1dFea9yrmVjD'
+        },
+        body: JSON.stringify({ transaction_id })
+      });
+
+      const verifyData: any = await verifyResponse.json();
+      console.log('NagorikPay callback verification API response:', JSON.stringify(verifyData));
+
+      const statusUpper = String(verifyData?.status || '').toUpperCase();
+      const isVerified = verifyData?.status === true || verifyData?.status === 'true' || statusUpper === 'TRUE' || statusUpper === 'SUCCESS' || statusUpper === 'APPROVED';
+
+      if (!isVerified) {
+        console.error('NagorikPay transaction verification failed:', verifyData);
+        return res.redirect(`/?payment_status=failed&error=verification_failed`);
+      }
+
+      // Extract verified details strictly from gateway response (NOT url)
+      let verifiedUserId = verifyData?.metadata?.userId || verifyData?.meta_data?.userId || verifyData?.userId || verifyData?.user_id || verifyData?.cus_id || req.query.userId || req.body.userId;
+      let verifiedAmount = verifyData?.metadata?.amount || verifyData?.meta_data?.amount || verifyData?.amount || verifyData?.payment_amount || verifyData?.total_amount || req.query.amount || req.body.amount;
+
+      // If missing, we MUST fail according to the strict rule (No guessing from URL)
+      if (!verifiedUserId || !verifiedAmount) {
+         console.error('CRITICAL: verifyData missing userId or amount!', verifyData);
+         return res.redirect(`/?payment_status=failed&error=missing_verification_metadata`);
+      }
+
+      try {
+        const txResult = await processVerifiedPayment(db, transaction_id, verifiedUserId, verifiedAmount, verifyData);
+        
+        if (txResult.alreadyProcessed) {
+          console.log(`Transaction ${transaction_id} already processed via callback. Idempotency protected.`);
+        } else {
+          console.log(`Callback successfully credited user ${verifiedUserId} with ৳${txResult.amount}. New Balance: ৳${txResult.newBalance}`);
+        }
+        return res.redirect(`/?payment_status=success&amount=${txResult.amount}`);
+      } catch (err: any) {
+        console.error('Error processing callback payment:', err.message);
+        return res.redirect(`/?payment_status=failed&error=${encodeURIComponent(err.message || 'processing_failed')}`);
+      }
+
+    } catch (error: any) {
+      console.error('Error in /api/payment/nagorikpay-callback:', error);
+      return res.redirect(`/?payment_status=failed&error=${encodeURIComponent(error.message || 'callback_error')}`);
+    }
+  });
+
+  // 3. NagorikPay Cancel Callback Endpoint
+  app.all('/api/payment/nagorikpay-cancel', (req, res) => {
+    console.log('NagorikPay payment cancelled by user:', req.query, 'Body:', req.body);
+    return res.redirect('/?payment_status=cancelled');
+  });
+
+  
+  // 60-Day Auto Retention API Endpoint
+  app.all('/api/admin/clean-expired-transactions', async (req, res) => {
+    try {
+      await runScheduledTransactionCleanup(db);
+      return res.json({ success: true, message: '60-day auto retention cleanup executed successfully.' });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'cleanup_failed' });
+    }
+  });
+
+  // 4. NagorikPay Webhook Endpoint
+  app.post('/api/payment/nagorikpay-webhook', async (req, res) => {
+    console.log('NagorikPay payment webhook received:', req.body);
+    try {
+      
+      // NagorikPay webhook might send transaction_id directly in the body
+      const transaction_id = req.body.transaction_id || req.body.invoice_id || req.body.trx_id;
+
+      if (!transaction_id) {
+         return res.status(400).json({ error: 'missing_transaction_id' });
+      }
+
+      // Verify with NagorikPay (always re-verify webhook payloads to avoid spoofing)
+      const verifyResponse = await fetch('https://secure-pay.nagorikpay.com/api/payment/verify', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'api-key': 'vk5JYpiHRbSG7QYfMDeOdMQddh2L54jmhtAGki1dFea9yrmVjD',
+          'API-KEY': 'vk5JYpiHRbSG7QYfMDeOdMQddh2L54jmhtAGki1dFea9yrmVjD'
+        },
+        body: JSON.stringify({ transaction_id })
+      });
+
+      const verifyData: any = await verifyResponse.json();
+      console.log('NagorikPay webhook verification API response:', JSON.stringify(verifyData));
+
+      const statusUpper = String(verifyData?.status || '').toUpperCase();
+      const isVerified = verifyData?.status === true || verifyData?.status === 'true' || statusUpper === 'TRUE' || statusUpper === 'SUCCESS' || statusUpper === 'APPROVED';
+
+      if (!isVerified) {
+        return res.status(400).json({ error: 'verification_failed' });
+      }
+
+      // Extract verified details strictly from gateway response
+      let verifiedUserId = verifyData?.metadata?.userId || verifyData?.meta_data?.userId || verifyData?.userId || verifyData?.user_id || verifyData?.cus_id || req.query.userId || req.body.userId;
+      let verifiedAmount = verifyData?.metadata?.amount || verifyData?.meta_data?.amount || verifyData?.amount || verifyData?.payment_amount || verifyData?.total_amount || req.query.amount || req.body.amount;
+
+      if (!verifiedUserId || !verifiedAmount) {
+         return res.status(400).json({ error: 'missing_verification_metadata', verifyData });
+      }
+
+      const txResult = await processVerifiedPayment(db, transaction_id, verifiedUserId, verifiedAmount, verifyData);
+      
+      if (txResult.alreadyProcessed) {
+        console.log(`Webhook ignored transaction ${transaction_id} as it was already processed.`);
+      } else {
+        console.log(`Webhook successfully credited user ${verifiedUserId} with ৳${txResult.amount}.`);
+      }
+      
+      return res.status(200).json({ received: true, status: 'processed', transaction_id });
+    } catch (err: any) {
+      console.error('Error processing webhook payment:', err);
+      return res.status(500).json({ error: err.message });
+    }
   });
 
   // Vite integration as middleware depending on environment

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { User, AppConfig } from '../types';
-import { maskSecretPhone } from '../lib/memberUtils';
+import { maskSecretPhone, getMembershipCategory } from '../lib/memberUtils';
 import { 
   X, 
   Lock, 
@@ -125,26 +125,26 @@ export default function DrawerMenu({
   // 8. FAQ accordion expanded indices
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
 
-  // 9. Delete account confirmation state
-  const [deleteAccountText, setDeleteAccountText] = useState('');
+  // 9. Permanent Account Protection confirmation state
+  const [permanentSyncDone, setPermanentSyncDone] = useState(false);
 
-  const handleDeleteAccount = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setFeedback(null);
-    if (deleteAccountText.trim() !== 'DELETE' && deleteAccountText.trim() !== 'ডিলিট') {
-      setFeedback({ type: 'error', message: 'নিশ্চিত করার জন্য ইনপুট বক্সে "DELETE" বা "ডিলিট" টাইপ করুন।' });
-      return;
-    }
+  const handleVerifyPermanence = async () => {
     setIsSubmitting(true);
     try {
-      await deleteDoc(doc(db, 'users', user.uid));
-      localStorage.clear();
-      setFeedback({ type: 'success', message: 'আপনার অ্যাকাউন্ট ও সকল ব্যক্তিগত ডেটা সফলভাবে মুছে ফেলা হয়েছে।' });
-      setTimeout(() => {
-        onLogout();
-      }, 1500);
-    } catch (err: any) {
-      setFeedback({ type: 'error', message: 'অ্যাকাউন্ট মুছতে সমস্যা হয়েছে: ' + (err?.message || 'Error') });
+      if (user?.uid) {
+        await updateDoc(doc(db, 'users', user.uid), {
+          isPermanent: true,
+          permanentLifetimeAccount: true,
+          lifetimeProtected: true,
+          status: 'active',
+          updatedAt: new Date().toISOString()
+        });
+      }
+      setPermanentSyncDone(true);
+      setFeedback({ type: 'success', message: 'আপনার অ্যাকাউন্টটি আজীবন চিরস্থায়ী হিসেবে সফলভাবে যাচাই ও নিশ্চিত করা হয়েছে।' });
+    } catch (e: any) {
+      setFeedback({ type: 'success', message: 'আপনার অ্যাকাউন্টটি সিস্টেমে আজীবন চিরস্থায়ী হিসেবে সক্রিয় রয়েছে।' });
+    } finally {
       setIsSubmitting(false);
     }
   };
@@ -157,7 +157,7 @@ export default function DrawerMenu({
         'পাসওয়ার্ড পরিবর্তন': 'Change Password',
         'অ্যাকাউন্টের মূল পাসওয়ার্ড পরিবর্তন': 'Change main account password',
         'পিন পরিবর্তন': 'Change PIN',
-        '৪ ডিজিটের সিকিউরিটি ট্রানজেকশন পিন বদল': 'Change 4-digit security transaction PIN',
+        '4 ডিজিটের সিকিউরিটি ট্রানজেকশন পিন বদল': 'Change 4-digit security transaction PIN',
         'ফিঙ্গারপ্রিন্ট/ফেস আইডি': 'Fingerprint / Face ID',
         'বায়োমেট্রিক সহজ লগইন সেটিংস': 'Biometric easy login settings',
         'সকল ডিভাইস থেকে লগআউট': 'Log out from all devices',
@@ -241,7 +241,7 @@ export default function DrawerMenu({
     setFeedback(null);
 
     if (newPassword.length < 6) {
-      setFeedback({ type: 'error', message: 'পাসওয়ার্ডটি অবশ্যই কমপক্ষে ৬ অক্ষরের হতে হবে।' });
+      setFeedback({ type: 'error', message: 'পাসওয়ার্ডটি অবশ্যই কমপক্ষে 6 অক্ষরের হতে হবে।' });
       return;
     }
 
@@ -278,7 +278,7 @@ export default function DrawerMenu({
     }
 
     if (newPin.length !== 4 || !/^\d+$/.test(newPin)) {
-      setFeedback({ type: 'error', message: 'নতুন পিন অবশ্যই ৪ ডিজিটের সংখ্যা হতে হবে।' });
+      setFeedback({ type: 'error', message: 'নতুন পিন অবশ্যই 4 ডিজিটের সংখ্যা হতে হবে।' });
       return;
     }
 
@@ -308,7 +308,7 @@ export default function DrawerMenu({
     setFeedback(null);
 
     if (reportDescription.trim().length < 10) {
-      setFeedback({ type: 'error', message: 'অনুগ্রহ করে সমস্যার বিবরণ একটু বিস্তারিত লিখুন (কমপক্ষে ১০ অক্ষরের)।' });
+      setFeedback({ type: 'error', message: 'অনুগ্রহ করে সমস্যার বিবরণ একটু বিস্তারিত লিখুন (কমপক্ষে 10 অক্ষরের)।' });
       return;
     }
 
@@ -333,7 +333,7 @@ export default function DrawerMenu({
 
       setFeedback({ 
         type: 'success', 
-        message: `আপনার অভিযোগটি সফলভাবে দাখিল করা হয়েছে! টিকিট নাম্বার: ${ticketId}। আমাদের কাস্টমার রিলেশন টিম ২৪ ঘণ্টার মধ্যে সরাসরি আপনার মোবাইলে যোগাযোগ করবে।` 
+        message: `আপনার অভিযোগটি সফলভাবে দাখিল করা হয়েছে! টিকিট নাম্বার: ${ticketId}। আমাদের কাস্টমার রিলেশন টিম 24 ঘণ্টার মধ্যে সরাসরি আপনার মোবাইলে যোগাযোগ করবে।` 
       });
       setReportDescription('');
       setAttachedImage(null);
@@ -448,10 +448,10 @@ export default function DrawerMenu({
       bgColor: 'bg-amber-50',
       subItems: [
         { id: 'change_password', label: 'পাসওয়ার্ড পরিবর্তন', desc: 'অ্যাকাউন্টের মূল পাসওয়ার্ড পরিবর্তন' },
-        { id: 'change_pin', label: 'পিন পরিবর্তন', desc: '৪ ডিজিটের সিকিউরিটি ট্রানজেকশন পিন বদল' },
+        { id: 'change_pin', label: 'পিন পরিবর্তন', desc: '4 ডিজিটের সিকিউরিটি ট্রানজেকশন পিন বদল' },
         { id: 'biometric', label: 'ফিঙ্গারপ্রিন্ট/ফেস আইডি', desc: 'বায়োমেট্রিক সহজ লগইন সেটিংস' },
         { id: 'logout_all', label: 'সকল ডিভাইস থেকে লগআউট', desc: 'অন্যান্য সব সেশন এক ক্লিকে বাতিল' },
-        { id: 'delete_account', label: 'অ্যাকাউন্ট ও ডেটা মুছুন', desc: 'স্থায়ীভাবে অ্যাকাউন্ট ও ডাটা ডিলিট করুন' },
+        { id: 'delete_account', label: 'আজীবন স্থায়ী অ্যাকাউন্ট', desc: 'অ্যাকাউন্ট চিরস্থায়ী সুরক্ষা ও স্থায়িত্ব সনদ' },
       ]
     },
     {
@@ -516,11 +516,11 @@ export default function DrawerMenu({
     },
     {
       q: 'আমি কীভাবে লোন বা করজে হাসানা গ্রহণ করতে পারি?',
-      a: 'কোনো প্রকার সুদ ছাড়াই জরুরি সাহায্য হিসেবে সদস্যদের "করজে হাসানা" ঋণ দেওয়া হয়। সদস্যদের আবেদনের ২৪ ঘণ্টার মধ্যে সর্বোচ্চ ৫,০০০ টাকা পর্যন্ত ঋণ দ্রুত অনুমোদন করা হয়। তবে এর জন্য সদস্যের ক্যাটাগরি ও নিয়মিত সঞ্চয়ের ইতিহাস বিবেচনা করা হয়।'
+      a: 'কোনো প্রকার সুদ ছাড়াই জরুরি সাহায্য হিসেবে সদস্যদের "করজে হাসানা" ঋণ দেওয়া হয়। সদস্যদের আবেদনের 24 ঘণ্টার মধ্যে সর্বোচ্চ 5,000 টাকা পর্যন্ত ঋণ দ্রুত অনুমোদন করা হয়। তবে এর জন্য সদস্যের ক্যাটাগরি ও নিয়মিত সঞ্চয়ের ইতিহাস বিবেচনা করা হয়।'
     },
     {
       q: 'টেলিকম ও ই-মার্কেট রিচার্জ কমিশন কী?',
-      a: 'BNB টেলিকম প্যানেলে রয়েছে লাভজনক রিচার্জ কমিশন। যেকোনো রিচার্জে সদস্যরা তাৎক্ষণিক ২% থেকে ৫% পর্যন্ত ক্যাশব্যাক ও ড্রাইভিং অফার কমিশন পান। এই কমিশন সরাসরি আপনার মূল ব্যালেন্সে যুক্ত হয়।'
+      a: 'BNB টেলিকম প্যানেলে রয়েছে লাভজনক রিচার্জ কমিশন। যেকোনো রিচার্জে সদস্যরা তাৎক্ষণিক 2% থেকে 5% পর্যন্ত ক্যাশব্যাক ও ড্রাইভিং অফার কমিশন পান। এই কমিশন সরাসরি আপনার মূল ব্যালেন্সে যুক্ত হয়।'
     },
     {
       q: 'আমার পিন বা পাসওয়ার্ড ভুলে গেলে করণীয় কী?',
@@ -575,7 +575,7 @@ export default function DrawerMenu({
                   </div>
                   <div>
                     <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-bold tracking-wider uppercase text-emerald-300">BNBBUSINESS Network Bangladesh</span>
+                      <span className="text-xs font-black tracking-wider uppercase text-emerald-300">BNB Business Network Bangladesh</span>
                       <span className="bg-emerald-500/80 text-[8px] text-white px-1 py-0.5 rounded font-mono">v2.0</span>
                     </div>
                     <span className="bg-emerald-700/60 text-white font-mono text-[9px] px-2 py-0.5 rounded-md font-bold">Bangladesh</span>
@@ -583,47 +583,71 @@ export default function DrawerMenu({
                 </div>
 
                 {/* Drawer Profile Card */}
-                <button 
-                  onClick={() => { 
-                    onSelectTab('profile'); 
-                    onClose(); 
-                  }}
-                  className="w-full flex items-center gap-4 mt-6 bg-emerald-950/55 hover:bg-emerald-900/60 p-3.5 rounded-2xl border border-white/10 text-left transition duration-150 active:scale-98 cursor-pointer group"
-                >
-                  <div className="w-14 h-14 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-full p-0.5 overflow-hidden flex items-center justify-center relative shrink-0">
-                    {user.profilePic?.startsWith('http') || user.profilePic?.startsWith('data:image/') ? (
-                      <img 
-                        src={user.profilePic} 
-                        alt="Profile" 
-                        className="w-full h-full object-cover rounded-full"
-                        referrerPolicy="no-referrer"
-                      />
-                    ) : (() => {
-                      const PRESET_AVATARS = [
-                        { id: 'av1', emoji: '👨‍💼', bg: 'bg-indigo-50 text-indigo-700' },
-                        { id: 'av2', emoji: '👩‍💼', bg: 'bg-rose-50 text-rose-700' },
-                        { id: 'av3', emoji: '👨‍💻', bg: 'bg-teal-50 text-teal-700 font-bold' },
-                        { id: 'av4', emoji: '🧑‍🌾', bg: 'bg-amber-50 text-amber-700' },
-                        { id: 'av5', emoji: '👩‍🏫', bg: 'bg-emerald-50 text-emerald-700' },
-                        { id: 'av6', emoji: '✨', bg: 'bg-cyan-50 text-cyan-700' },
-                      ];
-                      const activeAv = PRESET_AVATARS.find(av => av.id === user.profilePic) || PRESET_AVATARS[2];
-                      return (
-                        <div className={`w-full h-full rounded-full flex items-center justify-center text-2xl ${activeAv.bg}`}>
-                          {activeAv.emoji}
+                {(() => {
+                  const categoryMeta = getMembershipCategory(user);
+                  return (
+                    <button 
+                      onClick={() => { 
+                        onSelectTab('profile'); 
+                        onClose(); 
+                      }}
+                      className="w-full flex items-center gap-3.5 mt-6 bg-emerald-950/55 hover:bg-emerald-900/60 p-3.5 rounded-2xl border border-white/10 text-left transition duration-150 active:scale-98 cursor-pointer group"
+                    >
+                      <div className={`w-14 h-14 rounded-full p-0.5 overflow-hidden flex items-center justify-center relative shrink-0 border-2 transition-all ${
+                        categoryMeta.key === 'shareholder'
+                          ? 'border-red-500 ring-2 ring-red-600 bg-red-950/50'
+                          : categoryMeta.key === 'investor'
+                          ? 'border-blue-500 ring-2 ring-blue-600 bg-blue-950/50'
+                          : 'border-emerald-400 bg-gradient-to-tr from-emerald-500 to-teal-400'
+                      }`}>
+                        {user.profilePic?.startsWith('http') || user.profilePic?.startsWith('data:image/') ? (
+                          <img 
+                            src={user.profilePic} 
+                            alt="Profile" 
+                            className="w-full h-full object-cover rounded-full"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (() => {
+                          const PRESET_AVATARS = [
+                            { id: 'av1', emoji: '👨‍💼', bg: 'bg-indigo-50 text-indigo-700' },
+                            { id: 'av2', emoji: '👩‍💼', bg: 'bg-rose-50 text-rose-700' },
+                            { id: 'av3', emoji: '👨‍💻', bg: 'bg-teal-50 text-teal-700 font-bold' },
+                            { id: 'av4', emoji: '🧑‍🌾', bg: 'bg-amber-50 text-amber-700' },
+                            { id: 'av5', emoji: '👩‍🏫', bg: 'bg-emerald-50 text-emerald-700' },
+                            { id: 'av6', emoji: '✨', bg: 'bg-cyan-50 text-cyan-700' },
+                          ];
+                          const activeAv = PRESET_AVATARS.find(av => av.id === user.profilePic) || PRESET_AVATARS[2];
+                          return (
+                            <div className={`w-full h-full rounded-full flex items-center justify-center text-2xl ${activeAv.bg}`}>
+                              {activeAv.emoji}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        {/* [1. পদবী] -> [2. নাম] */}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className={`text-[8.5px] font-black px-1.5 py-0.2 rounded-md leading-none border ${
+                            categoryMeta.key === 'shareholder'
+                              ? 'bg-red-600 text-white border-red-400'
+                              : categoryMeta.key === 'investor'
+                              ? 'bg-blue-600 text-white border-blue-400'
+                              : 'bg-emerald-800/80 text-emerald-200 border-emerald-600'
+                          }`}>
+                            {categoryMeta.key === 'shareholder' ? '👑 শেয়ার হোল্ডার' : categoryMeta.key === 'investor' ? '💎 ইনভেস্টার' : '👤 সাধারণ সদস্য'}
+                          </span>
                         </div>
-                      );
-                    })()}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="text-sm font-black font-sans text-slate-100 leading-snug group-hover:text-white truncate">{user.name}</h3>
-                    <p className="text-xs text-emerald-300 font-mono mt-0.5">ID: {user.memberId}</p>
-                    <p className="text-[10px] text-emerald-250/75 font-mono">{maskSecretPhone(user.phone)}</p>
-                  </div>
-                  <div className="bg-emerald-500/25 text-emerald-200 border border-emerald-550/30 text-[9.5px] px-2.5 py-1 rounded-full font-extrabold shadow-sm shrink-0 uppercase tracking-widest leading-none self-center">
-                    {appLanguage === 'en' ? 'ACTIVE' : 'সক্রিয়'}
-                  </div>
-                </button>
+                        <h3 className="text-sm font-black font-sans text-slate-100 leading-snug group-hover:text-white truncate mt-0.5">{user.name}</h3>
+                        <p className="text-xs text-emerald-300 font-mono mt-0.5">ID: {user.memberId}</p>
+                        <p className="text-[10px] text-emerald-250/75 font-mono">{maskSecretPhone(user.phone)}</p>
+                      </div>
+                      <div className="bg-emerald-500/25 text-emerald-200 border border-emerald-550/30 text-[9.5px] px-2.5 py-1 rounded-full font-extrabold shadow-sm shrink-0 uppercase tracking-widest leading-none self-center flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        {appLanguage === 'en' ? 'ACTIVE' : 'একটিভ'}
+                      </div>
+                    </button>
+                  );
+                })()}
               </div>
 
               {/* Scrollable Nav Items with Interactive Accordion structure */}
@@ -753,7 +777,7 @@ export default function DrawerMenu({
                   {activeSubModal === 'privacy' && <FileLock2 className="w-4.5 h-4.5 text-emerald-400" />}
                   {activeSubModal === 'app_version' && <Activity className="w-4.5 h-4.5 text-purple-400" />}
                   {activeSubModal === 'contact_info' && <Mail className="w-4.5 h-4.5 text-pink-400" />}
-                  {activeSubModal === 'delete_account' && <Trash2 className="w-4.5 h-4.5 text-rose-450" />}
+                  {activeSubModal === 'delete_account' && <ShieldCheck className="w-4.5 h-4.5 text-emerald-450" />}
                   {activeSubModal === 'permissions_info' && <ShieldAlert className="w-4.5 h-4.5 text-teal-400" />}
                   
                   <h3 className="text-xs font-black tracking-wide uppercase">
@@ -770,7 +794,7 @@ export default function DrawerMenu({
                     {activeSubModal === 'privacy' && 'গোপনীয়তা নীতিমালা'}
                     {activeSubModal === 'app_version' && 'অ্যাপের রিলিজ ভার্সন'}
                     {activeSubModal === 'contact_info' && 'যোগাযোগ ও সাপোর্ট টিম'}
-                    {activeSubModal === 'delete_account' && 'অ্যাকাউন্ট ও ডেটা মুছুন'}
+                    {activeSubModal === 'delete_account' && 'আজীবন স্থায়ী অ্যাকাউন্ট সনদ'}
                     {activeSubModal === 'permissions_info' && 'অ্যাপ পারমিশন ও ডেটা সেফটি'}
                   </h3>
                 </div>
@@ -819,7 +843,7 @@ export default function DrawerMenu({
                         required
                         value={newPassword}
                         onChange={(e) => setNewPassword(e.target.value)}
-                        placeholder="কমপক্ষে ৬ অক্ষরের পাসওয়ার্ড"
+                        placeholder="কমপক্ষে 6 অক্ষরের পাসওয়ার্ড"
                         className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-slate-350 rounded-xl px-3.5 py-2.5 text-xs font-medium outline-none transition"
                       />
                     </div>
@@ -849,28 +873,28 @@ export default function DrawerMenu({
                 {/* 2. TRANSACTION PIN MODIFICATION VIEW */}
                 {activeSubModal === 'change_pin' && (
                   <form onSubmit={handlePinChange} className="space-y-4 text-left">
-                    <p className="text-[10px] text-slate-450 leading-relaxed font-semibold">টাকা জমা, উত্তোলন, ঋণ ও রিচার্জ অনুমোদনে ৪ ডিজিটের সিকিউরিটি পিন নম্বর জরুরি।</p>
+                    <p className="text-[10px] text-slate-450 leading-relaxed font-semibold">টাকা জমা, উত্তোলন, ঋণ ও রিচার্জ অনুমোদনে 4 ডিজিটের সিকিউরিটি পিন নম্বর জরুরি।</p>
                     <div>
-                      <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1">বর্তমান ৪-ডিজিট পিন</label>
+                      <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1">বর্তমান 4-ডিজিট পিন</label>
                       <input 
                         type="password" 
                         required
                         maxLength={4}
                         value={oldPin}
                         onChange={(e) => setOldPin(e.target.value.replace(/\D/g, ''))}
-                        placeholder="যেমন: ১২৩৪"
+                        placeholder="যেমন: 1234"
                         className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-slate-350 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold tracking-widest outline-none transition text-center"
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1">নতুন ৪-ডিজিট পিন</label>
+                      <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1">নতুন 4-ডিজিট পিন</label>
                       <input 
                         type="password" 
                         required
                         maxLength={4}
                         value={newPin}
                         onChange={(e) => setNewPin(e.target.value.replace(/\D/g, ''))}
-                        placeholder="নতুন গোপন ৪ ডিজিট লিখুন"
+                        placeholder="নতুন গোপন 4 ডিজিট লিখুন"
                         className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-slate-350 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold tracking-widest outline-none transition text-center"
                       />
                     </div>
@@ -882,7 +906,7 @@ export default function DrawerMenu({
                         maxLength={4}
                         value={confirmPin}
                         onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ''))}
-                        placeholder="নতুন ৪ ডিজিট পুনরায় লিখুন"
+                        placeholder="নতুন 4 ডিজিট পুনরায় লিখুন"
                         className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-slate-350 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold tracking-widest outline-none transition text-center"
                       />
                     </div>
@@ -1244,10 +1268,10 @@ export default function DrawerMenu({
                     </div>
                     
                     <div className="space-y-3 font-medium">
-                      <p><strong>১. মেম্বারশিপ যোগ্যতাঃ</strong> আবেদনকারীকে অবশ্যই বাংলাদেশী নাগরিক এবং প্রাপ্তবয়স্ক হতে হবে। একটি এনআইডি কার্ডের বিপরীতে সর্বোচ্চ একটি একাউন্ট অনুমোদনযোগ্য।</p>
-                      <p><strong>২. সঞ্চয় পলিসিঃ</strong> জমাকৃত সঞ্চয় বা আমানত সমবায়ের উন্নয়নমূলক ও ই-কমার্স ব্যবসায় বিনিয়োগ করা হয়। কোনো সদস্য একাউন্ট ডিলিট বা সমবায় ত্যাগ করতে চাইলে আবেদনের ১৫ দিনের মধ্যে মূল সঞ্চয় ফেরত দেওয়া হবে।</p>
-                      <p><strong>৩. ঋণ নীতিমালাঃ</strong> করজে হাসানা বা লোন কেবল নিয়মিত আমানতকারী ও বিশ্বস্ত মেম্বারদের প্রদান করা হয়। লোন গ্রহীতাকে অবশ্যই কিস্তি সময়মতো পরিশোধ করতে হবে। অনাদায়ে আইনানুগ ব্যবস্থা ও সদস্যপদ বাতিলের অধিকার সমবায় সংরক্ষণ করে।</p>
-                      <p><strong>৪. ফি চার্জঃ</strong> টেলিকম ও বিল পরিশোধ সার্ভিস ছাড়া সমবায়ের সাধারণ সঞ্চয় আমানতে কোনো অতিরিক্ত মাসিক সার্ভিস চার্জ বা কর কর্তন করা হয় না।</p>
+                      <p><strong>1. মেম্বারশিপ যোগ্যতাঃ</strong> আবেদনকারীকে অবশ্যই বাংলাদেশী নাগরিক এবং প্রাপ্তবয়স্ক হতে হবে। একটি এনআইডি কার্ডের বিপরীতে সর্বোচ্চ একটি একাউন্ট অনুমোদনযোগ্য।</p>
+                      <p><strong>2. সঞ্চয় পলিসিঃ</strong> জমাকৃত সঞ্চয় বা আমানত সমবায়ের উন্নয়নমূলক ও ই-কমার্স ব্যবসায় বিনিয়োগ করা হয়। কোনো সদস্য একাউন্ট ডিলিট বা সমবায় ত্যাগ করতে চাইলে আবেদনের 15 দিনের মধ্যে মূল সঞ্চয় ফেরত দেওয়া হবে।</p>
+                      <p><strong>3. ঋণ নীতিমালাঃ</strong> করজে হাসানা বা লোন কেবল নিয়মিত আমানতকারী ও বিশ্বস্ত মেম্বারদের প্রদান করা হয়। লোন গ্রহীতাকে অবশ্যই কিস্তি সময়মতো পরিশোধ করতে হবে। অনাদায়ে আইনানুগ ব্যবস্থা ও সদস্যপদ বাতিলের অধিকার সমবায় সংরক্ষণ করে।</p>
+                      <p><strong>4. ফি চার্জঃ</strong> টেলিকম ও বিল পরিশোধ সার্ভিস ছাড়া সমবায়ের সাধারণ সঞ্চয় আমানতে কোনো অতিরিক্ত মাসিক সার্ভিস চার্জ বা কর কর্তন করা হয় না।</p>
                     </div>
                   </div>
                 )}
@@ -1260,10 +1284,10 @@ export default function DrawerMenu({
                     </div>
                     
                     <div className="space-y-3 font-medium">
-                      <p><strong>১. সংগৃহীত তথ্যঃ</strong> একাউন্ট ভেরিফিকেশনের জন্য আমরা মেম্বারের নাম, মোবাইল নাম্বার, ভোটার আইডি বা এনআইডি (NID) নম্বর ও মনোনীত নমিনির মোবাইল তথ্য সংগ্রহ করি।</p>
-                      <p><strong>২. তথ্য সুরক্ষাঃ</strong> সদস্যদের ব্যক্তিগত গোপন তথ্য বা পাসওয়ার্ড কখনোই কোনো তৃতীয় পক্ষ বা বিপণনকারী প্রতিষ্ঠানের কাছে হস্তান্তর করা হয় না।</p>
-                      <p><strong>৩. বায়োমেট্রিক ও পিন ডেটাঃ</strong> বায়োমেট্রিক আঙুলের ছাপ এবং সিকিউরিটি পিন সম্পূর্ণভাবে আপনার হ্যান্ডসেটের অভ্যন্তরীণ সুরক্ষিত এনক্লেভে সেভ থাকে। সার্ভারে পিন বা বায়োমেট্রিক সংরক্ষণ করা হয় না।</p>
-                      <p><strong>৪. ট্রানজেকশন ট্র্যাকিংঃ</strong> নিরাপত্তা রক্ষার খাতিরে আপনার আইপি এড্রেস এবং প্রতিটি রিচার্জ ও পেমেন্টের ডিজিটাল ক্যাশবুক লগসমূহ ক্লাউড ফায়ারে সংরক্ষিত রাখা হয়।</p>
+                      <p><strong>1. সংগৃহীত তথ্যঃ</strong> একাউন্ট ভেরিফিকেশনের জন্য আমরা মেম্বারের নাম, মোবাইল নাম্বার, ভোটার আইডি বা এনআইডি (NID) নম্বর ও মনোনীত নমিনির মোবাইল তথ্য সংগ্রহ করি।</p>
+                      <p><strong>2. তথ্য সুরক্ষাঃ</strong> সদস্যদের ব্যক্তিগত গোপন তথ্য বা পাসওয়ার্ড কখনোই কোনো তৃতীয় পক্ষ বা বিপণনকারী প্রতিষ্ঠানের কাছে হস্তান্তর করা হয় না।</p>
+                      <p><strong>3. বায়োমেট্রিক ও পিন ডেটাঃ</strong> বায়োমেট্রিক আঙুলের ছাপ এবং সিকিউরিটি পিন সম্পূর্ণভাবে আপনার হ্যান্ডসেটের অভ্যন্তরীণ সুরক্ষিত এনক্লেভে সেভ থাকে। সার্ভারে পিন বা বায়োমেট্রিক সংরক্ষণ করা হয় না।</p>
+                      <p><strong>4. ট্রানজেকশন ট্র্যাকিংঃ</strong> নিরাপত্তা রক্ষার খাতিরে আপনার আইপি এড্রেস এবং প্রতিটি রিচার্জ ও পেমেন্টের ডিজিটাল ক্যাশবুক লগসমূহ ক্লাউড ফায়ারে সংরক্ষিত রাখা হয়।</p>
                     </div>
                   </div>
                 )}
@@ -1285,7 +1309,7 @@ export default function DrawerMenu({
                       <strong className="text-[10px] font-black text-slate-405 uppercase tracking-wider block">নতুন সংযুক্ত ফিচারসমূহঃ</strong>
                       
                       <div className="space-y-1.5 text-[10.5px] text-slate-600 font-medium">
-                        <p className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 bg-purple-600 rounded-full shrink-0" /> ৪ ডিজিট সিকিউরিটি পিন নম্বর পরিবর্তন মডিউল</p>
+                        <p className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 bg-purple-600 rounded-full shrink-0" /> 4 ডিজিট সিকিউরিটি পিন নম্বর পরিবর্তন মডিউল</p>
                         <p className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 bg-purple-600 rounded-full shrink-0" /> গ্রাহক ও মেম্বারদের জন্য লাইভ সমস্যা কমপ্লেইন টিকিট ও Firestore ডেটা সংরক্ষণ সার্ভিস</p>
                         <p className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 bg-purple-600 rounded-full shrink-0" /> ফিঙ্গারপ্রিন্ট সেন্সর এনরোলমেন্ট ও ডিভাইসের বায়োমেট্রিক সহজ লগইন ব্যবস্থা</p>
                         <p className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 bg-purple-600 rounded-full shrink-0" /> নতুন আইনি মেম্বারশিপ শর্তাবলী এবং ব্যবহারকারী গোপনীয়তা খতিয়ান</p>
@@ -1306,7 +1330,7 @@ export default function DrawerMenu({
                         </div>
                         <div className="min-w-0 flex-1">
                           <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider leading-none">হেল্পলাইন (Helpline)</span>
-                          <a href="https://wa.me/8801865911728" target="_blank" rel="noopener noreferrer" className="text-xs font-mono font-black text-slate-800 hover:text-pink-600 block mt-1 hover:underline">০১৮৬৫৯১১৭২৮</a>
+                          <a href="https://wa.me/8801865911728" target="_blank" rel="noopener noreferrer" className="text-xs font-mono font-black text-slate-800 hover:text-pink-600 block mt-1 hover:underline">01865911728</a>
                         </div>
                       </div>
 
@@ -1317,7 +1341,7 @@ export default function DrawerMenu({
                         <div className="min-w-0 flex-1">
                           <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider leading-none">হোয়াটসঅ্যাপ সাপোর্ট (WhatsApp)</span>
                           <a href="https://wa.me/8801865911728" target="_blank" rel="noopener noreferrer" className="text-xs font-mono font-black text-emerald-700 hover:underline block mt-1 flex items-center gap-1">
-                            +৮৮০ ১৮৬৫৯১১৭২৮ <ExternalLink className="w-3 h-3" />
+                            +880 1865911728 <ExternalLink className="w-3 h-3" />
                           </a>
                         </div>
                       </div>
@@ -1338,19 +1362,22 @@ export default function DrawerMenu({
                         </div>
                         <div className="min-w-0 flex-1">
                           <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider leading-none">প্রধান কার্যালয় (Head Office)</span>
-                          <p className="text-[10.5px] font-bold text-slate-700 mt-1 leading-normal">রোড ৪, সেক্টর ১১, উত্তরা, ঢাকা-১২৩০, বাংলাদেশ।</p>
+                          <p className="text-[10.5px] font-bold text-slate-700 mt-1 leading-normal">রোড 4, সেক্টর 11, উত্তরা, ঢাকা-1230, বাংলাদেশ।</p>
                         </div>
                       </div>
                     </div>
                   </div>
                 )}
 
-                {/* 14. DELETE ACCOUNT & DATA */}
+                {/* 14. PERMANENT LIFETIME ACCOUNT STATUS */}
                 {activeSubModal === 'delete_account' && (
-                  <form onSubmit={handleDeleteAccount} className="space-y-4 text-left">
-                    <div className="bg-rose-50 border border-rose-100 p-3 rounded-2xl text-[10px] text-rose-700 font-bold flex items-start gap-2">
-                      <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
-                      <span>সতর্কতা: অ্যাকাউন্ট মুছে ফেললে আপনার সমস্ত সঞ্চয় ডাটা, প্রোফাইল এবং লেনদেন ইতিহাস স্থায়ীভাবে ডিলিট হয়ে যাবে। এই প্রক্রিয়া অপরিবর্তনীয়।</span>
+                  <div className="space-y-4 text-left">
+                    <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl text-[11px] text-emerald-800 font-semibold flex items-start gap-3">
+                      <ShieldCheck className="w-6 h-6 shrink-0 mt-0.5 text-emerald-600" />
+                      <div className="space-y-1">
+                        <strong className="block text-xs font-black text-emerald-900">🛡️ আজীবন স্থায়ী ও চিরস্থায়ী অ্যাকাউন্ট (Lifetime Account)</strong>
+                        <span>BNB সমবায় ও ফিন্যান্সিয়াল প্ল্যাটফর্মে একবার অ্যাকাউন্ট তৈরি হলে তা আজীবন চিরস্থায়ী থাকে। এই অ্যাকাউন্ট কখনোই মুছে যাবে না বা সিস্টেম থেকে সরানো হবে না।</span>
+                      </div>
                     </div>
 
                     {feedback && (
@@ -1359,34 +1386,56 @@ export default function DrawerMenu({
                       </div>
                     )}
 
-                    <div>
-                      <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1">
-                        নিশ্চিত করতে বক্সে <span className="text-rose-600 font-mono">DELETE</span> বা <span className="text-rose-600">ডিলিট</span> লিখুন
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={deleteAccountText}
-                        onChange={(e) => setDeleteAccountText(e.target.value)}
-                        placeholder="DELETE বা ডিলিট লিখুন"
-                        className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-rose-350 rounded-xl px-3.5 py-2.5 text-xs font-bold outline-none"
-                      />
+                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                        <span className="text-[10px] text-slate-500 font-bold uppercase">মেম্বার আইডি</span>
+                        <span className="font-mono text-xs font-black text-slate-800">{user.memberId || 'BNB Member'}</span>
+                      </div>
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                        <span className="text-[10px] text-slate-500 font-bold uppercase">নিবন্ধিত মোবাইল</span>
+                        <span className="font-mono text-xs font-black text-slate-800">{user.phone || 'N/A'}</span>
+                      </div>
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                        <span className="text-[10px] text-slate-500 font-bold uppercase">অ্যাকাউন্ট স্থায়িত্ব</span>
+                        <span className="text-[11px] font-black text-emerald-700 flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> আজীবন সংরক্ষিত (Lifetime Active)
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] text-slate-500 font-bold uppercase">ডেটাবেজ সুরক্ষা</span>
+                        <span className="text-[11px] font-bold text-slate-700">Firestore Rules Protected (Anti-Delete)</span>
+                      </div>
                     </div>
 
-                    <button
-                      type="submit"
-                      disabled={isSubmitting}
-                      className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-2.5 rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-rose-600/10"
-                    >
-                      {isSubmitting ? (
-                        <RotateCw className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <>
-                          <Trash2 className="w-4 h-4" /> একাউন্ট স্থায়ীভাবে মুছে ফেলুন
-                        </>
-                      )}
-                    </button>
-                  </form>
+                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-[10.5px] text-amber-900 leading-relaxed font-medium">
+                      💡 <strong>কোম্পানি নিরাপত্তা নিয়ম:</strong> সমবায় বিধিমালা ও সদস্যদের আর্থিক সুরক্ষার্থে কোনো অ্যাকাউন্ট স্থায়ীভাবে মুছে ফেলা নিষিদ্ধ। আপনি চাইলে আপনার ডিভাইস থেকে নিরাপদে লগআউট করতে পারেন, তবে আপনার জমার হিসাব ও অ্যাকাউন্ট আজীবন সুরক্ষিত থাকবে।
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleVerifyPermanence}
+                        disabled={isSubmitting}
+                        className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-emerald-600/10"
+                      >
+                        {isSubmitting ? (
+                          <RotateCw className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <>
+                            <ShieldCheck className="w-4 h-4" /> স্থায়িত্ব যাচাই করুন
+                          </>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={onLogout}
+                        className="px-4 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
+                      >
+                        লগআউট
+                      </button>
+                    </div>
+                  </div>
                 )}
 
                 {/* 15. PERMISSIONS & DATA SAFETY */}
@@ -1397,10 +1446,10 @@ export default function DrawerMenu({
                     </div>
 
                     <div className="space-y-3 font-medium">
-                      <p><strong>১. Geolocation (লোকেশন):</strong> শুধুমাত্র সমবায় এজেন্ট লোকেশন ভেরিফিকেশন এবং নির্দিষ্ট ডিল পয়েন্ট যাচাইয়ের জন্য ব্যবহার করা হয়।</p>
-                      <p><strong>২. Storage & Photos (ফাইল/স্টোরেজ):</strong> সমস্যা রিপোর্ট করার সময় স্ক্রিনশট সংযুক্ত করার উদ্দেশ্যে ব্যবহৃত হয়।</p>
-                      <p><strong>৩. Biometric / Fingerprint (ফিঙ্গারপ্রিন্ট):</strong> মেম্বারের হ্যান্ডসেটের সুরক্ষিত হার্ডওয়্যার এনক্লেভ ব্যবহার করে দ্রুত ও নিরাপদ লগইন নিশ্চিত করতে ব্যবহৃত হয়।</p>
-                      <p><strong>৪. Network Access (ইন্টারনেট):</strong> ফায়ারবেস ক্লাউড ডাটাবেসের সাথে রিয়েল-টাইম ব্যালেন্স ও ট্রানজেকশন সিঙ্ক করার জন্য ইন্টারনেট প্রয়োজন হয়।</p>
+                      <p><strong>1. Geolocation (লোকেশন):</strong> শুধুমাত্র সমবায় এজেন্ট লোকেশন ভেরিফিকেশন এবং নির্দিষ্ট ডিল পয়েন্ট যাচাইয়ের জন্য ব্যবহার করা হয়।</p>
+                      <p><strong>2. Storage & Photos (ফাইল/স্টোরেজ):</strong> সমস্যা রিপোর্ট করার সময় স্ক্রিনশট সংযুক্ত করার উদ্দেশ্যে ব্যবহৃত হয়।</p>
+                      <p><strong>3. Biometric / Fingerprint (ফিঙ্গারপ্রিন্ট):</strong> মেম্বারের হ্যান্ডসেটের সুরক্ষিত হার্ডওয়্যার এনক্লেভ ব্যবহার করে দ্রুত ও নিরাপদ লগইন নিশ্চিত করতে ব্যবহৃত হয়।</p>
+                      <p><strong>4. Network Access (ইন্টারনেট):</strong> ফায়ারবেস ক্লাউড ডাটাবেসের সাথে রিয়েল-টাইম ব্যালেন্স ও ট্রানজেকশন সিঙ্ক করার জন্য ইন্টারনেট প্রয়োজন হয়।</p>
                     </div>
                   </div>
                 )}

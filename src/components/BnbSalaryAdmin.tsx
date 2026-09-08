@@ -1132,7 +1132,7 @@ export default function BnbSalaryAdmin({ onBack }: BnbSalaryAdminProps) {
                   <label className="text-[10px] font-black text-slate-500 block mb-1">বেসিক বেতন (৳) *</label>
                   <input
                     type="number"
-                    placeholder="যেমন: ১৫০০০"
+                    placeholder="যেমন: 15000"
                     value={empBasicSalary}
                     onChange={(e) => setEmpBasicSalary(e.target.value)}
                     className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white transition outline-none"
@@ -1278,7 +1278,7 @@ export default function BnbSalaryAdmin({ onBack }: BnbSalaryAdminProps) {
                 <label className="text-[10px] font-black text-slate-500 block mb-1">ওভারটাইম প্রতি ঘণ্টার হার (৳) *</label>
                 <input
                   type="number"
-                  placeholder="যেমন: ১৫০"
+                  placeholder="যেমন: 150"
                   value={cfgOvertimeRate}
                   onChange={(e) => setCfgOvertimeRate(e.target.value)}
                   className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white transition outline-none"

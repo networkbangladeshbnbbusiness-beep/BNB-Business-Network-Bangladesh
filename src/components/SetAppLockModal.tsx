@@ -39,98 +39,99 @@ export default function SetAppLockModal({
     const cleanConfirm = confirmCode.trim();
 
     if (cleanCode.length < 4 || cleanCode.length > 12) {
-      setError('পাসওয়ার্ড কোডটি অবশ্যই ৪ থেকে ১২ অক্ষরের/সংখ্যার হতে হবে!');
+      setError('পাসওয়ার্ডটি অবশ্যই 4 থেকে 12 অক্ষরের/সংখ্যার হতে হবে!');
       return;
     }
 
     if (cleanCode !== cleanConfirm) {
-      setError('গোপন লকিং কোড এবং কনফার্ম কোড দুটির মিল নেই!');
+      setError('পাসওয়ার্ড এবং কনফার্ম পাসওয়ার্ড দুটির মিল নেই!');
       return;
     }
 
     setLoading(true);
 
-    // Save to Firestore asynchronously in background without blocking UI
+    // Save to Firestore asynchronously
     if (user?.uid) {
-      const userRef = doc(db, 'users', user.uid);
-      updateDoc(userRef, {
-        isAppLocked: true,
-        appLockCode: cleanCode,
-        appLockResetRequested: false,
-        appLockResetStatus: ''
-      }).catch((err) => {
+      try {
+        const userRef = doc(db, 'users', user.uid);
+        await updateDoc(userRef, {
+          password: cleanCode,
+          appLockCode: cleanCode,
+          isAppLocked: true,
+          appLockResetRequested: false,
+          appLockResetStatus: '',
+          appLockUpdatedAt: new Date().toISOString()
+        });
+      } catch (err) {
         console.error("Failed to save app lock code to Firestore:", err);
-      });
+      }
     }
 
-    // Instant UI update (< 0.1 sec)
-    setTimeout(() => {
-      setCode('');
-      setConfirmCode('');
-      setLoading(false);
-      onLockSuccess(cleanCode);
-      onClose();
-    }, 100);
+    setCode('');
+    setConfirmCode('');
+    setLoading(false);
+    onLockSuccess(cleanCode);
+    onClose();
   };
 
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/75 backdrop-blur-xs font-sans">
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/80 backdrop-blur-xs font-sans text-slate-800">
         <motion.div
-          initial={{ opacity: 0, scale: 0.95, y: 15 }}
+          initial={{ opacity: 0, scale: 0.95, y: 10 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95, y: 15 }}
-          className="bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-100 relative text-left overflow-hidden"
+          exit={{ opacity: 0, scale: 0.95, y: 10 }}
+          className="bg-white rounded-2xl max-w-sm w-full p-4 sm:p-5 shadow-2xl border border-slate-100 relative text-left overflow-hidden"
         >
           {/* Close button */}
           <button
             onClick={onClose}
-            className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors cursor-pointer"
+            className="absolute top-3 right-3 p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors cursor-pointer"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
 
           {/* Header */}
-          <div className="flex items-center gap-3 mb-4">
-            <div className={`w-12 h-12 rounded-2xl ${isMandatoryOnLogout ? 'bg-rose-50 border-rose-100 text-rose-600' : 'bg-emerald-50 border-emerald-100 text-emerald-600'} border flex items-center justify-center shrink-0`}>
-              <ShieldCheck className="w-6 h-6" />
+          <div className="flex items-center gap-2.5 mb-3">
+            <div className={`w-9 h-9 rounded-xl ${isMandatoryOnLogout ? 'bg-rose-50 border-rose-200 text-rose-600' : 'bg-emerald-50 border-emerald-200 text-emerald-600'} border flex items-center justify-center shrink-0`}>
+              <ShieldCheck className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-black text-slate-800 flex items-center gap-1.5">
-                {isMandatoryOnLogout ? '🔒 লগআউট ও গোপন অ্যাপ লক সেটআপ' : '🔒 গোপন অ্যাপ লক সেটআপ'}
+              <h3 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-1">
+                {isMandatoryOnLogout ? '🔒 নিরাপদ লগআউট ও পাসওয়ার্ড লক' : '🔒 গোপন অ্যাপ লক সেটআপ'}
               </h3>
-              <p className="text-xs text-slate-500 font-medium mt-0.5">
-                সিকিউরিটি লক পাসওয়ার্ড (৪ - ১২ ডিজিট/অক্ষর)
+              <p className="text-[10px] text-slate-500 font-medium">
+                {isMandatoryOnLogout ? 'লগআউটের পর পুনরায় এই পাসওয়ার্ড দিয়ে লগইন করতে হবে' : 'সিকিউরিটি পাসওয়ার্ড (4 - 12 ডিজিট/অক্ষর)'}
               </p>
             </div>
           </div>
 
           {/* Warning / Instructions Box */}
-          <div className={`${isMandatoryOnLogout ? 'bg-rose-50 border-rose-200 text-rose-900' : 'bg-amber-50 border-amber-200/70 text-amber-900'} border p-3.5 rounded-2xl text-[11px] leading-relaxed mb-4 flex items-start gap-2.5 shadow-xs`}>
-            <AlertTriangle className={`w-4.5 h-4.5 ${isMandatoryOnLogout ? 'text-rose-600' : 'text-amber-600'} shrink-0 mt-0.5`} />
+          <div className={`${isMandatoryOnLogout ? 'bg-rose-50/80 border-rose-200 text-rose-900' : 'bg-amber-50/80 border-amber-200 text-amber-900'} border p-2.5 rounded-xl text-[10.5px] leading-relaxed mb-3 flex items-start gap-2 shadow-xs`}>
+            <AlertTriangle className={`w-3.5 h-3.5 ${isMandatoryOnLogout ? 'text-rose-600' : 'text-amber-600'} shrink-0 mt-0.5`} />
             <div>
               {isMandatoryOnLogout ? (
-                <span><strong>লগআউট ও অ্যাপ লক নিয়ম:</strong> অ্যাপ থেকে নিরাপদ লগআউট হতে ৪ থেকে ১২ অক্ষরের/সংখ্যার একটি সিক্রেট পাসওয়ার্ড দুইবার লিখে সেট করুন। পরবর্তীতে অ্যাপে প্রবেশ করতে বা আনলক করতে পিন কোড দিলে খুলবে না, হুবহু এই সেট করা পাসওয়ার্ড দিতে হবে।</span>
+                <span><strong>বাধ্যতামূলক নিয়ম:</strong> লগআউট করতে 4-12 অক্ষরের একটি পাসওয়ার্ড সেট/কনফার্ম করুন। পুনরায় অ্যাপে লগইন করতে <strong>হুবহু এই পাসওয়ার্ডটি</strong> প্রয়োজন হবে।</span>
               ) : (
-                <span><strong>গুরুত্বপূর্ণ নিয়ম:</strong> ৪ থেকে ১২ অক্ষরের বা সংখ্যার একটি সিক্রেট লকিং পাসওয়ার্ড দুইবার দিন। অ্যাপ লক করার পর পিন কোড দিলে খুলবে না, সেম পাসওয়ার্ড দিয়ে আনলক করতে হবে।</span>
+                <span><strong>গুরুত্বপূর্ণ নিয়ম:</strong> 4-12 অক্ষরের একটি সিক্রেট পাসওয়ার্ড সেট করুন। অ্যাপ লক আনলক করতে এই পাসওয়ার্ডটি দিতে হবে।</span>
               )}
             </div>
           </div>
 
           {/* Error Message */}
           {error && (
-            <div className="bg-rose-50 border border-rose-200 text-rose-700 p-3 rounded-xl text-xs font-bold mb-4 flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 shrink-0 text-rose-500" />
+            <div className="bg-rose-50 border border-rose-200 text-rose-700 p-2 rounded-xl text-[11px] font-bold mb-3 flex items-center gap-1.5">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-rose-500" />
               <span>{error}</span>
             </div>
           )}
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-2.5">
             {/* Input 1 */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                গোপন লকিং কোড (৪ - ১২ ডিজিট/অক্ষর) <span className="text-rose-500">*</span>
+              <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                সিকিউরিটি পাসওয়ার্ড (4 - 12 অক্ষর/সংখ্যা) <span className="text-rose-500">*</span>
               </label>
               <div className="relative">
                 <input
@@ -139,27 +140,24 @@ export default function SetAppLockModal({
                   onChange={(e) => setCode(e.target.value)}
                   maxLength={12}
                   placeholder="যেমন: bnb987654 বা 1234"
-                  className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                  className="w-full pl-8 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-all"
                   required
                 />
-                <KeyRound className="w-4 h-4 text-slate-400 absolute left-3 top-3 pointer-events-none" />
+                <KeyRound className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
                 <button
                   type="button"
                   onClick={() => setShowCode(!showCode)}
-                  className="absolute right-3 top-2.5 p-1 text-slate-400 hover:text-slate-600 rounded cursor-pointer"
+                  className="absolute right-2.5 top-2 p-0.5 text-slate-400 hover:text-slate-600 rounded cursor-pointer"
                 >
-                  {showCode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  {showCode ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                 </button>
               </div>
-              <span className="text-[10px] text-slate-400 font-medium block mt-1">
-                দৈর্ঘ্য: {code.length}/12 (সর্বনিম্ন ৪ অক্ষর/সংখ্যা)
-              </span>
             </div>
 
             {/* Input 2 */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                গোপন লকিং কোডটি পুনরায় লিখুন <span className="text-rose-500">*</span>
+              <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                পাসওয়ার্ডটি পুনরায় নিশ্চিত করুন <span className="text-rose-500">*</span>
               </label>
               <div className="relative">
                 <input
@@ -168,41 +166,41 @@ export default function SetAppLockModal({
                   onChange={(e) => setConfirmCode(e.target.value)}
                   maxLength={12}
                   placeholder="কনফার্ম পাসওয়ার্ড লিখুন"
-                  className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                  className="w-full pl-8 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-all"
                   required
                 />
-                <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3 pointer-events-none" />
+                <Lock className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
                 <button
                   type="button"
                   onClick={() => setShowConfirmCode(!showConfirmCode)}
-                  className="absolute right-3 top-2.5 p-1 text-slate-400 hover:text-slate-600 rounded cursor-pointer"
+                  className="absolute right-2.5 top-2 p-0.5 text-slate-400 hover:text-slate-600 rounded cursor-pointer"
                 >
-                  {showConfirmCode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  {showConfirmCode ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                 </button>
               </div>
             </div>
 
             {/* Submit & Cancel Actions */}
-            <div className="pt-2 flex items-center gap-2.5">
+            <div className="pt-1.5 flex items-center gap-2">
               <button
                 type="button"
                 onClick={onClose}
                 disabled={loading}
-                className="w-1/3 py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-all cursor-pointer text-center"
+                className="w-1/3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-all cursor-pointer text-center"
               >
                 বাতিল
               </button>
               <button
                 type="submit"
                 disabled={loading}
-                className={`w-2/3 py-2.5 px-4 ${isMandatoryOnLogout ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/20' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'} text-white font-extrabold rounded-xl text-xs shadow-md transition-all cursor-pointer flex items-center justify-center gap-1.5`}
+                className={`w-2/3 py-2 px-3 ${isMandatoryOnLogout ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/20' : 'bg-emerald-700 hover:bg-emerald-800 shadow-emerald-700/20'} text-white font-extrabold rounded-xl text-xs shadow-xs transition-all cursor-pointer flex items-center justify-center gap-1.5`}
               >
                 {loading ? (
-                  <span className="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                  <span className="inline-block animate-spin rounded-full h-3.5 w-3.5 border-2 border-white border-t-transparent" />
                 ) : (
                   <>
-                    <Lock className="w-4 h-4" />
-                    {isMandatoryOnLogout ? 'পাসওয়ার্ড দিয়ে লগআউট করুন' : 'অ্যাপ লক করুন (Lock App)'}
+                    <Lock className="w-3.5 h-3.5" />
+                    {isMandatoryOnLogout ? 'লক করে লগআউট করুন' : 'অ্যাপ লক করুন'}
                   </>
                 )}
               </button>

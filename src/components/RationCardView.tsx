@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import html2canvas from 'html2canvas';
 import { motion, AnimatePresence } from 'motion/react';
+import UnifiedBackButton from './UnifiedBackButton';
 import { 
   CreditCard, 
   HelpCircle, 
@@ -46,6 +47,7 @@ import {
   onSnapshot 
 } from 'firebase/firestore';
 import { User as UserType, Transaction } from '../types';
+import { useBackHandler } from '../lib/navigationManager';
 
 interface RationCardViewProps {
   liveUser: UserType;
@@ -140,11 +142,11 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
 
   // Bengali translation helpers
   const englishToBengali = (num: any) => {
-    if (num === undefined || num === null) return '০';
+    if (num === undefined || num === null) return '0';
     const numStr = num.toString();
     const map: Record<string, string> = {
-      '0': '০', '1': '১', '2': '২', '3': '৩', '4': '৪',
-      '5': '৫', '6': '৬', '7': '৭', '8': '৮', '9': '৯'
+      '0': '0', '1': '1', '2': '2', '3': '3', '4': '4',
+      '5': '5', '6': '6', '7': '7', '8': '8', '9': '9'
     };
     return numStr.split('').map((c: string) => map[c] || c).join('');
   };
@@ -152,7 +154,20 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
   // Navigation active tab
   const [activeTab, setActiveTab] = useState<'dashboard' | 'card' | 'items' | 'order' | 'my_orders' | 'history' | 'profile' | 'support'>('dashboard');
 
+  // Ration Card internal back handler
+  useBackHandler(() => {
+    if (showCardImageModal) { setShowCardImageModal(false); return true; }
+    if (showCheckoutModal) { setShowCheckoutModal(false); return true; }
+    if (activeTab !== 'dashboard') {
+      setActiveTab('dashboard');
+      return true;
+    }
+    return false;
+  }, true, 25);
+
   const handleBack = () => {
+    if (showCardImageModal) { setShowCardImageModal(false); return; }
+    if (showCheckoutModal) { setShowCheckoutModal(false); return; }
     if (activeTab !== 'dashboard') {
       setActiveTab('dashboard');
     } else {
@@ -391,7 +406,7 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
               <span className="text-[10.5px] font-mono font-black block truncate mt-1" style={{ color: mainColorHex }}>
                 {rcData?.expiryDate || '06/06/2027'}
               </span>
-              <span className="text-[6px] block font-extrabold mt-0.5 leading-none" style={{ color: mainColorHex }}>১ বছর পর রিনিউ</span>
+              <span className="text-[6px] block font-extrabold mt-0.5 leading-none" style={{ color: mainColorHex }}>1 বছর পর রিনিউ</span>
             </div>
           </div>
 
@@ -497,7 +512,7 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
     if (!file) return;
 
     if (file.size > 800 * 1024) {
-      alert("ফাইলের সাইজ অনেক বড় (সর্বোচ্চ ৮০০ KB অনুমোদিত)");
+      alert("ফাইলের সাইজ অনেক বড় (সর্বোচ্চ 800 KB অনুমোদিত)");
       return;
     }
 
@@ -606,7 +621,7 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
       id: 2,
       tag: "সহজ বুকিং",
       title: `${englishToBengali(appConfig?.rationMaxSelectLimit || 5)}টি পণ্য নির্বাচন`,
-      description: `${appConfig?.rationTotalItemsText || "১০"}টি নিত্যপ্রয়োজনীয় পণ্যের তালিকা থেকে প্রতি মাসে সর্বোচ্চ ${englishToBengali(appConfig?.rationMaxSelectLimit || 5)}টি পণ্য ভর্তুকি মূল্যে বুকিং করার দারুণ সুবিধা পান।`,
+      description: `${appConfig?.rationTotalItemsText || "10"}টি নিত্যপ্রয়োজনীয় পণ্যের তালিকা থেকে প্রতি মাসে সর্বোচ্চ ${englishToBengali(appConfig?.rationMaxSelectLimit || 5)}টি পণ্য ভর্তুকি মূল্যে বুকিং করার দারুণ সুবিধা পান।`,
       bgGradient: "from-slate-950 via-emerald-950 to-emerald-900",
       image: "https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&q=80&w=1200"
     }
@@ -651,7 +666,7 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
 
   // Live Chat States inside Support view
   const [chatMessages, setChatMessages] = useState<any[]>([
-    { id: '1', sender: 'support', text: 'আসসালামু আলাইকুম! আমাদের ডিজিটাল রেশন কার্ড হেল্প ডেস্কে আপনাকে স্বাগতম। আপনার কার্ড সংশোধন, অর্ডার ট্র্যাকিং বা যেকোনো সাহায্য পেতে মেসেজ করুন।', timestamp: '১০:৩০ AM' }
+    { id: '1', sender: 'support', text: 'আসসালামু আলাইকুম! আমাদের ডিজিটাল রেশন কার্ড হেল্প ডেস্কে আপনাকে স্বাগতম। আপনার কার্ড সংশোধন, অর্ডার ট্র্যাকিং বা যেকোনো সাহায্য পেতে মেসেজ করুন।', timestamp: '10:30 AM' }
   ]);
   const [chatInputText, setChatInputText] = useState('');
   const [isChatTyping, setIsChatTyping] = useState(false);
@@ -885,15 +900,15 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
   const handlePlaceOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedItems.length === 0) {
-      setCheckoutError("অনুগ্রহ করে কমপক্ষে ১টি আইটেম নির্বাচন করুন।");
+      setCheckoutError("অনুগ্রহ করে কমপক্ষে 1টি আইটেম নির্বাচন করুন।");
       return;
     }
     if (selectedItems.length > 5) {
-      setCheckoutError("আপনি সর্বোচ্চ ৫টি আইটেম সিলেক্ট করতে পারবেন।");
+      setCheckoutError("আপনি সর্বোচ্চ 5টি আইটেম সিলেক্ট করতে পারবেন।");
       return;
     }
     if (securityPin !== liveUser.pin) {
-      setCheckoutError("আপনার ৪ ডিজিটের নিরাপত্তা পিন নম্বরটি সঠিক নয়!");
+      setCheckoutError("আপনার 4 ডিজিটের নিরাপত্তা পিন নম্বরটি সঠিক নয়!");
       return;
     }
     if (liveUser.balance < totalPrice) {
@@ -950,7 +965,7 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
       // 4. Log system notices
       await addDoc(collection(db, 'notices'), {
         title: `রেশন প্রোডাক্ট ডিলার বুকিং সম্পন্ন!`,
-        content: `আপনার রেশন কার্ডের বিপরীতে ৳${totalPrice} মূল্যের পণ্য বুকিং সফল হয়েছে। অর্ডার নম্বরঃ ${orderNo}। ২ কার্যদিবসের মধ্যে নিকটস্থ কেন্টাল বা হেমায়েতপুর মেইন বিতরণ কেন্দ্র হতে পণ্য বুঝে নিন।`,
+        content: `আপনার রেশন কার্ডের বিপরীতে ৳${totalPrice} মূল্যের পণ্য বুকিং সফল হয়েছে। অর্ডার নম্বরঃ ${orderNo}। 2 কার্যদিবসের মধ্যে নিকটস্থ কেন্টাল বা হেমায়েতপুর মেইন বিতরণ কেন্দ্র হতে পণ্য বুঝে নিন।`,
         createdAt: timestamp
       });
 
@@ -1031,13 +1046,11 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
       <div className="bg-white border-b border-slate-200 px-4 py-2 flex items-center justify-between sticky top-0 z-30 font-sans shadow-3xs">
         <div className="flex items-center gap-2">
           {onClose && (
-            <button 
-              type="button"
+            <UnifiedBackButton
               onClick={handleBack}
-              className="p-1 hover:bg-slate-100 rounded-lg text-slate-500 hover:text-slate-800 transition mr-1 cursor-pointer flex items-center justify-center border border-slate-200"
-            >
-              <ArrowLeft className="w-4 h-4 text-slate-600" />
-            </button>
+              variant="dark"
+              title="পিছনে যান"
+            />
           )}
           <div className="w-8 h-8 bg-emerald-950 rounded-lg flex items-center justify-center font-black text-rose-50 border border-teal-800">
             <span className="text-white text-xs tracking-tighter">BNB</span>
@@ -1156,7 +1169,7 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
                   </div>
                   <h3 className="text-xs sm:text-base font-black text-slate-900 pt-0.5 sm:pt-1 leading-snug">
                     <span className="text-blue-600 text-[8px] sm:text-xs font-black mr-0.5 sm:mr-1 block sm:inline">Active</span>
-                    <span className="text-xs sm:text-lg font-mono">১ টি</span>
+                    <span className="text-xs sm:text-lg font-mono">1 টি</span>
                   </h3>
                 </div>
 
@@ -1206,7 +1219,7 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
                 
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
                   <h3 className="text-sm font-black text-slate-900 leading-tight">
-                    {appConfig?.rationTitleText || "১০টি আইটেমের মধ্যে থেকে যেকোনো ৫টি নিতে পারবেন"}
+                    {appConfig?.rationTitleText || "10টি আইটেমের মধ্যে থেকে যেকোনো 5টি নিতে পারবেন"}
                   </h3>
                   <div className="text-[10px] font-black text-[#006A4E] bg-emerald-50 px-3 py-1 rounded-full border border-emerald-100 uppercase tracking-tight">
                     আপনি নির্বাচিত করেছেন {englishToBengali(selectedItemIds.length)}/{englishToBengali(appConfig?.rationMaxSelectLimit || 5)}
@@ -1285,7 +1298,7 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
                     type="button"
                     onClick={() => {
                       if (selectedItemIds.length === 0) {
-                        alert("অনুগ্রহ করে কমপক্ষে ১টি আইটেম নির্বাচন করুন!");
+                        alert("অনুগ্রহ করে কমপক্ষে 1টি আইটেম নির্বাচন করুন!");
                         return;
                       }
                       setShowCheckoutModal(true);
@@ -1354,7 +1367,7 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
                   
                   <div className="space-y-3 text-slate-800 text-[11px] leading-relaxed font-bold font-sans">
                     {[
-                      { text: `আপনি সর্বমোট ${appConfig?.rationTotalItemsText || "১০"}টি আইটেমের মধ্যে থেকে সর্বোচ্চ ${englishToBengali(appConfig?.rationMaxSelectLimit || 5)}টি বেছে নিতে পারবেন।` },
+                      { text: `আপনি সর্বমোট ${appConfig?.rationTotalItemsText || "10"}টি আইটেমের মধ্যে থেকে সর্বোচ্চ ${englishToBengali(appConfig?.rationMaxSelectLimit || 5)}টি বেছে নিতে পারবেন।` },
                       { text: "বাজার মূল্যের তুলনায় আমাদের পণ্যের দাম কম।" },
                       { text: "অর্ডার করার পর নিকটস্থ BNB সেন্টার থেকে পণ্য সংগ্রহ করুন।" },
                       { text: "কার্ডের মেয়াদ শেষ হলে পুনরায় রিনিউ করতে হবে।", alert: true },
@@ -1502,7 +1515,7 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
 
                       <div className="space-y-1">
                         <p className="text-[10px] sm:text-xs font-black text-emerald-950 uppercase tracking-tight">প্রিমিয়াম গ্রিন কার্ড</p>
-                        <p className="text-[8px] sm:text-[9.5px] text-emerald-700 font-medium leading-tight">৫% অতিরিক্ত সাবসিডি ছাড় ও কুরিয়ার হোম ডেলিভারি সুবিধা</p>
+                        <p className="text-[8px] sm:text-[9.5px] text-emerald-700 font-medium leading-tight">5% অতিরিক্ত সাবসিডি ছাড় ও কুরিয়ার হোম ডেলিভারি সুবিধা</p>
                       </div>
                       
                       <div className="mt-2 flex items-center justify-between text-[7px] sm:text-[8px] font-bold text-emerald-600">
@@ -1560,7 +1573,7 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
                   🛒 রেশন রিফিল পণ্য নির্বাচন করুন
                 </h2>
                 <p className="text-xs text-slate-500 font-bold mt-1 max-w-[550px] leading-relaxed">
-                  আপনার রেশন আইডির বিপরীতে প্রতি মাসে মেইন ব্যালেন্স থেকে সাবসিডি রেটে প্রয়োজনীয় ফ্যামিলি রিফিল পণ্য সিলেক্ট করে ১ ক্লিকের অর্ডার সম্পন্ন করুন।
+                  আপনার রেশন আইডির বিপরীতে প্রতি মাসে মেইন ব্যালেন্স থেকে সাবসিডি রেটে প্রয়োজনীয় ফ্যামিলি রিফিল পণ্য সিলেক্ট করে 1 ক্লিকের অর্ডার সম্পন্ন করুন।
                 </p>
               </div>
 
@@ -1568,7 +1581,7 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
               <div className="bg-white rounded-3xl border border-slate-200/80 p-5 text-left space-y-4">
                 <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">
                   <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest font-sans">উপলব্ধ রেশন প্রোডাক্টস</h4>
-                  <span className="text-[10px] font-black text-emerald-800">নির্বাচিতঃ {englishToBengali(selectedItemIds.length)}/৫ আইটেম</span>
+                  <span className="text-[10px] font-black text-emerald-800">নির্বাচিতঃ {englishToBengali(selectedItemIds.length)}/5 আইটেম</span>
                 </div>
 
                 <div className="grid grid-cols-4 gap-1.5 sm:gap-3.5 pt-1.5">
@@ -1622,7 +1635,7 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
                     type="button"
                     onClick={() => {
                       if (selectedItemIds.length === 0) {
-                        alert("অনুগ্রহ করে কমপক্ষে ১টি আইটেম সিলেক্ট করুন!");
+                        alert("অনুগ্রহ করে কমপক্ষে 1টি আইটেম সিলেক্ট করুন!");
                         return;
                       }
                       setShowCheckoutModal(true);
@@ -1651,7 +1664,7 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
                 </div>
               ) : orders.length === 0 ? (
                 <div className="p-12 text-center bg-white border-2 border-dashed border-slate-200 rounded-3xl text-slate-400 font-bold text-xs leading-relaxed">
-                  আপনি এই পর্যন্ত কোনো অর্ডার প্রদান করেননি। সর্বমোট {appConfig?.rationTotalItemsText || "১০"}টি নিত্যপ্রয়োজনীয় আইটেম উপভোগ করতে এখনই অর্ডার করুন।
+                  আপনি এই পর্যন্ত কোনো অর্ডার প্রদান করেননি। সর্বমোট {appConfig?.rationTotalItemsText || "10"}টি নিত্যপ্রয়োজনীয় আইটেম উপভোগ করতে এখনই অর্ডার করুন।
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -1712,7 +1725,7 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
                               <span className={`w-6 h-6 rounded-full flex items-center justify-center font-bold ${
                                 order.status === 'Collected' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-400'
                               }`}>
-                                {order.status === 'Collected' ? '✓' : '৩'}
+                                {order.status === 'Collected' ? '✓' : '3'}
                               </span>
                               <p className="leading-tight text-slate-500">সংগ্রহ সম্পন্ন</p>
                             </div>
@@ -1812,7 +1825,7 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
 
                   <div className="p-3 bg-slate-50 rounded-2xl border border-slate-150 flex items-center justify-between">
                     <span>⏰ সংগ্রহ ডিস্ট্রিবিউশন সময়ঃ</span>
-                    <span className="text-slate-900 font-black">শনিবার হতে বৃহস্পতিবার (সকাল ৯টা - বিকেল ৫টা)</span>
+                    <span className="text-slate-900 font-black">শনিবার হতে বৃহস্পতিবার (সকাল 9টা - বিকেল 5টা)</span>
                   </div>
                 </div>
               </div>
@@ -1954,7 +1967,7 @@ export default function RationCardView({ liveUser, syncLiveProfile, appConfig, o
 
               <form onSubmit={handlePlaceOrder} className="space-y-4">
                 <div className="space-y-1">
-                  <label className="block text-xs font-extrabold text-slate-600">আপনার ৪ ডিজিটের ওয়ালেট পিন নাম্বার লিখুনঃ *</label>
+                  <label className="block text-xs font-extrabold text-slate-600">আপনার 4 ডিজিটের ওয়ালেট পিন নাম্বার লিখুনঃ *</label>
                   <input
                     type="password"
                     required

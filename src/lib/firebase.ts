@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { initializeFirestore, memoryLocalCache, getFirestore, setLogLevel } from 'firebase/firestore';
 import { getMessaging } from 'firebase/messaging';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -8,7 +8,24 @@ import firebaseConfig from '../../firebase-applet-config.json';
 const app = initializeApp(firebaseConfig);
 const TARGET_DATABASE_ID = firebaseConfig.firestoreDatabaseId || "ai-studio-120ec6e1-2db5-45d2-b1b1-46493400c959";
 
-export const db = getFirestore(app, TARGET_DATABASE_ID); /* CRITICAL: The app will break without this line */
+// Suppress normal gRPC/Listen stream cancel info messages from cluttering console
+try {
+  setLogLevel('error');
+} catch (e) {
+  // Ignore
+}
+
+let firestoreInstance;
+try {
+  firestoreInstance = initializeFirestore(app, {
+    experimentalAutoDetectLongPolling: true,
+    localCache: memoryLocalCache()
+  }, TARGET_DATABASE_ID);
+} catch (e) {
+  firestoreInstance = getFirestore(app, TARGET_DATABASE_ID);
+}
+
+export const db = firestoreInstance; /* CRITICAL: The app will break without this line */
 
 export const auth = getAuth(app);
 export const messaging = typeof window !== 'undefined' ? getMessaging(app) : null;

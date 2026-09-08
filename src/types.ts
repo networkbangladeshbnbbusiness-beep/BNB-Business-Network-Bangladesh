@@ -5,7 +5,8 @@ export interface User {
   phone: string;
   normalizedPhone?: string;
   memberId: string;
-  pin: string; // Stored PIN (e.g., 5-digit number)
+  password?: string; // Account security password (entered on initial / fresh login)
+  pin: string; // Stored PIN (e.g., 4-digit number)
   pinSet?: boolean;
   isPendingPin?: boolean;
   role: 'user' | 'admin' | 'sub_admin';
@@ -26,8 +27,10 @@ export interface User {
   motherName?: string;
   gender?: string;
   occupation?: string;
+  profession?: string;
   alternatePhone?: string;
   emergencyPhone?: string;
+  memberCategory?: 'regular' | 'investor' | 'shareholder';
   nomineeName?: string;
   nomineeRelation?: string;
   nomineePhone?: string;
@@ -44,6 +47,7 @@ export interface User {
   country?: string;
   village?: string;
   profilePic?: string;
+  photoURL?: string;
   phoneChangeCount?: number;
   status?: 'active' | 'inactive';
   approved?: boolean; // Whether the user's account is verified and approved by admin
@@ -55,6 +59,9 @@ export interface User {
   samityRejectReason?: string;
   createdAt: string;
   updatedAt?: any;
+  isPermanent?: boolean; // Lifetime permanent account: never deleted, never lost
+  permanentLifetimeAccount?: boolean; // Explicit flag indicating permanent existence
+  lifetimeProtected?: boolean; // Protected from deletion or accidental removal
   cardLocked?: boolean; // Virtual Card Lock State
   hasSetProfile?: boolean; // User profile information has been set (locked for editing)
   nidFrontPic?: string;
@@ -77,6 +84,9 @@ export interface User {
   referredBy?: string; // Member ID or phone who referred this user
   customTelecomPercent?: number; // Personalized telecom recharge commission percentage
   currentDeviceId?: string; // Device ID locked to this account
+  deviceFingerprint?: string; // Hardware/Platform device fingerprint for App+Web session match
+  activeDeviceTokens?: string[]; // Array of active device IDs / fingerprints authorized on this device
+  deviceType?: 'app' | 'web' | 'both'; // Device platform type
   requestedDeviceId?: string; // New Device ID requested by the user
   deviceLockBypassed?: boolean; // Whether device lock is bypassed for this user
   deviceChangeRequested?: boolean; // Whether the user requested a device change approval
@@ -100,26 +110,106 @@ export interface User {
   deviceStatus?: 'Online' | 'Offline';
   samitySchemeActive?: boolean;
   samityAutoSavingsActive?: boolean;
-  samityDeactivateStatus?: 'pending' | 'approved' | 'rejected' | 'released';
+  samityDeactivateStatus?: 'pending' | 'approved' | 'rejected' | 'released' | 'self_opted_out' | 'active' | string;
   samityDeactivateReason?: string;
   samityDeactivateRequestedAt?: string;
+  samitySwitchStatus?: 'ON' | 'OFF';
+  samityOptOutReason?: string;
+  samityOptInReason?: string;
+  samityOptOutDate?: string;
+  samitySwitchLastUpdated?: string;
   canDisableAutoSavings?: boolean; // Admin permission to allow member to turn off auto savings
   allowAutoSavingsToggle?: boolean; // Alias for admin permission
   lastDecSettlementYear?: number; // Track December annual savings return year
   dueMonths?: number;
   lastCoopInstantLoanAt?: string; // Timestamp of last instant 50% coop loan
   lastCoopInstantLoanAmount?: number; // Amount of last instant loan
+  lastCoopLoanPercentage?: number; // Percentage of savings taken (e.g. 1-25% or 25-50%)
   lastCoopInstantLoanRepaidAt?: string; // Timestamp when instant loan was fully repaid (cooldown starts from this date)
   lastAutoDeductedMonth?: string; // YYYY-MM string to track monthly auto-deduction
   instantLoanDurationMonths?: number; // Chosen duration (1, 2, or 3 months)
   instantLoanOriginalAmount?: number; // Original instant loan principle
   instantLoanTakenAt?: string; // ISO timestamp when instant loan was disbursed
+  loanDuration?: number; // Qard loan duration (1 or 3 months)
+  loanTakenAt?: string; // Qard loan taken timestamp
+  lastQardDueReminderCycle?: string; // Qard reminder cycle tracker
+  lastQardFineDate?: string; // Qard fine date tracker
+  totalQardFine?: number; // Accumulated Qard late fine
   isAppLocked?: boolean; // 2nd Step custom Secret App Lock active status
   appLockCode?: string; // Custom 6-12 character/digit secret lock code
+  appLockUpdatedAt?: string; // Timestamp of last app lock update
   appLockResetRequested?: boolean; // Whether user requested admin to unlock/reset app lock
   appLockResetRequestedAt?: string; // Timestamp of app lock reset request
   appLockResetStatus?: 'pending' | 'approved' | 'rejected'; // Admin approval status for app lock reset
   appLockResetReason?: string; // Optional message or note for unlock request
+  agreedNoticeIds?: string[]; // Array of mandatory notice IDs the user consented to
+  noticeResponses?: Record<string, { agreed: boolean; respondedAt: string; feedbackText?: string }>;
+}
+
+export interface MandatoryNoticeSlide {
+  id: string;
+  badge?: string; // e.g. "নতুন নিয়ম"
+  iconType?: 'rules' | 'security' | 'limits' | 'handshake' | 'announcement' | 'custom';
+  customImageUrl?: string;
+  title: string;
+  description?: string;
+  bulletPoints?: string[];
+  footerNote?: string;
+}
+
+export interface MandatoryNoticeConsent {
+  id: string; // unique notice ID e.g. "notice_rule_2026_v1"
+  active: boolean;
+  type: 'rules_consent' | 'poll_feedback' | 'announcement';
+  categoryBadge: string; // e.g. "নতুন নিয়ম" বা "সদস্য মতামত"
+  title: string; // e.g. "নতুন নিয়মে আপনার অনুমতি প্রয়োজন"
+  introText: string; // e.g. "আমাদের সেবার মান উন্নয়ন এবং সদস্যদের নিরাপত্তা নিশ্চিত করতে কিছু নতুন নিয়ম ও আপডেট আনা হয়েছে। অনুমতি দেওয়ার আগে অনুগ্রহ করে সম্পূর্ণ পড়ুন।"
+  startButtonText?: string; // e.g. "চলুন দেখি"
+  startCaption?: string; // e.g. "আপনি না বলা পর্যন্ত এটি বারবার আসবে"
+  slides: MandatoryNoticeSlide[];
+  finalQuestion: string; // e.g. "আপনি কি উপরোক্ত নতুন নিয়ম ও শর্তাবলী মেনে নিতে সম্মত?"
+  agreeButtonText: string; // e.g. "হ্যাঁ, আমি সম্মত"
+  disagreeButtonText?: string; // e.g. "না, আমি সম্মত নই"
+  allowFeedbackComment?: boolean; // if true, allows member to type optional feedback message
+  feedbackPlaceholder?: string;
+  successTitle?: string; // e.g. "ধন্যবাদ!"
+  successMessage?: string; // e.g. "আপনি নতুন নিয়মে সম্মতি দিয়েছেন। এখন থেকে আপনি আমাদের সকল সেবা উপভোগ করতে পারবেন।"
+  disagreeTitle?: string; // e.g. "আপনি সম্মত হননি"
+  disagreeMessage?: string; // e.g. "আপনি নতুন নিয়মে সম্মতি না দেওয়ায় কিছু সেবা সীমিত থাকতে পারে। আপনি চাইলে পরে প্রোফাইল থেকে নিয়মগুলো পড়ে সম্মতি দিতে পারবেন।"
+  createdAt?: string;
+  updatedAt?: string;
+  version?: number;
+}
+
+export interface MandatoryNoticeMemberResponse {
+  id?: string;
+  docId?: string;
+  noticeId: string;
+  userId: string;
+  userName: string;
+  memberId: string;
+  phone?: string;
+  agreed: boolean;
+  feedbackText?: string;
+  respondedAt: string;
+}
+
+export interface DeviceReleaseRequest {
+  id?: string;
+  docId?: string;
+  userId: string;
+  userName: string;
+  userPhone: string;
+  memberId: string;
+  reason: string;
+  details?: string;
+  requestedDeviceId?: string;
+  lockedDeviceId?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+  resolvedAt?: string;
+  resolvedBy?: string;
+  adminNote?: string;
 }
 
 export interface ExchangeOrder {
@@ -145,10 +235,10 @@ export interface Transaction {
   userId: string;
   userName: string;
   memberId: string;
-  type: 'deposit' | 'add_money' | 'loan_repayment' | 'loan_disbursment' | 'coop_loan_apply' | 'interest' | 'telecom_recharge' | 'shop_purchase' | 'utility' | 'fee_payment' | 'balance_transfer' | 'received_transfer' | 'withdraw' | 'qard_donation' | 'qard_loan_request' | 'qard_loan_disbursment' | 'qard_loan_repayment' | 'money_exchange' | 'qard_withdrawal' | 'coop_savings_deposit' | 'samity_deposit';
+  type: 'deposit' | 'add_money' | 'loan_repayment' | 'loan_disbursment' | 'coop_loan_apply' | 'interest' | 'telecom_recharge' | 'telecom_add_balance' | 'shop_purchase' | 'utility' | 'fee_payment' | 'balance_transfer' | 'received_transfer' | 'withdraw' | 'qard_donation' | 'qard_loan_request' | 'qard_loan_disbursment' | 'qard_loan_repayment' | 'money_exchange' | 'qard_withdrawal' | 'coop_savings_deposit' | 'samity_deposit';
   typeLabel: string; // Bengali label of type
   amount: number;
-  status: 'pending' | 'success' | 'failed';
+  status: 'pending' | 'success' | 'failed' | 'approved' | 'rejected' | 'completed' | 'on_hold';
   description: string;
   createdAt: string;
   paymentMethod?: string;  // bKash, Nagad, Rocket, CellFin, DBBL Bank
@@ -183,6 +273,11 @@ export interface Transaction {
   approvedAt?: string;
   totalDeducted?: number;
   charge?: number;
+  fee?: number;
+  adminProfit?: number;
+  companyProfit?: number;
+  profitAmount?: number;
+  profitNote?: string;
   approvedCashback?: number;
   extraCommission?: number;
 }
@@ -306,6 +401,19 @@ export interface CompanyFundAccount {
   updatedAt?: string;
 }
 
+export interface MasterFundAccount {
+  id: string;
+  accountName: string; // e.g. "উত্তরা ৩ কাঠা জমি বায়না", "ইসলামী ব্যাংক সঞ্চয়ী হিসাব", "২০ ভরি স্বর্ণ ক্রয়", "ব্যবসা ইনভেস্টমেন্ট"
+  category: 'land' | 'gold' | 'bank' | 'business' | 'cash' | 'receivable' | 'mfs' | 'other';
+  holderName?: string; // কার কাছে আছে / কার নামে / দায়িত্বপ্রাপ্ত ব্যক্তির নাম
+  holderPhone?: string; // মোবাইল নম্বর
+  accountNumber?: string; // দলিল নম্বর / ব্যাংক একাউন্ট / রসিদ নং
+  location?: string; // অবস্থান / ঠিকানা
+  amount: number; // টাকার পরিমাণ
+  note?: string; // অতিরিক্ত বিবরণ / নোট
+  updatedAt?: string;
+}
+
 export interface QardRuleItem {
   id: string;
   icon: string;
@@ -335,15 +443,39 @@ export interface QardCoopInstantLoanConfig {
   title?: string;
   description?: string;
   takeStartDay?: number; // Start day of month for loan taking (default 1)
-  takeEndDay?: number;   // End day of month for loan taking (default 25)
+  takeEndDay?: number;   // End day of month for loan taking (default 31 - any day)
   autoDeductStartDay?: number; // Start day of month for auto deduction (default 1)
-  autoDeductEndDay?: number;   // End day of month for auto deduction (default 9)
-  month1Ratio?: number; // 1st installment % for 3 months (default 40)
-  month2Ratio?: number; // 2nd installment % for 3 months (default 35)
-  month3Ratio?: number; // 3rd installment % for 3 months (default 25)
+  autoDeductEndDay?: number;   // End day of month for auto deduction (default 31 - 30 days cycle)
+  month1Ratio?: number; // 1st installment % for 3 months (default 33.34)
+  month2Ratio?: number; // 2nd installment % for 3 months (default 33.33)
+  month3Ratio?: number; // 3rd installment % for 3 months (default 33.33)
+}
+
+export interface QardGoldLoanConfig {
+  enabled?: boolean;
+  protectionMonths?: number; // default 3 (admin can increase or decrease!)
+  protectionDays?: number; // default 90 (admin can increase or decrease!)
+  equalMarketPrice?: boolean; // true = 100% equal market price (no extra +500)
+  extraBenefit?: number; // 0
+  noticeTitle?: string;
+  noticeSubtitle?: string;
+  rates?: {
+    k24?: number;
+    k22?: number;
+    k21?: number;
+    k18?: number;
+    traditional?: number;
+  };
+  guidelines?: Array<{
+    id: string;
+    icon: string;
+    title: string;
+    description: string;
+  }>;
 }
 
 export interface QardConfig {
+  baseFund?: number;
   rulesTitle?: string;
   rulesSubtitle?: string;
   rulesList?: QardRuleItem[];
@@ -353,6 +485,7 @@ export interface QardConfig {
   maxLoanAmount?: number;
   maxDurationMonths?: number;
   coopInstantLoanConfig?: QardCoopInstantLoanConfig;
+  goldLoanConfig?: QardGoldLoanConfig;
 }
 
 export interface SamityFineTier {
@@ -364,6 +497,12 @@ export interface SamityFineTier {
   fineAmount: number;
   bgClass?: string;
   isDaily?: boolean;
+}
+
+export interface MonthFineExemptionConfig {
+  isExempted: boolean;
+  exemptUntilDay?: number; // e.g. 15, 20, 31 (full month)
+  note?: string;
 }
 
 export interface SamityPolicyConfig {
@@ -378,9 +517,59 @@ export interface SamityPolicyConfig {
   pausePenaltyUntil15th?: boolean;
   penaltyExemptionUntilDay?: number;
   penaltyExemptionNote?: string;
+  defaultGracePeriodDays?: number; // default 9 (1-9th free)
+  exemptedMonths?: Record<string, boolean>; // e.g. { "2026-08": true, "2026-09": true }
+  exemptedMonthsConfig?: Record<string, MonthFineExemptionConfig>;
+}
+
+export type SamityInvestmentCategory = 'gold' | 'land' | 'agro' | 'business' | 'other';
+export type SamityInvestmentStatus = 'active' | 'sold' | 'new';
+
+export interface SamityInvestmentComment {
+  id: string;
+  userId: string;
+  userName: string;
+  userPhone?: string;
+  comment: string;
+  createdAt: string;
+  editedAt?: string;
+}
+
+export interface SamityInvestment {
+  id: string;
+  title: string;
+  category: SamityInvestmentCategory;
+  categoryLabel?: string;
+  status: SamityInvestmentStatus; // active = চলমান, sold = সফল বিক্রয় ও লাভ, new = নতুন শুরু
+  description: string; // ফেসবুক পোস্টের মতো ক্যাপশন ও বিস্তারিত বর্ণনা
+  imageUrl?: string;
+  imageUrls?: string[];
+  buyAmount: number; // ক্রয় মূল্য / ইনভেস্টের টাকা
+  sellAmount?: number; // বিক্রয় মূল্য / বর্তমান বাজারদর
+  profitAmount?: number; // অর্জিত মুনাফা / লাভ
+  roiPercentage?: number; // লভ্যাংশ শতকরা হার (%)
+  location?: string; // প্রজেক্ট লোকেশন / স্থান
+  investmentDate?: string; // ইনভেস্টের তারিখ
+  saleDate?: string; // বিক্রয়ের তারিখ
+  durationText?: string; // মেয়াদকাল (যেমন: ৬ মাস, ১ বছর)
+  likesCount?: number;
+  likedBy?: string[]; // user UIDs
+  likedUsers?: { uid: string; name: string; memberId?: string; photoURL?: string; reactedAt?: string }[];
+  dislikesCount?: number;
+  dislikedBy?: string[]; // user UIDs
+  dislikedUsers?: { uid: string; name: string; memberId?: string; photoURL?: string; reactedAt?: string }[];
+  viewsCount?: number;
+  comments?: SamityInvestmentComment[];
+  authorName?: string; // ডিফল্ট: "BNB ইনভেস্টমেন্ট বোর্ড / ম্যানেজমেন্ট"
+  authorRole?: string; // ডিফল্ট: "সেন্ট্রাল ম্যানেজমেন্ট"
+  authorAvatar?: string;
+  isPinned?: boolean;
+  createdAt: string;
+  updatedAt?: string;
 }
 
 export interface AppConfig {
+  adminPin?: string; // Master admin PIN override
   allowProfileSelfEdit?: boolean; // Whether members are allowed to edit/update their own profile info
   phoneChangeConfig?: {
     enabled?: boolean;
@@ -434,7 +623,7 @@ export interface AppConfig {
   internationalExchangeRate?: number;
   companyReserveFund?: number; // Company Gross Starting Reserve Capital
   companyFundAccounts?: CompanyFundAccount[]; // Detailed account breakdown (e.g. spouse, brother, personal, bank)
-  masterFundAccounts?: any[]; // Master Fund detailed account breakdown
+  masterFundAccounts?: MasterFundAccount[]; // Master Fund detailed account breakdown
   manualFundAdjustments?: Record<string, number>; // Manual overrides/adjustments for company fund balance modules
   // END NEW FIELDS
   logoUrl?: string;
@@ -569,10 +758,20 @@ export interface AppConfig {
   bannerHeightType?: 'thin' | 'medium' | 'thick' | 'custom' | '16:9' | '21:9' | '32:9';
   bannerHeightValue?: number; // Custom height in pixels (e.g. 100 to 400)
   bottomNavHeightType?: 'thin' | 'medium' | 'thick';
-  bottomNavTabs?: string[]; // list of active tab keys (e.g. ['home', 'deposit', 'history', 'profile'])
+  bottomNavTabs?: string[]; // list of active tab keys (e.g. ['home', 'deposit', 'add_money', 'history', 'profile'])
   gridColsCount?: number; // 2, 3, 4, 5 columns
   gridIconSize?: 'small' | 'medium' | 'large' | 'custom';
   gridIconSizeValue?: number; // Icon size diameter in pixels
+  mandatoryNotice?: MandatoryNoticeConsent;
+  mandatoryNoticeResponses?: Record<string, {
+    userId: string;
+    userName: string;
+    memberId: string;
+    phone?: string;
+    agreed: boolean;
+    feedbackText?: string;
+    respondedAt: string;
+  }>;
 }
 
 export interface Product {
@@ -646,6 +845,133 @@ export const SAMITY_MONTHS = [
 ];
 
 export const SAMITY_YEARS = Array.from({ length: 2050 - 2026 + 1 }, (_, i) => 2026 + i);
+
+export const getEffectivePaidMonthsList = (
+  paidMonths: any = [],
+  savingsAmount?: number,
+  targetMonthlyRate?: number
+): string[] => {
+  let paidMonthsList: string[] = [];
+  let userSavings: number | undefined = savingsAmount;
+  let userRate: number | undefined = targetMonthlyRate;
+
+  // Case 1: A User or member object was passed as the first parameter
+  if (paidMonths && typeof paidMonths === 'object' && !Array.isArray(paidMonths)) {
+    const u = paidMonths;
+    if (Array.isArray(u.samityPaidMonths)) {
+      paidMonthsList = u.samityPaidMonths;
+    }
+    if (userSavings === undefined) {
+      userSavings = typeof u.savings === 'number' && !isNaN(u.savings)
+        ? u.savings
+        : (typeof u.dpsBalance === 'number' && !isNaN(u.dpsBalance)
+            ? u.dpsBalance
+            : Number(u.savings) || Number(u.dpsBalance) || 0);
+    }
+    if (userRate === undefined) {
+      userRate = Number(u.monthlySavingsTarget) || 1000;
+    }
+  } else if (Array.isArray(paidMonths)) {
+    paidMonthsList = paidMonths;
+  } else if (typeof paidMonths === 'string' && paidMonths) {
+    paidMonthsList = [paidMonths];
+  }
+
+  const uniqueSet = new Set<string>();
+
+  // Add all explicit paid month keys from paidMonths array
+  if (Array.isArray(paidMonthsList)) {
+    paidMonthsList.forEach(key => {
+      if (!key || typeof key !== 'string') return;
+      const normalizedKey = key.trim().toLowerCase().replace('_', '-');
+      if (normalizedKey.includes('-')) {
+        uniqueSet.add(normalizedKey);
+      } else {
+        uniqueSet.add(`2026-${normalizedKey}`);
+      }
+    });
+  }
+
+  // Reconcile with actual deposited savings and monthly installment target rate
+  // This guarantees that whatever amount of money is in the member's savings,
+  // the exact proportional count of installment months are permanent and paid!
+  const rate = Math.max(1, typeof userRate === 'number' && !isNaN(userRate) && userRate > 0 ? userRate : (Number(userRate) || 1000));
+  const validSavings = Math.max(0, typeof userSavings === 'number' && !isNaN(userSavings) ? userSavings : (Number(userSavings) || 0));
+
+  if (userSavings !== undefined || (typeof targetMonthlyRate === 'number' && targetMonthlyRate > 0)) {
+    const expectedMonthsCount = Math.floor(validSavings / rate);
+
+    // If array has fewer months than paid savings, synthesize chronological months from 2026 onwards
+    if (uniqueSet.size < expectedMonthsCount) {
+      for (const yr of SAMITY_YEARS) {
+        for (const m of SAMITY_MONTHS) {
+          if (uniqueSet.size >= expectedMonthsCount) break;
+          const k = `${yr}-${m.id}`;
+          uniqueSet.add(k);
+        }
+        if (uniqueSet.size >= expectedMonthsCount) break;
+      }
+    } else if (uniqueSet.size > expectedMonthsCount && expectedMonthsCount > 0) {
+      // Sort chronologically and retain only verified count matching actual money deposited
+      const sorted = Array.from(uniqueSet).sort((a, b) => {
+        const [yrA, mIdA] = a.split('-');
+        const [yrB, mIdB] = b.split('-');
+        const yDiff = (Number(yrA) || 2026) - (Number(yrB) || 2026);
+        if (yDiff !== 0) return yDiff;
+        const idxA = SAMITY_MONTHS.findIndex(m => m.id === mIdA);
+        const idxB = SAMITY_MONTHS.findIndex(m => m.id === mIdB);
+        return idxA - idxB;
+      });
+      return sorted.slice(0, expectedMonthsCount);
+    }
+  }
+
+  // Always return sorted chronologically for consistent UI rendering
+  const sorted = Array.from(uniqueSet).sort((a, b) => {
+    const [yrA, mIdA] = a.split('-');
+    const [yrB, mIdB] = b.split('-');
+    const yDiff = (Number(yrA) || 2026) - (Number(yrB) || 2026);
+    if (yDiff !== 0) return yDiff;
+    const idxA = SAMITY_MONTHS.findIndex(m => m.id === mIdA);
+    const idxB = SAMITY_MONTHS.findIndex(m => m.id === mIdB);
+    return idxA - idxB;
+  });
+
+  return sorted;
+};
+
+export const getUniquePaidMonthsCount = (
+  paidMonths: string[] = [],
+  savingsAmount?: number,
+  targetMonthlyRate?: number
+): number => {
+  return getEffectivePaidMonthsList(paidMonths, savingsAmount, targetMonthlyRate).length;
+};
+
+export const normalizePaidMonthsArray = (
+  paidMonths: string[] = [],
+  savingsAmount?: number,
+  targetMonthlyRate?: number
+): string[] => {
+  return getEffectivePaidMonthsList(paidMonths, savingsAmount, targetMonthlyRate);
+};
+
+export const getEffectiveBalance = (userObj: any): number => {
+  if (!userObj) return 0;
+  if (typeof userObj.balance === 'number' && !isNaN(userObj.balance)) {
+    return userObj.balance;
+  }
+  if (userObj.balance !== undefined && userObj.balance !== null && userObj.balance !== '' && !isNaN(Number(userObj.balance))) {
+    return Number(userObj.balance);
+  }
+  if (typeof userObj.mainBalance === 'number' && !isNaN(userObj.mainBalance)) {
+    return userObj.mainBalance;
+  }
+  if (userObj.mainBalance !== undefined && userObj.mainBalance !== null && userObj.mainBalance !== '' && !isNaN(Number(userObj.mainBalance))) {
+    return Number(userObj.mainBalance);
+  }
+  return 0;
+};
 
 export interface PhoneChangeRequest {
   id: string;

@@ -230,7 +230,7 @@ export default function BnbAutoSalaryPay({ user, onBack, syncLiveProfile, appCon
       const newBal = currentBal + 100000;
       await updateDoc(userRef, { balance: newBal });
       syncLiveProfile();
-      alert('সফলভাবে আপনার ওয়ালেটে ১,০০,০০০ টাকা টেস্ট ব্যালেন্স যোগ করা হয়েছে! এখন আপনি সহজেই সবার বেতন পরিশোধ করতে পারবেন।');
+      alert('সফলভাবে আপনার ওয়ালেটে 1,00,000 টাকা টেস্ট ব্যালেন্স যোগ করা হয়েছে! এখন আপনি সহজেই সবার বেতন পরিশোধ করতে পারবেন।');
     } catch (err) {
       console.error('Error adding test balance:', err);
       alert('টেস্ট ব্যালেন্স যোগ করতে সমস্যা হয়েছে।');
@@ -282,7 +282,7 @@ export default function BnbAutoSalaryPay({ user, onBack, syncLiveProfile, appCon
           createdAt: new Date().toISOString()
         });
       }
-      alert('সফলভাবে ৩ জন নমুনা ডেমো স্টাফ যুক্ত করা হয়েছে!');
+      alert('সফলভাবে 3 জন নমুনা ডেমো স্টাফ যুক্ত করা হয়েছে!');
     } catch (err) {
       console.error('Error loading sample employees:', err);
       alert('ডেমো স্টাফ লোড করতে সমস্যা হয়েছে।');
@@ -302,7 +302,7 @@ export default function BnbAutoSalaryPay({ user, onBack, syncLiveProfile, appCon
       return;
     }
 
-    const inputPin = prompt(`প্রিয় ${user.name}, "${emp.name}"-কে ৳ ${formatMoney(totalDue)} বেতন প্রদানের জন্য ৪-ডিজিট সিকিউরিটি পিন (PIN) দিন:`);
+    const inputPin = prompt(`প্রিয় ${user.name}, "${emp.name}"-কে ৳ ${formatMoney(totalDue)} বেতন প্রদানের জন্য 4-ডিজিট সিকিউরিটি পিন (PIN) দিন:`);
     if (!inputPin) return;
 
     if (inputPin !== user.pin) {
@@ -632,7 +632,7 @@ export default function BnbAutoSalaryPay({ user, onBack, syncLiveProfile, appCon
           <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center relative">
             <Bell className="w-5 h-5 text-white" />
             <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-red-500 rounded-full border border-white text-[8px] font-extrabold flex items-center justify-center">
-              ৫
+              5
             </span>
           </div>
         </div>
@@ -672,7 +672,7 @@ export default function BnbAutoSalaryPay({ user, onBack, syncLiveProfile, appCon
                     onClick={handleAddTestBalance}
                     className="bg-[#00a884]/15 hover:bg-[#00a884]/25 text-[#00a884] text-[9.5px] font-extrabold px-2 py-1 rounded-lg transition-transform active:scale-95 border border-[#00a884]/20"
                   >
-                    + ৳১,০০,০০০ টেস্ট ব্যালেন্স
+                    + ৳1,00,000 টেস্ট ব্যালেন্স
                   </button>
                 </div>
               </div>
@@ -1330,10 +1330,10 @@ export default function BnbAutoSalaryPay({ user, onBack, syncLiveProfile, appCon
                   <div>
                     <div className="flex justify-between items-center mb-1">
                       <label className="block text-xs font-bold text-slate-600">
-                        ৪-ডিজিট সিকিউরিটি পিন (Security PIN) নিশ্চিত করুন *
+                        4-ডিজিট সিকিউরিটি পিন (Security PIN) নিশ্চিত করুন *
                       </label>
                       <span className="text-[10px] font-black text-[#00a884] bg-emerald-50 px-2 py-0.5 rounded border border-[#00a884]/20 animate-pulse">
-                        আপনার পিনঃ {user?.pin || '১২৩৪'}
+                        আপনার পিনঃ {user?.pin || '1234'}
                       </span>
                     </div>
                     <input 

@@ -91,28 +91,28 @@ export default function BnbEducationCenter({ user, onBack, appConfig }: BnbEduca
       title: 'সততার সাথে ব্যবসা করার গুরুত্ব',
       content: 'হালাল ব্যবসার মাধ্যমে দুনিয়া ও আখিরাতে সফলতা অর্জন করুন। সততা ও ন্যায়পরায়ণতা একজন আদর্শ ব্যবসায়ীর অন্যতম গুণ।',
       category: 'হালাল ব্যবসা শিক্ষা',
-      timeAgo: '২ ঘণ্টা আগে',
+      timeAgo: '2 ঘণ্টা আগে',
       image: 'https://images.unsplash.com/photo-1578575437130-527eed3abbec?q=80&w=600&auto=format&fit=crop'
     },
     {
       title: 'আল্লাহর উপর ভরসা ও তাওয়াক্কুল',
       content: 'তাওয়াক্কুল বা আল্লাহর উপর অগাধ বিশ্বাস মানুষের জীবনে প্রশান্তি ও সফলতা নিয়ে আসে। প্রতিটি কাজে আল্লাহর সন্তুষ্টি অর্জনই মূল লক্ষ্য হওয়া উচিত।',
       category: 'ইসলামী শিক্ষা',
-      timeAgo: '৫ ঘণ্টা আগে',
+      timeAgo: '5 ঘণ্টা আগে',
       image: 'https://images.unsplash.com/photo-1564507592333-c60657eea523?q=80&w=600&auto=format&fit=crop'
     },
     {
-      title: 'সময় ব্যবস্থাপনার ১০টি কার্যকর উপায়',
+      title: 'সময় ব্যবস্থাপনার 10টি কার্যকর উপায়',
       content: 'সময়কে সঠিকভাবে কাজে লাগিয়ে অলসতা দূর করুন এবং নিজের লক্ষ্য পূরণে একধাপ এগিয়ে যান। সফল জীবনের চাবিকাঠি সময়ানুবর্তিতা।',
       category: 'आत्मউন্নয়ন',
-      timeAgo: '১ দিন আগে',
+      timeAgo: '1 দিন আগে',
       image: 'https://images.unsplash.com/photo-1506784983877-45594efa4cbe?q=80&w=600&auto=format&fit=crop'
     },
     {
       title: 'সুদমুক্ত ব্যবসার উপকারিতা',
       content: 'সুদমুক্ত অর্থব্যবস্থা সমাজ ও অর্থনীতিতে ইনসাফ কায়েম করে। ব্যবসা হোক কল্যাণকর ও শোষণমুক্ত।',
       category: 'হালাল ব্যবসা শিক্ষা',
-      timeAgo: '২ দিন আগে',
+      timeAgo: '2 দিন আগে',
       image: 'https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?q=80&w=600&auto=format&fit=crop'
     }
   ];
@@ -274,7 +274,7 @@ export default function BnbEducationCenter({ user, onBack, appConfig }: BnbEduca
             <div className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center relative">
               <Bell className="w-4.5 h-4.5 text-white" />
               <span className="absolute top-1 right-1 w-3.5 h-3.5 bg-red-500 rounded-full border border-[#0b543c] text-[8px] font-extrabold flex items-center justify-center text-white">
-                ৫
+                5
               </span>
             </div>
           </div>
@@ -322,7 +322,7 @@ export default function BnbEducationCenter({ user, onBack, appConfig }: BnbEduca
                   </p>
 
                   <div className="text-[9px] xs:text-[10px] text-emerald-400 font-extrabold uppercase mt-1">
-                    সূরা আত-তালাক | আয়াতঃ ২
+                    সূরা আত-তালাক | আয়াতঃ 2
                   </div>
                 </div>
 
@@ -352,7 +352,7 @@ export default function BnbEducationCenter({ user, onBack, appConfig }: BnbEduca
                   "সততা ঈমানের অংশ।"
                 </p>
                 <span className="text-[9px] font-black text-slate-400 mt-2 block">
-                  (সহীহ বুখারীঃ ৬০)
+                  (সহীহ বুখারীঃ 60)
                 </span>
               </div>
 
@@ -741,7 +741,7 @@ export default function BnbEducationCenter({ user, onBack, appConfig }: BnbEduca
                 </div>
                 <div>
                   <span className="text-[10px] font-bold text-slate-400 block uppercase">ডেইলি স্ট্রাইক</span>
-                  <span className="text-[13.5://] font-black text-orange-600 mt-1 block">৩ দিন 🔥</span>
+                  <span className="text-[13.5://] font-black text-orange-600 mt-1 block">3 দিন 🔥</span>
                 </div>
                 <div>
                   <span className="text-[10px] font-bold text-slate-400 block uppercase">অর্জিত পয়েন্ট</span>

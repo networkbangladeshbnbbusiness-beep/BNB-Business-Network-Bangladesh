@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { ensureAuth, db, handleFirestoreError, OperationType, auth } from './lib/firebase';
 import { signOut } from 'firebase/auth';
-import { doc, getDoc, collection, query, where, getDocs, updateDoc, setDoc, limit, onSnapshot } from 'firebase/firestore';
-import { User, AppConfig } from './types';
+import { doc, getDoc, collection, query, where, getDocs, updateDoc, setDoc, limit, onSnapshot, increment, serverTimestamp, writeBatch, runTransaction } from 'firebase/firestore';
+import { User, AppConfig, getEffectiveBalance } from './types';
+import { processUserSamitySavingsAutoDeduction, getUnpaidSamityMonths } from './lib/samitySavingsEngine';
 import { loadAppConfig, DEFAULT_CONFIG } from './lib/config';
 import { executeHistoryRetentionCleanup } from './lib/retentionCleanup';
-import { normalizeMemberId, findUserInFirestoreByPhone, convertBengaliToEnglishDigits } from './lib/memberUtils';
+import { normalizeMemberId, findUserInFirestoreByPhone, convertBengaliToEnglishDigits, getClientDeviceId, getDeviceFingerprint, isSameDevice, getNextSequentialMemberId } from './lib/memberUtils';
 import { restoreAndSeedDatabase } from './lib/databaseSeeder';
 import LoginScreen from './components/LoginScreen';
 import LockScreen from './components/LockScreen';
@@ -13,7 +14,6 @@ import SetAppLockModal from './components/SetAppLockModal';
 import Dashboard from './components/Dashboard';
 import DrawerMenu from './components/DrawerMenu';
 import AdminPanel from './components/AdminPanel';
-import BapSystem from './components/BapSystem';
 import SplashVideo from './components/SplashVideo';
 import { BNBLogo } from './components/BNBLogo';
 import MaintenanceScreen from './components/MaintenanceScreen';
@@ -22,10 +22,28 @@ import DeviceLockScreen from './components/DeviceLockScreen';
 import { NotificationPrompt } from './components/NotificationPrompt';
 import { NotificationBanner } from './components/NotificationBanner';
 import { LocationPermissionModal } from './components/LocationPermissionModal';
+import { MandatoryNoticeModal } from './components/MandatoryNoticeModal';
 import { syncUserLocationNow } from './lib/locationUtils';
 import { setupFCM } from './lib/fcm';
+import { navigationManager, useBackHandler } from './lib/navigationManager';
 import { ShieldCheck, ShieldAlert, X, RefreshCw, Lock, LogOut, Eye, EyeOff, AlertCircle, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { App as CapApp } from '@capacitor/app';
+
+// Detect fresh installation / reinstall: clear stale auto-restored credentials
+if (typeof window !== 'undefined') {
+  const currentInstallationKey = 'bnb_installation_marker_v2';
+  if (!localStorage.getItem(currentInstallationKey)) {
+    const staleKeys = [
+      'bnb_user_phone', 'bnb_user_uid', 'bnb_user_name', 'bnb_user_role',
+      'bnb_user_member_id', 'bnb_user_balance', 'bnb_user_savings',
+      'bnb_user_telecom_balance', 'bnb_user_super_shop_balance', 'bnb_user_due_loan',
+      'bnb_user_samity_status', 'bnb_last_user', 'bnb_admin_mode'
+    ];
+    staleKeys.forEach(k => localStorage.removeItem(k));
+    localStorage.setItem(currentInstallationKey, 'true');
+  }
+}
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
@@ -43,6 +61,7 @@ export default function App() {
         telecomBalance: Number(localStorage.getItem('bnb_user_telecom_balance') || '0'),
         superShopBalance: Number(localStorage.getItem('bnb_user_super_shop_balance') || '0'),
         dueLoan: Number(localStorage.getItem('bnb_user_due_loan') || '0'),
+        pin: localStorage.getItem('bnb_user_pin') || undefined,
         createdAt: new Date().toISOString(),
         status: 'active',
         samityStatus: (localStorage.getItem('bnb_user_samity_status') as any) || 'none'
@@ -51,6 +70,10 @@ export default function App() {
     return null;
   });
   const [isLocked, setIsLocked] = useState(() => {
+    // Bypass lock screen automatically if returning from payment gateway
+    if (typeof window !== 'undefined' && window.location.search.includes('payment_status=')) {
+      return false;
+    }
     return !!localStorage.getItem('bnb_user_phone');
   });
   const [showSetLockModal, setShowSetLockModal] = useState(false);
@@ -72,20 +95,21 @@ export default function App() {
   const [adminBypassed, setAdminBypassed] = useState(false);
     const CURRENT_APP_VERSION = "2.0";
 
-  // Unique client-side device identifier for device-locking
-  const [deviceId] = useState(() => {
-    let devId = localStorage.getItem('bnb_device_id');
-    if (!devId) {
-      devId = 'dev_' + Math.random().toString(36).substring(2, 15) + '_' + Date.now().toString(36);
-      localStorage.setItem('bnb_device_id', devId);
-    }
-    return devId;
-  });
+  // Unique client-side device identifier & hardware fingerprint for single device locking across App + Web
+  const [deviceId] = useState(() => getClientDeviceId());
+  const [deviceFingerprint] = useState(() => getDeviceFingerprint());
 
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.location.search.includes('payment_status=')) {
+      const newUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+      window.history.replaceState({path: newUrl}, '', newUrl);
+    }
+  }, []);
 
   // Real-time synchronization of the app configuration settings
   useEffect(() => {
-    restoreAndSeedDatabase();
+    restoreAndSeedDatabase().catch(err => console.warn(err));
     const configRef = doc(db, 'system_settings', 'app_config');
     const unsub = onSnapshot(configRef, (snap) => {
       if (snap.exists()) {
@@ -101,6 +125,108 @@ export default function App() {
       console.warn("Real-time AppConfig snapshot error:", err);
     });
     return () => unsub();
+  }, []);
+
+  // Install Count tracking (Robust, Single Source of Truth, Race-condition safe)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    // We rely on our persistent getClientDeviceId() to ensure each device is counted EXACTLY ONCE.
+    const uniqueDeviceId = getClientDeviceId();
+    const localTrackKey = `bnb_install_counted_${uniqueDeviceId}`;
+    
+    // Check both localStorage and cookie to survive partial cache clears
+    const isAppInstallCounted = localStorage.getItem(localTrackKey) || document.cookie.includes(`${localTrackKey}=true`);
+    
+    if (!isAppInstallCounted) {
+      // 1. Immediately mark locally to prevent duplicate concurrent triggers (React Strict Mode / rapid re-renders)
+      localStorage.setItem(localTrackKey, 'pending');
+      
+      const updateInstallCount = async () => {
+        try {
+          // 2. Attempt an online server-side atomic transaction first to guarantee no race conditions
+          const transactionResult = await runTransaction(db, async (transaction) => {
+            const installTrackingRef = doc(db, 'install_tracking', uniqueDeviceId);
+            const snap = await transaction.get(installTrackingRef);
+            
+            if (snap.exists()) {
+              // Already exists in DB. Skip increment.
+              return false; 
+            }
+            
+            // Does not exist. Set it and increment atomic counter.
+            const configRef = doc(db, 'system_settings', 'app_config');
+            transaction.set(installTrackingRef, { 
+              installedAt: serverTimestamp(),
+              deviceId: uniqueDeviceId,
+              platform: 'capacitor_or_web'
+            }, { merge: true });
+            
+            transaction.set(configRef, { 
+              installCount: increment(1) 
+            }, { merge: true });
+            
+            return true;
+          });
+          
+          if (transactionResult) {
+            console.log('App install count verified and tracked atomically for device:', uniqueDeviceId);
+          } else {
+            console.log('App install count recovered from Firestore for device:', uniqueDeviceId);
+          }
+          
+          // 3. Mark locally as successful
+          localStorage.setItem(localTrackKey, 'true');
+          try {
+            const expires = new Date();
+            expires.setFullYear(expires.getFullYear() + 10);
+            document.cookie = `${localTrackKey}=true;expires=${expires.toUTCString()};path=/;SameSite=Lax`;
+          } catch (e) {}
+          
+        } catch (error: any) {
+          // If offline, runTransaction will throw an error (e.g. 'unavailable').
+          // We gracefully fallback to writeBatch which queues locally and syncs safely when online.
+          if (error?.code === 'unavailable' || error?.message?.includes('offline')) {
+            try {
+              const batch = writeBatch(db);
+              const installTrackingRef = doc(db, 'install_tracking', uniqueDeviceId);
+              const configRef = doc(db, 'system_settings', 'app_config');
+              
+              batch.set(installTrackingRef, { 
+                installedAt: serverTimestamp(),
+                deviceId: uniqueDeviceId,
+                platform: 'capacitor_or_web'
+              }, { merge: true });
+              
+              batch.set(configRef, { 
+                installCount: increment(1) 
+              }, { merge: true });
+              
+              await batch.commit();
+              
+              // Queued successfully
+              localStorage.setItem(localTrackKey, 'true');
+              try {
+                const expires = new Date();
+                expires.setFullYear(expires.getFullYear() + 10);
+                document.cookie = `${localTrackKey}=true;expires=${expires.toUTCString()};path=/;SameSite=Lax`;
+              } catch (e) {}
+              
+              console.warn('Install count sync delayed: Client is offline (queued safely).');
+            } catch (batchErr) {
+               localStorage.removeItem(localTrackKey); // revert pending
+               console.error('Offline batch queuing failed:', batchErr);
+            }
+          } else {
+            // Real error (e.g. permissions). Revert pending so it tries again next time.
+            localStorage.removeItem(localTrackKey);
+            console.error('Failed to update install count atomically:', error);
+          }
+        }
+      };
+      
+      updateInstallCount();
+    }
   }, []);
 
   // Automated Configurable History Retention Cleanup
@@ -231,12 +357,20 @@ export default function App() {
   // Layout states
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
-  const [bapOpen, setBapOpen] = useState(false);
   const [showAdminPinModal, setShowAdminPinModal] = useState(false);
   const [adminPinInput, setAdminPinInput] = useState('');
   const [adminError, setAdminError] = useState('');
 
-  const [activeTab, setActiveTab] = useState('home');
+  const [tabHistory, setTabHistory] = useState<string[]>(['home']);
+  const activeTab = tabHistory[tabHistory.length - 1] || 'home';
+
+  const setActiveTab = (tab: string) => {
+    setTabHistory(prev => {
+      if (prev[prev.length - 1] === tab) return prev;
+      return [...prev, tab];
+    });
+  };
+
   const [selectedAction, setSelectedAction] = useState<string | null>(null);
   const [showDemoAuthPrompt, setShowDemoAuthPrompt] = useState(false);
   const [foregroundNotification, setForegroundNotification] = useState<{title: string, body: string} | null>(null);
@@ -244,148 +378,100 @@ export default function App() {
   const [showLocationModal, setShowLocationModal] = useState(() => {
     return sessionStorage.getItem('bnb_fresh_login_location_needed') === 'true';
   });
-  const lastBackPressRef = useRef<number>(0);
 
-  // Browser/device Back-Button Gesture history synchronization system
-  const pushedViewsRef = useRef<Record<string, boolean>>({});
-
+  // Connect NavigationManager toast callback
   useEffect(() => {
-    // Keep dashboard_home state in history when on the main Dashboard and logged in
-    if (currentUser && !isLocked) {
-      const isAnyOpen = drawerOpen || showAdminPinModal || adminOpen || bapOpen || selectedAction || (window as any).bnb_modal_open;
-      if (!isAnyOpen) {
-        if (window.history.state?.appView !== 'dashboard_home') {
-          window.history.pushState({ appView: 'dashboard_home' }, '');
+    navigationManager.setExitToastCallback(setShowExitToast);
+  }, []);
+
+  // Top-level App layer back handlers (Priority order: Modal overlays > Drawers > Admin/BAP > Tab History)
+  useBackHandler(() => {
+    if (showLocationModal) {
+      sessionStorage.removeItem('bnb_fresh_login_location_needed');
+      setShowLocationModal(false);
+      return true;
+    }
+    return false;
+  }, showLocationModal, 90);
+
+  useBackHandler(() => {
+    if (showDemoAuthPrompt) {
+      setShowDemoAuthPrompt(false);
+      return true;
+    }
+    return false;
+  }, showDemoAuthPrompt, 85);
+
+  useBackHandler(() => {
+    if (showAdminPinModal) {
+      setShowAdminPinModal(false);
+      return true;
+    }
+    return false;
+  }, showAdminPinModal, 80);
+
+  useBackHandler(() => {
+    if (drawerOpen) {
+      setDrawerOpen(false);
+      return true;
+    }
+    return false;
+  }, drawerOpen, 70);
+
+  useBackHandler(() => {
+    if (adminOpen) {
+      if (typeof (window as any).bnb_admin_close_modal === 'function') {
+        const modalClosed = (window as any).bnb_admin_close_modal();
+        if (modalClosed) return true;
+      }
+      if ((window as any).bnb_admin_viewing_grid === false) {
+        if (typeof (window as any).bnb_admin_set_viewing_grid === 'function') {
+          (window as any).bnb_admin_set_viewing_grid(true);
+          return true;
         }
       }
+      setAdminOpen(false);
+      return true;
     }
-  }, [currentUser, isLocked, drawerOpen, showAdminPinModal, adminOpen, bapOpen, selectedAction]);
+    return false;
+  }, adminOpen, 50);
 
-  useEffect(() => {
-    // 1. Drawer open/close tracker
-    if (drawerOpen && !pushedViewsRef.current.drawerOpen) {
-      pushedViewsRef.current.drawerOpen = true;
-      window.history.pushState({ appView: 'drawer' }, '');
-    } else if (!drawerOpen && pushedViewsRef.current.drawerOpen) {
-      pushedViewsRef.current.drawerOpen = false;
-      if (window.history.state?.appView === 'drawer') {
-        window.history.back();
-      }
+  // Tab History Step-by-Step Back Navigation (Home -> Page A -> Page B -> Page C -> Back -> B -> Back -> A -> Back -> Home)
+  useBackHandler(() => {
+    if (tabHistory.length > 1) {
+      setTabHistory(prev => {
+        if (prev.length <= 1) return prev;
+        return prev.slice(0, prev.length - 1);
+      });
+      return true;
     }
-  }, [drawerOpen]);
+    return false;
+  }, tabHistory.length > 1, 10);
 
+  // Global Hardware / Gesture Back Button & popstate Event Dispatcher
   useEffect(() => {
-    // 2. Admin Pin Modal open/close tracker
-    if (showAdminPinModal && !pushedViewsRef.current.showAdminPinModal) {
-      pushedViewsRef.current.showAdminPinModal = true;
-      window.history.pushState({ appView: 'admin_pin' }, '');
-    } else if (!showAdminPinModal && pushedViewsRef.current.showAdminPinModal) {
-      pushedViewsRef.current.showAdminPinModal = false;
-      if (window.history.state?.appView === 'admin_pin') {
-        window.history.back();
-      }
-    }
-  }, [showAdminPinModal]);
+    let capListener: any = null;
 
-  useEffect(() => {
-    // 3. Admin panel open/close tracker
-    if (adminOpen && !pushedViewsRef.current.adminOpen) {
-      pushedViewsRef.current.adminOpen = true;
-      window.history.pushState({ appView: 'admin_panel' }, '');
-    } else if (!adminOpen && pushedViewsRef.current.adminOpen) {
-      pushedViewsRef.current.adminOpen = false;
-      if (window.history.state?.appView === 'admin_panel') {
-        window.history.back();
-      }
-    }
-  }, [adminOpen]);
+    try {
+      CapApp.addListener('backButton', () => {
+        navigationManager.handleBack('capacitor');
+      }).then(listener => {
+        capListener = listener;
+      }).catch(() => {});
+    } catch (e) {}
 
-  useEffect(() => {
-    // 4. Bap system open/close tracker
-    if (bapOpen && !pushedViewsRef.current.bapOpen) {
-      pushedViewsRef.current.bapOpen = true;
-      window.history.pushState({ appView: 'bap_system' }, '');
-    } else if (!bapOpen && pushedViewsRef.current.bapOpen) {
-      pushedViewsRef.current.bapOpen = false;
-      if (window.history.state?.appView === 'bap_system') {
-        window.history.back();
-      }
-    }
-  }, [bapOpen]);
-
-  useEffect(() => {
-    // 5. Selected Action Section open/close tracker
-    if (selectedAction && !pushedViewsRef.current.selectedAction) {
-      pushedViewsRef.current.selectedAction = true;
-      window.history.pushState({ appView: 'selected_action', action: selectedAction }, '');
-    } else if (!selectedAction && pushedViewsRef.current.selectedAction) {
-      pushedViewsRef.current.selectedAction = false;
-      if (window.history.state?.appView === 'selected_action') {
-        window.history.back();
-      }
-    }
-  }, [selectedAction]);
-
-  useEffect(() => {
-    const handlePopState = (event: PopStateEvent) => {
-      const state = event.state;
-      let handled = false;
-      
-      // Close the view if it popped to a state that does not match this view
-      if (drawerOpen && state?.appView !== 'drawer') {
-        setDrawerOpen(false);
-        pushedViewsRef.current.drawerOpen = false;
-        handled = true;
-      }
-      if (showAdminPinModal && state?.appView !== 'admin_pin') {
-        setShowAdminPinModal(false);
-        pushedViewsRef.current.showAdminPinModal = false;
-        handled = true;
-      }
-      if (adminOpen && state?.appView !== 'admin_panel') {
-        if (localStorage.getItem('bnb_admin_mode') === 'false') {
-          setAdminOpen(false);
-          pushedViewsRef.current.adminOpen = false;
-          handled = true;
-        } else {
-          handled = true;
-        }
-      }
-      if (bapOpen && state?.appView !== 'bap_system') {
-        setBapOpen(false);
-        pushedViewsRef.current.bapOpen = false;
-        handled = true;
-      }
-      if (selectedAction && state?.appView !== 'selected_action') {
-        setSelectedAction(null);
-        pushedViewsRef.current.selectedAction = false;
-        handled = true;
-      }
-      if ((window as any).bnb_modal_open) {
-        handled = true;
-      }
-
-      // If nothing is open, we are on the main Dashboard
-      if (!handled && currentUser && !isLocked) {
-        const now = Date.now();
-        if (now - lastBackPressRef.current < 2000) {
-          // Allow exit: do not re-push the dashboard state, let history proceed or close
-          setShowExitToast(false);
-        } else {
-          // First back tap: prevent exit, show warning toast, restore home state
-          lastBackPressRef.current = now;
-          setShowExitToast(true);
-          setTimeout(() => setShowExitToast(false), 2000);
-          window.history.pushState({ appView: 'dashboard_home' }, '');
-        }
-      }
+    const handlePopState = () => {
+      navigationManager.handlePopState();
     };
 
     window.addEventListener('popstate', handlePopState);
     return () => {
       window.removeEventListener('popstate', handlePopState);
+      if (capListener && typeof capListener.remove === 'function') {
+        capListener.remove();
+      }
     };
-  }, [drawerOpen, showAdminPinModal, adminOpen, bapOpen, selectedAction, currentUser, isLocked]);
+  }, []);
 
   // Global Soft Keyboard scroll and overlap fix for mobile devices
   useEffect(() => {
@@ -420,10 +506,79 @@ export default function App() {
     };
   }, []);
 
+  // Handler for mandatory rules/poll popup consent & opinion submission
+  const handleMandatoryNoticeConsent = async (agreed: boolean, feedbackText?: string) => {
+    if (!currentUser || !appConfig.mandatoryNotice) return;
+    const noticeId = appConfig.mandatoryNotice.id || 'notice_default';
+    const now = new Date().toISOString();
+
+    // 1. Mark in localStorage so modal instantly unblocks client
+    try {
+      localStorage.setItem(`bnb_consent_${currentUser.uid}_${noticeId}`, agreed ? 'agreed' : 'disagreed');
+    } catch (e) {
+      console.warn("Failed to set localStorage consent flag:", e);
+    }
+
+    // 2. Update currentUser state in memory
+    const existingAgreedIds = currentUser.agreedNoticeIds || [];
+    const updatedAgreedIds = agreed && !existingAgreedIds.includes(noticeId)
+      ? [...existingAgreedIds, noticeId]
+      : existingAgreedIds;
+
+    const updatedNoticeResponses = {
+      ...(currentUser.noticeResponses || {}),
+      [noticeId]: {
+        agreed,
+        respondedAt: now,
+        feedbackText: feedbackText || ''
+      }
+    };
+
+    setCurrentUser(prev => prev ? {
+      ...prev,
+      agreedNoticeIds: updatedAgreedIds,
+      noticeResponses: updatedNoticeResponses
+    } : null);
+
+    // 3. Update User document in Firestore
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      await updateDoc(userRef, {
+        agreedNoticeIds: updatedAgreedIds,
+        [`noticeResponses.${noticeId}`]: {
+          agreed,
+          respondedAt: now,
+          feedbackText: feedbackText || ''
+        }
+      });
+    } catch (err) {
+      console.warn("Failed to update user doc with notice consent:", err);
+    }
+
+    // 4. Update centralized app_config responses map in Firestore
+    try {
+      const configRef = doc(db, 'system_settings', 'app_config');
+      await updateDoc(configRef, {
+        [`mandatoryNoticeResponses.${currentUser.uid}`]: {
+          userId: currentUser.uid,
+          userName: currentUser.name || 'সদস্য',
+          memberId: currentUser.memberId || 'N/A',
+          phone: currentUser.phone || '',
+          noticeId: noticeId,
+          agreed,
+          feedbackText: feedbackText || '',
+          respondedAt: now
+        }
+      });
+    } catch (err) {
+      console.warn("Failed to update app_config with notice response:", err);
+    }
+  };
+
   // Auto-lock on visibility change removed to prevent double PIN prompts in iframe preview environments
 
   const convertBengaliToEnglishDigits = (input: string): string => {
-    const bDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
+    const bDigits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
     return input.split('').map(c => {
       const idx = bDigits.indexOf(c);
       return idx !== -1 ? String(idx) : c;
@@ -434,27 +589,50 @@ export default function App() {
     let changed = false;
     const updatedUser = { ...user };
 
-    // Normalize memberId to the new BNB0000XXXX style
-    const normalizedId = normalizeMemberId(updatedUser.memberId);
-    if (updatedUser.memberId !== normalizedId) {
-      updatedUser.memberId = normalizedId;
-      changed = true;
+    // Lock & Guarantee permanent immutable memberId
+    if (updatedUser.role === 'admin' || updatedUser.uid === 'admin_master') {
+      if (updatedUser.memberId !== 'MAIN_ADMIN') {
+        updatedUser.memberId = 'MAIN_ADMIN';
+        changed = true;
+      }
+    } else if (!updatedUser.memberId || updatedUser.memberId === 'BNB00000000' || updatedUser.memberId === 'N/A' || updatedUser.memberId === '') {
+      try {
+        const nextId = await getNextSequentialMemberId();
+        updatedUser.memberId = nextId;
+        changed = true;
+      } catch (e) {}
+    } else {
+      // Normalize padding only (e.g. BNB00000013), never alter serial numbers
+      const normalizedId = normalizeMemberId(updatedUser.memberId);
+      if (updatedUser.memberId !== normalizedId && normalizedId !== 'BNB00000000') {
+        updatedUser.memberId = normalizedId;
+        changed = true;
+      }
     }
 
-    // Always determine true effective balance from balance or mainBalance without defaulting to zero if valid
-    const effectiveBal = Number(updatedUser.balance !== undefined && updatedUser.balance !== null ? updatedUser.balance : (updatedUser as any).mainBalance) || Number((updatedUser as any).mainBalance) || 0;
+    // Always determine true effective balance and savings without defaulting to zero if valid
+    const effectiveBal = getEffectiveBalance(updatedUser);
     if (updatedUser.balance !== effectiveBal || (updatedUser as any).mainBalance !== effectiveBal) {
       updatedUser.balance = effectiveBal;
       (updatedUser as any).mainBalance = effectiveBal;
       changed = true;
     }
 
-    if (updatedUser.savings === undefined || updatedUser.savings === null) { updatedUser.savings = 0; changed = true; }
-    if (updatedUser.telecomBalance === undefined || updatedUser.telecomBalance === null) { updatedUser.telecomBalance = 0; changed = true; }
-    if (updatedUser.superShopBalance === undefined || updatedUser.superShopBalance === null) { updatedUser.superShopBalance = 0; changed = true; }
-    if (updatedUser.dpsBalance === undefined || updatedUser.dpsBalance === null) { updatedUser.dpsBalance = 0; changed = true; }
-    if (updatedUser.profitsBalance === undefined || updatedUser.profitsBalance === null) { updatedUser.profitsBalance = 0; changed = true; }
-    if (updatedUser.dueLoan === undefined || updatedUser.dueLoan === null) { updatedUser.dueLoan = 0; changed = true; }
+    const effectiveSavings = Number(
+      updatedUser.savings !== undefined && updatedUser.savings !== null && !isNaN(Number(updatedUser.savings))
+        ? updatedUser.savings
+        : (updatedUser.dpsBalance !== undefined && updatedUser.dpsBalance !== null && !isNaN(Number(updatedUser.dpsBalance)) ? updatedUser.dpsBalance : 0)
+    ) || 0;
+    if (updatedUser.savings !== effectiveSavings || updatedUser.dpsBalance !== effectiveSavings) {
+      updatedUser.savings = effectiveSavings;
+      updatedUser.dpsBalance = effectiveSavings;
+      changed = true;
+    }
+
+    if (updatedUser.telecomBalance === undefined || updatedUser.telecomBalance === null || isNaN(Number(updatedUser.telecomBalance))) { updatedUser.telecomBalance = 0; changed = true; }
+    if (updatedUser.superShopBalance === undefined || updatedUser.superShopBalance === null || isNaN(Number(updatedUser.superShopBalance))) { updatedUser.superShopBalance = 0; changed = true; }
+    if (updatedUser.profitsBalance === undefined || updatedUser.profitsBalance === null || isNaN(Number(updatedUser.profitsBalance))) { updatedUser.profitsBalance = 0; changed = true; }
+    if (updatedUser.dueLoan === undefined || updatedUser.dueLoan === null || isNaN(Number(updatedUser.dueLoan))) { updatedUser.dueLoan = 0; changed = true; }
 
     const cleanPhone = updatedUser.phone?.replace(/\D/g, '') || '';
     const isDeveloper = cleanPhone.endsWith('00011112222') || cleanPhone.endsWith('11112222') || updatedUser.phone === '+8800011112222' || updatedUser.uid === 'admin_master';
@@ -503,8 +681,12 @@ export default function App() {
           isDemo: updatedUser.isDemo ?? false
         });
         console.log("Successfully synchronized user profile and balances in Firestore for user:", user.uid);
-      } catch (e) {
-        console.error("User profile balance update in Firestore failed:", e);
+      } catch (e: any) {
+        if (e?.code === 'unavailable' || e?.message?.includes('offline')) {
+          console.warn("User profile balance update delayed: Client is offline.");
+        } else {
+          console.error("User profile balance update in Firestore failed:", e);
+        }
       }
     }
     return updatedUser;
@@ -549,12 +731,23 @@ export default function App() {
             if (userSnap && userSnap.exists()) {
               const userData = userSnap.data() as User;
               const finalUserData = await autoPromoteAndReturnUser(userData);
+
+              // Strict Device Security Check: Ensure account belongs to this device!
+              const isAuthorized = isSameDevice(finalUserData.currentDeviceId, finalUserData.deviceFingerprint, deviceId, deviceFingerprint, finalUserData.activeDeviceTokens);
+              if (finalUserData.currentDeviceId && !isAuthorized && finalUserData.role !== 'admin' && !finalUserData.deviceLockBypassed) {
+                console.warn("[Session Security] Account belongs to another phone. Wiping session for device isolation:", finalUserData.name, finalUserData.currentDeviceId);
+                handleDirectLogout();
+                return;
+              }
+
+              if (finalUserData.pin) {
+                localStorage.setItem('bnb_user_pin', finalUserData.pin);
+              }
               localStorage.setItem('bnb_user_uid', finalUserData.uid);
               setCurrentUser(finalUserData);
               if (finalUserData.role === 'admin' || finalUserData.role === 'sub_admin') {
                 if (localStorage.getItem('bnb_admin_mode') !== 'false') {
                   localStorage.setItem('bnb_admin_mode', 'true');
-                  setAdminOpen(true);
                 }
               }
             } else {
@@ -563,7 +756,9 @@ export default function App() {
               try {
                 matchedUser = await findUserInFirestoreByPhone(rememberedPhone);
               } catch (err: any) {
-                if (err?.code === 'permission-denied' || err?.message?.includes('permission')) {
+                if (err?.code === 'unavailable' || err?.message?.includes('offline')) {
+                  console.warn("Session init phone match delayed: Client is offline.");
+                } else if (err?.code === 'permission-denied' || err?.message?.includes('permission')) {
                   handleFirestoreError(err, OperationType.LIST, 'users');
                 } else {
                   console.error("Session init phone match error:", err);
@@ -571,12 +766,23 @@ export default function App() {
               }
               if (matchedUser) {
                 const finalUserData = await autoPromoteAndReturnUser(matchedUser.user);
+
+                // Strict Device Security Check
+                const isAuthorized = isSameDevice(finalUserData.currentDeviceId, finalUserData.deviceFingerprint, deviceId, deviceFingerprint, finalUserData.activeDeviceTokens);
+                if (finalUserData.currentDeviceId && !isAuthorized && finalUserData.role !== 'admin' && !finalUserData.deviceLockBypassed) {
+                  console.warn("[Session Security] Account belongs to another phone. Wiping session for device isolation:", finalUserData.name, finalUserData.currentDeviceId);
+                  handleDirectLogout();
+                  return;
+                }
+
+                if (finalUserData.pin) {
+                  localStorage.setItem('bnb_user_pin', finalUserData.pin);
+                }
                 localStorage.setItem('bnb_user_uid', matchedUser.docId);
                 setCurrentUser(finalUserData);
                 if (finalUserData.role === 'admin' || finalUserData.role === 'sub_admin') {
                   if (localStorage.getItem('bnb_admin_mode') !== 'false') {
                     localStorage.setItem('bnb_admin_mode', 'true');
-                    setAdminOpen(true);
                   }
                 }
               } else {
@@ -592,8 +798,12 @@ export default function App() {
             setIsLocked(false);
           }
         }
-      } catch (err) {
-        console.error("Session initialization failed:", err);
+      } catch (err: any) {
+        if (err?.code === 'unavailable' || err?.message?.includes('offline')) {
+          console.warn("Session initialization delayed: Client is offline.");
+        } else {
+          console.error("Session initialization failed:", err);
+        }
       } finally {
         setLoading(false);
       }
@@ -621,24 +831,35 @@ export default function App() {
         }
 
         // ⚡ Real-time Instant Force Logout & Zero Device Check (< 1s execution)
-        const isForceLoggedOut = 
-          currentUser.role !== 'admin' && !currentUser.deviceLockBypassed && (
-            uData.isLoggedIn === false ||
-            (uData.currentDeviceId === '' && currentUser.currentDeviceId !== '') ||
-            (uData.currentDeviceId && uData.currentDeviceId !== '' && currentUser.currentDeviceId && uData.currentDeviceId !== currentUser.currentDeviceId) ||
-            (uData.forceLogoutAt && (!currentUser.sessionLoggedInAt || new Date(uData.forceLogoutAt).getTime() >= new Date(currentUser.sessionLoggedInAt).getTime()))
+        const isDeviceAuthorized = isSameDevice(uData.currentDeviceId, uData.deviceFingerprint, deviceId, deviceFingerprint, uData.activeDeviceTokens);
+        
+        // If device matches via physical hardware fingerprint (e.g., App + Web on same phone), keep local deviceId in sync
+        if (isDeviceAuthorized && uData.currentDeviceId && uData.currentDeviceId !== deviceId) {
+          try {
+            localStorage.setItem('bnb_device_id', uData.currentDeviceId);
+          } catch (e) {}
+        }
+
+        // ⚡ Zero Device / Release check triggered ONLY when Admin explicitly clicks Zero Device (forceLogoutAt > sessionLoggedInAt)
+        const isAdminZeroDeviceTriggered = 
+          currentUser.role !== 'admin' && (
+            Boolean(uData.forceLogoutAt && currentUser.sessionLoggedInAt && new Date(uData.forceLogoutAt).getTime() > new Date(currentUser.sessionLoggedInAt).getTime()) ||
+            Boolean(uData.currentDeviceId === '' && uData.deviceLockBypassed === true && currentUser.currentDeviceId)
           );
 
-        if (isForceLoggedOut) {
-          console.log("⚡ Real-time single-device / zero-device force logout triggered for user:", currentUser.uid);
+        if (isAdminZeroDeviceTriggered) {
+          console.log("⚡ Admin Zero-Device / Release triggered for user:", currentUser.uid);
           handleDirectLogout();
-          alert("⚠️ এই একাউন্টটি অন্য একটি ডিভাইসে সক্রিয় করা হয়েছে অথবা এডমিন প্যানেল থেকে ডিভাইস জিরো (Release) করা হয়েছে! একই সাথে একাধিক ডিভাইসে একাউন্ট চালানো নিষেধ। নিরাপত্তা স্বার্থে এই ডিভাইসটি লগআউট করা হলো।");
+          alert("⚠️ এডমিন প্যানেল থেকে আপনার ডিভাইসটি রিলিজ (Zero Device) করা হয়েছে। এখন নতুন ডিভাইসে পুনরায় লগইন করা যাবে।");
           return;
         }
 
-        const effectiveBal = Number(uData.balance !== undefined && uData.balance !== null ? uData.balance : (uData as any).mainBalance) || Number((uData as any).mainBalance) || 0;
+        const effectiveBal = getEffectiveBalance(uData);
         uData.balance = effectiveBal;
         (uData as any).mainBalance = effectiveBal;
+        const effectiveSav = Math.max(Number(uData.savings) || 0, Number(uData.dpsBalance) || 0);
+        uData.savings = effectiveSav;
+        uData.dpsBalance = effectiveSav;
 
         setCurrentUser((prev) => {
           if (!prev) return null;
@@ -721,25 +942,42 @@ export default function App() {
     };
   }, [currentUser?.uid, currentUser?.role]);
 
-  // Automatically register device ID if not already set on user document in Firestore
+  // Automatically register device ID & hardware fingerprint if not already set on user document in Firestore
   useEffect(() => {
-    if (currentUser && !currentUser.currentDeviceId && currentUser.uid) {
-      const registerDevice = async () => {
-        try {
-          await updateDoc(doc(db, 'users', currentUser.uid), {
-            currentDeviceId: deviceId
-          });
-        } catch (err) {
-          console.error("Failed to automatically register device ID:", err);
-        }
-      };
-      registerDevice();
+    if (currentUser && currentUser.uid && currentUser.role !== 'admin') {
+      const isDeviceAuth = isSameDevice(currentUser.currentDeviceId, currentUser.deviceFingerprint, deviceId, deviceFingerprint, currentUser.activeDeviceTokens);
+      const isFirstBinding = !currentUser.currentDeviceId || currentUser.deviceLockBypassed;
+
+      // Only perform registration if this is the first binding, bypass enabled, or already authorized
+      if (isFirstBinding || isDeviceAuth) {
+        const registerDevice = async () => {
+          try {
+            const updates: any = {};
+            if (!currentUser.currentDeviceId) {
+              updates.currentDeviceId = deviceId;
+            }
+            if (!currentUser.deviceFingerprint) {
+              updates.deviceFingerprint = deviceFingerprint;
+            }
+            const existingTokens = Array.isArray(currentUser.activeDeviceTokens) ? currentUser.activeDeviceTokens : [];
+            if (!existingTokens.includes(deviceId) || !existingTokens.includes(deviceFingerprint)) {
+              updates.activeDeviceTokens = Array.from(new Set([...existingTokens, deviceId, deviceFingerprint].filter(Boolean)));
+            }
+            if (Object.keys(updates).length > 0) {
+              await updateDoc(doc(db, 'users', currentUser.uid), updates);
+            }
+          } catch (err) {
+            console.error("Failed to automatically register device ID / fingerprint:", err);
+          }
+        };
+        registerDevice();
+      }
     }
-  }, [currentUser?.uid, currentUser?.currentDeviceId, deviceId]);
+  }, [currentUser?.uid, currentUser?.currentDeviceId, currentUser?.deviceFingerprint, currentUser?.activeDeviceTokens, currentUser?.deviceLockBypassed, deviceId, deviceFingerprint]);
 
   // Real-time Device Status tracking (Online/Offline)
   useEffect(() => {
-    if (!currentUser?.uid || isLocked) return;
+    if (!currentUser?.uid || isLocked || isDeviceLocked) return;
 
     const setOnline = async () => {
       try {
@@ -807,6 +1045,9 @@ export default function App() {
       localStorage.setItem('bnb_user_telecom_balance', String(currentUser.telecomBalance || 0));
       localStorage.setItem('bnb_user_super_shop_balance', String(currentUser.superShopBalance || 0));
       localStorage.setItem('bnb_user_due_loan', String(currentUser.dueLoan || 0));
+      if (currentUser.pin) {
+        localStorage.setItem('bnb_user_pin', String(currentUser.pin));
+      }
     } else {
       localStorage.removeItem('bnb_user_phone');
       localStorage.removeItem('bnb_user_uid');
@@ -818,6 +1059,7 @@ export default function App() {
       localStorage.removeItem('bnb_user_telecom_balance');
       localStorage.removeItem('bnb_user_super_shop_balance');
       localStorage.removeItem('bnb_user_due_loan');
+      localStorage.removeItem('bnb_user_pin');
     }
   }, [currentUser]);
 
@@ -827,21 +1069,33 @@ export default function App() {
     setPreferRegister(false);
     localStorage.setItem('bnb_user_phone', finalUserData.phone);
     localStorage.setItem('bnb_user_uid', finalUserData.uid);
-    if (finalUserData.isAppLocked) {
-      setIsLocked(true);
+    if (finalUserData.pin) {
+      localStorage.setItem('bnb_user_pin', String(finalUserData.pin));
+    }
+
+    const isAuthorized = isSameDevice(finalUserData.currentDeviceId, finalUserData.deviceFingerprint, deviceId, deviceFingerprint, finalUserData.activeDeviceTokens);
+    const isLockedToOther = Boolean(finalUserData.currentDeviceId) && !finalUserData.deviceLockBypassed && finalUserData.role !== 'admin' && !isAuthorized;
+
+    if (!isLockedToOther) {
+      if (finalUserData.isAppLocked) {
+        setIsLocked(true);
+      } else {
+        setIsLocked(false);
+      }
+      const cleanPhone = finalUserData.phone?.replace(/\D/g, '') || '';
+      const isAdminAccount = (finalUserData.role === 'admin' || finalUserData.uid === 'admin_master') && 
+                             (cleanPhone.endsWith('00011112222') || cleanPhone.endsWith('11112222') || finalUserData.uid === 'admin_master');
+      if (isAdminAccount) {
+        localStorage.setItem('bnb_admin_mode', 'true');
+        setAdminOpen(true);
+      }
+      // Trigger Location Permission Modal on fresh login for authorized device only
+      sessionStorage.setItem('bnb_fresh_login_location_needed', 'true');
+      setShowLocationModal(true);
     } else {
       setIsLocked(false);
+      setShowLocationModal(false);
     }
-    const cleanPhone = finalUserData.phone?.replace(/\D/g, '') || '';
-    const isAdminAccount = (finalUserData.role === 'admin' || finalUserData.uid === 'admin_master') && 
-                           (cleanPhone.endsWith('00011112222') || cleanPhone.endsWith('11112222') || finalUserData.uid === 'admin_master');
-    if (isAdminAccount) {
-      localStorage.setItem('bnb_admin_mode', 'true');
-      setAdminOpen(true);
-    }
-    // Trigger Location Permission Modal on fresh login
-    sessionStorage.setItem('bnb_fresh_login_location_needed', 'true');
-    setShowLocationModal(true);
   };
 
   const [isMandatoryLockOnLogout, setIsMandatoryLockOnLogout] = useState(false);
@@ -849,24 +1103,36 @@ export default function App() {
   const [logoutTargetToRegister, setLogoutTargetToRegister] = useState(false);
 
   const handleLogout = (toRegister = false) => {
-    if (!currentUser) {
-      handleDirectLogout(toRegister);
-      return;
-    }
-
-    setLogoutTargetToRegister(toRegister);
-    setIsMandatoryLockOnLogout(true);
-    setShowSetLockModal(true);
     setDrawerOpen(false);
+    if (currentUser && !currentUser.isDemoUser && currentUser.uid !== 'guest_demo') {
+      setLogoutTargetToRegister(toRegister);
+      setIsMandatoryLockOnLogout(true);
+      setShowSetLockModal(true);
+    } else {
+      handleDirectLogout(toRegister);
+    }
   };
 
   const handleDirectLogout = (toRegister = false) => {
     const uid = currentUser?.uid;
-    const isOwnerDevice = !currentUser?.currentDeviceId || currentUser.currentDeviceId === deviceId;
+    const isOwnerDevice = !currentUser?.currentDeviceId || isSameDevice(currentUser.currentDeviceId, currentUser.deviceFingerprint, deviceId, deviceFingerprint, currentUser.activeDeviceTokens);
 
-    // 1. Immediately reset UI state and local storage for bullet-speed instant logout
+    // 1. Immediately reset UI state and local storage for complete per-session security isolation
     localStorage.removeItem('bnb_user_phone');
     localStorage.removeItem('bnb_user_uid');
+    localStorage.removeItem('bnb_user_name');
+    localStorage.removeItem('bnb_user_role');
+    localStorage.removeItem('bnb_user_member_id');
+    localStorage.removeItem('bnb_user_balance');
+    localStorage.removeItem('bnb_user_savings');
+    localStorage.removeItem('bnb_user_telecom_balance');
+    localStorage.removeItem('bnb_user_super_shop_balance');
+    localStorage.removeItem('bnb_user_due_loan');
+    localStorage.removeItem('bnb_user_samity_status');
+    localStorage.removeItem('bnb_user_pin');
+    localStorage.removeItem('bnb_registered_members');
+    localStorage.removeItem('bnb_all_users_backup');
+    localStorage.removeItem('bnb_last_user');
     localStorage.removeItem('bnb_admin_mode');
     sessionStorage.removeItem('bnb_fresh_login_location_needed');
     
@@ -875,18 +1141,15 @@ export default function App() {
     setIsLoggingOutLock(false);
     setIsMandatoryLockOnLogout(false);
     setAdminOpen(false);
-    setActiveTab('home');
+    setTabHistory(['home']);
     setPreferRegister(toRegister);
     setShowLocationModal(false);
 
-    // 2. Perform background cleanup non-blockingly if this device is the active device
+    // 2. Perform background cleanup
     if (uid && isOwnerDevice) {
       updateDoc(doc(db, 'users', uid), {
         deviceStatus: 'Offline',
-        isLoggedIn: false,
-        currentDeviceId: '',
-        deviceChangeRequested: false,
-        deviceLockBypassed: false
+        isLoggedIn: false
       }).catch(err => console.error("Failed to update status on logout:", err));
     }
     if (auth.currentUser) {
@@ -960,11 +1223,10 @@ export default function App() {
 
   const isDevOrAdmin = currentUser?.role === 'admin' || currentUser?.role === 'sub_admin';
   const isDeviceLocked = !!currentUser && 
-    !!currentUser.currentDeviceId && 
-    currentUser.currentDeviceId.trim() !== '' &&
-    currentUser.currentDeviceId !== deviceId && 
+    currentUser.role !== 'admin' && 
     !currentUser.deviceLockBypassed && 
-    currentUser.role !== 'admin';
+    Boolean(currentUser.currentDeviceId) &&
+    !isSameDevice(currentUser.currentDeviceId, currentUser.deviceFingerprint, deviceId, deviceFingerprint, currentUser.activeDeviceTokens);
 
   const showMaintenance = !!currentUser && !isLocked && appConfig.maintenanceMode && !adminBypassed && !isDevOrAdmin;
   const showUpdate = !!currentUser && !isLocked && !showMaintenance && appConfig.forceUpdateActive && !adminBypassed && !isDevOrAdmin && (() => {
@@ -976,6 +1238,22 @@ export default function App() {
       return CURRENT_APP_VERSION !== (appConfig.minAppVersion || "2.0");
     }
   })();
+
+  const isMandatoryNoticeActive = Boolean(
+    currentUser &&
+    !isLocked &&
+    !isDeviceLocked &&
+    !showMaintenance &&
+    !showUpdate &&
+    appConfig?.mandatoryNotice?.active &&
+    appConfig?.mandatoryNotice?.id &&
+    !(
+      currentUser.agreedNoticeIds?.includes(appConfig.mandatoryNotice.id) ||
+      currentUser.noticeResponses?.[appConfig.mandatoryNotice.id] ||
+      appConfig.mandatoryNoticeResponses?.[currentUser.uid]?.noticeId === appConfig.mandatoryNotice.id ||
+      localStorage.getItem(`bnb_consent_${currentUser.uid}_${appConfig.mandatoryNotice.id}`)
+    )
+  );
 
   return (
     <div className={`min-h-screen bg-slate-50 text-slate-800 antialiased selection:bg-emerald-100 selection:text-emerald-900 ${darkMode ? 'dark bg-slate-950 text-slate-100' : ''}`}>
@@ -1007,15 +1285,35 @@ export default function App() {
               <DeviceLockScreen 
                 user={currentUser} 
                 deviceId={deviceId} 
-                onLogout={handleLogout} 
+                onLogout={() => handleDirectLogout()} 
+                appConfig={appConfig}
               />
             </div>
-          ) : bapOpen && currentUser ? (
-            <div key="bap-mode">
-              <BapSystem 
-                currentUser={currentUser} 
-                onBack={() => setBapOpen(false)} 
+          ) : currentUser && isLocked ? (
+            <div key="locked-screen">
+              <LockScreen 
+                user={currentUser} 
+                onUnlock={() => {
+                  setIsLocked(false);
+                  setIsLoggingOutLock(false);
+                  if (currentUser.role === 'admin' || currentUser.uid === 'admin_master') {
+                    if (localStorage.getItem('bnb_admin_mode') === 'true') {
+                      setAdminOpen(true);
+                    }
+                  }
+                }} 
+                onLogout={() => {
+                  setIsLoggingOutLock(false);
+                  handleDirectLogout();
+                }} 
+                isLogoutMode={isLoggingOutLock}
+                onCancelLogout={() => {
+                  setIsLocked(false);
+                  setIsLoggingOutLock(false);
+                }}
+                appConfig={appConfig}
                 appLanguage={appLanguage}
+                onLanguageChange={handleLanguageChange}
                 darkMode={darkMode}
               />
             </div>
@@ -1040,29 +1338,6 @@ export default function App() {
                 
               />
             </div>
-          ) : currentUser && isLocked ? (
-            <div key="locked-screen">
-              <LockScreen 
-                user={currentUser} 
-                onUnlock={() => {
-                  setIsLocked(false);
-                  setIsLoggingOutLock(false);
-                }} 
-                onLogout={() => {
-                  setIsLoggingOutLock(false);
-                  handleDirectLogout();
-                }} 
-                isLogoutMode={isLoggingOutLock}
-                onCancelLogout={() => {
-                  setIsLocked(false);
-                  setIsLoggingOutLock(false);
-                }}
-                appConfig={appConfig}
-                appLanguage={appLanguage}
-                onLanguageChange={handleLanguageChange}
-                darkMode={darkMode}
-              />
-            </div>
           ) : currentUser ? (
             <div key="dashboard-mode" className="min-h-screen">
               <Dashboard 
@@ -1070,7 +1345,7 @@ export default function App() {
                 onLogout={handleLogout} 
                 onOpenDrawer={() => setDrawerOpen(true)}
                 onTriggerAdmin={handleOpenAdmin}
-                onTriggerBap={() => setBapOpen(true)}
+                onTriggerBap={() => {}}
                 activeTab={activeTab}
                 setActiveTab={setActiveTab}
                 selectedAction={selectedAction}
@@ -1118,11 +1393,11 @@ export default function App() {
                   user={currentUser}
                   isMandatoryOnLogout={isMandatoryLockOnLogout}
                   onLockSuccess={(secretCode) => {
-                    setCurrentUser(prev => prev ? { ...prev, isAppLocked: true, appLockCode: secretCode } : null);
+                    setCurrentUser(prev => prev ? { ...prev, password: secretCode, isAppLocked: true, appLockCode: secretCode } : null);
                     setShowSetLockModal(false);
                     if (isMandatoryLockOnLogout) {
                       setIsMandatoryLockOnLogout(false);
-                      handleDirectLogout();
+                      handleDirectLogout(logoutTargetToRegister);
                     } else {
                       setIsLocked(true);
                     }
@@ -1178,7 +1453,7 @@ export default function App() {
                     <p className="text-xs text-slate-550 leading-relaxed mb-3">
                       প্রবেশ করতে সিকিউরিটি পিন দিন। এডমিন প্যানেলের সিকিউরিটি পিন: <strong className="font-mono text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded leading-none text-xs">6666</strong> (এডমিন নম্বর: +8800011112222)
                     </p>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">৪ ডিজিটের সিকিউরিটি পিন</label>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">4 ডিজিটের সিকিউরিটি পিন</label>
                     <input
                       type="password"
                       required
@@ -1282,11 +1557,20 @@ export default function App() {
             )}
           </AnimatePresence>
 
-          {currentUser && !isLocked && !showMaintenance && !showUpdate && (
+          {/* Mandatory Rule / Poll Popup (Blocks interaction until user submits consent/opinion) */}
+          <MandatoryNoticeModal
+            isOpen={isMandatoryNoticeActive}
+            user={currentUser}
+            appConfig={appConfig}
+            noticeConfig={appConfig?.mandatoryNotice}
+            onConsentSubmitted={handleMandatoryNoticeConsent}
+          />
+
+          {currentUser && !isDeviceLocked && !isLocked && !showMaintenance && !showUpdate && (
             <NotificationPrompt appConfig={appConfig} userId={currentUser.uid} />
           )}
 
-          {currentUser && showLocationModal && (
+          {currentUser && !isDeviceLocked && showLocationModal && (
             <LocationPermissionModal
               userId={currentUser.uid}
               onClose={() => {
@@ -1320,7 +1604,7 @@ export default function App() {
                 className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[100] bg-slate-900/95 text-white px-5 py-3 rounded-2xl text-xs font-bold shadow-xl border border-slate-800 backdrop-blur-md flex items-center gap-2.5 whitespace-nowrap select-none pointer-events-none"
               >
                 <span>📱</span>
-                <span>অ্যাপ থেকে বের হতে আবার ব্যাক চাপুন</span>
+                <span>আবার Back চাপলে অ্যাপ থেকে বের হবে</span>
               </motion.div>
             )}
           </AnimatePresence>

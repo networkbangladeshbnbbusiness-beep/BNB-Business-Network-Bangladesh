@@ -69,7 +69,7 @@ export default function BnbCorporateGuide({
   const categories = [
     {
       key: 'rules',
-      title: '১. অ্যাপসের নিয়মকানুন (App Rules & Guidelines)',
+      title: '1. অ্যাপসের নিয়মকানুন (App Rules & Guidelines)',
       icon: Shield,
       colorClass: 'text-amber-600 bg-amber-50 border-amber-100',
       gradientClass: 'from-amber-500 to-orange-600',
@@ -77,7 +77,7 @@ export default function BnbCorporateGuide({
     },
     {
       key: 'futurePlans',
-      title: '২. ভবিষ্যৎ প্ল্যান ও পরিকল্পনা (Future Plans & Roadmap)',
+      title: '2. ভবিষ্যৎ প্ল্যান ও পরিকল্পনা (Future Plans & Roadmap)',
       icon: Lightbulb,
       colorClass: 'text-emerald-600 bg-emerald-50 border-emerald-100',
       gradientClass: 'from-emerald-500 to-teal-600',
@@ -85,7 +85,7 @@ export default function BnbCorporateGuide({
     },
     {
       key: 'mission',
-      title: '৩. আমাদের লক্ষ্য ও উদ্দেশ্য (Our Mission & Vision)',
+      title: '3. আমাদের লক্ষ্য ও উদ্দেশ্য (Our Mission & Vision)',
       icon: Award,
       colorClass: 'text-violet-600 bg-violet-50 border-violet-100',
       gradientClass: 'from-violet-500 to-indigo-600',
@@ -93,7 +93,7 @@ export default function BnbCorporateGuide({
     },
     {
       key: 'feedback',
-      title: '৪. আপনাদের মতামত ও যোগাযোগ (Your Feedback & Contact)',
+      title: '4. আপনাদের মতামত ও যোগাযোগ (Your Feedback & Contact)',
       icon: MessageSquare,
       colorClass: 'text-blue-600 bg-blue-50 border-blue-100',
       gradientClass: 'from-blue-500 to-indigo-600',
@@ -274,7 +274,7 @@ export default function BnbCorporateGuide({
 
                 <div className="space-y-0.5 text-center">
                   <h4 className="text-[10px] sm:text-[11px] font-black text-slate-400 uppercase tracking-wider">
-                    {cat.key === 'rules' ? 'সেকশন ১' : cat.key === 'futurePlans' ? 'সেকশন ২' : cat.key === 'mission' ? 'সেকশন ৩' : 'সেকশন ৪'}
+                    {cat.key === 'rules' ? 'সেকশন 1' : cat.key === 'futurePlans' ? 'সেকশন 2' : cat.key === 'mission' ? 'সেকশন 3' : 'সেকশন 4'}
                   </h4>
                   <p className="text-[10px] sm:text-xs font-black text-slate-800 leading-tight line-clamp-2 max-w-xs px-1">
                     {cat.key === 'rules' ? 'নিয়মকানুন' : cat.key === 'futurePlans' ? 'ভবিষ্যৎ প্ল্যান' : cat.key === 'mission' ? 'লক্ষ্য ও উদ্দেশ্য' : 'যোগাযোগ ও মতামত'}
@@ -496,7 +496,7 @@ export default function BnbCorporateGuide({
             <Shield className="w-3.5 h-3.5 text-slate-400" />
             বাংলাদেশ সমবায় অধিদপ্তর নিবন্ধিত খসড়া নীতিমালা ও গাইড
           </p>
-          <p className="text-[9px] text-slate-300 font-medium">© ২০২৬ ব্যবসা নেটওয়ার্ক বাংলাদেশ লিমিটেড</p>
+          <p className="text-[9px] text-slate-300 font-medium">© 2026 ব্যবসা নেটওয়ার্ক বাংলাদেশ লিমিটেড</p>
         </div>
 
       </div>

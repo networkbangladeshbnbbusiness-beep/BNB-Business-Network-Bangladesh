@@ -1,7 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { User, Transaction, AppConfig } from '../types';
+import { User, Transaction, AppConfig, SAMITY_MONTHS, SAMITY_YEARS, getUniquePaidMonthsCount, normalizePaidMonthsArray, getEffectiveBalance, getEffectivePaidMonthsList } from '../types';
+import { processUserSamitySavingsAutoDeduction, getUnpaidSamityMonths, isUserMonthPaid } from '../lib/samitySavingsEngine';
 import { db } from '../lib/firebase';
 import SamityAdmin from './SamityAdmin';
+import SamityInvestmentsView from './SamityInvestmentsView';
+import UnifiedBackButton from './UnifiedBackButton';
+import { BnbPaymentReceiptModal, PaymentReceiptData } from './BnbPaymentReceiptModal';
 import { 
   collection, 
   query, 
@@ -14,6 +18,7 @@ import {
   deleteDoc,
   getDoc,
   onSnapshot,
+  runTransaction,
   serverTimestamp
 } from 'firebase/firestore';
 import { 
@@ -29,6 +34,12 @@ import {
   Users,
   UserPlus,
   CheckCircle,
+  Scale,
+  Coins,
+  Gem,
+  Landmark,
+  Calculator,
+  AlertCircle,
   HelpCircle,
   Plus,
   ArrowDown,
@@ -62,10 +73,12 @@ import {
   CheckCircle2,
   PlusCircle,
   PhoneCall,
-  ShieldAlert
+  ShieldAlert,
+  Zap
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { normalizePhoneNumber, findUserInFirestoreByPhone } from '../lib/memberUtils';
+import { normalizePhoneNumber, findUserInFirestoreByPhone, getMembershipCategory } from '../lib/memberUtils';
+import { useBackHandler } from '../lib/navigationManager';
 
 interface SamityScreenProps {
   user: User;
@@ -76,6 +89,7 @@ interface SamityScreenProps {
   setModalType: (type: any) => void;
   appConfig?: AppConfig;
   allNotices?: any[];
+  transactions?: Transaction[];
 }
 
 export default function SamityScreen({ 
@@ -86,11 +100,12 @@ export default function SamityScreen({
   setActiveTab,
   setModalType,
   appConfig,
-  allNotices = []
+  allNotices = [],
+  transactions = []
 }: SamityScreenProps) {
   
   // High-fidelity active sub-view state inside full-screen Samity option
-  const [activeSubView, setActiveSubView] = useState<'main' | 'savings_dps' | 'loan_ledger' | 'profits' | 'member_registry' | 'withdraw_savings' | 'new_deposit' | 'monthly_investment_policy' | 'referral_network' | 'share_transfer' | 'register_other_member' | 'custom_savings' | 'admin'>('main');
+  const [activeSubView, setActiveSubView] = useState<'main' | 'savings_dps' | 'loan_ledger' | 'profits' | 'member_registry' | 'withdraw_savings' | 'new_deposit' | 'monthly_investment_policy' | 'referral_network' | 'share_transfer' | 'register_other_member' | 'custom_savings' | 'admin' | 'our_investments'>('main');
   const [bottomTab, setBottomTab] = useState<'home' | 'report' | 'messages' | 'profile'>('home');
 
   // States for registering other member
@@ -117,38 +132,55 @@ export default function SamityScreen({
   const [regError, setRegError] = useState('');
   const [regSuccessData, setRegSuccessData] = useState<{ name: string; phone: string; memberId: string } | null>(null);
 
-  const pushedSubViewRef = React.useRef<{ subView: string; tab: string }>({ subView: 'main', tab: 'home' });
+  // Full-Screen Transaction Receipt Modal State
+  const [receiptModalData, setReceiptModalData] = useState<PaymentReceiptData | null>(null);
+  const [isReceiptOpen, setIsReceiptOpen] = useState(false);
 
-  useEffect(() => {
-    const isMain = activeSubView === 'main' && bottomTab === 'home';
-    if (!isMain) {
-      if (pushedSubViewRef.current.subView !== activeSubView || pushedSubViewRef.current.tab !== bottomTab) {
-        pushedSubViewRef.current = { subView: activeSubView, tab: bottomTab };
-        window.history.pushState({ dashboardModal: 'samity', samitySubView: activeSubView, samityBottomTab: bottomTab }, '');
-      }
-    } else {
-      pushedSubViewRef.current = { subView: 'main', tab: 'home' };
+  const openReceiptForTx = (tx: any) => {
+    const isCredit = ['coop_savings_deposit', 'deposit'].includes(tx.type) && !tx.description?.includes('উত্তোলন');
+    setReceiptModalData({
+      typeLabel: tx.typeLabel || (isCredit ? 'সমবায় সঞ্চয় জমা' : 'সমবায় সঞ্চয় উত্তোলন'),
+      transactionId: (tx.id || tx.transactionId || tx.receiptNo || `SAM${Date.now()}`).toUpperCase(),
+      amount: tx.amount || 0,
+      fee: 0,
+      totalAmount: tx.amount || 0,
+      status: tx.status || 'pending',
+      beneficiaryName: tx.userName || user.name || 'BNB সদস্য',
+      beneficiaryAccount: tx.memberId || user.memberId || user.phone,
+      senderPhone: tx.phone || user.phone || 'N/A',
+      description: tx.description,
+      paymentMethod: tx.paymentMethod || 'BNB ওয়ালেট',
+      transactionDate: tx.createdAt ? new Date(tx.createdAt).toLocaleString('bn-BD', {
+        day: 'numeric',
+        month: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: 'numeric',
+        second: 'numeric',
+        hour12: true
+      }) : new Date().toLocaleString('bn-BD')
+    });
+    setIsReceiptOpen(true);
+  };
+
+  // Samity Screen Internal Back Handler (Closes modals, then returns to main samity view, then allows parent back)
+  useBackHandler(() => {
+    if (isReceiptOpen) { setIsReceiptOpen(false); return true; }
+    if (activeTopModal !== 'none') { setActiveTopModal('none'); return true; }
+    if (show2050CalendarModal) { setShow2050CalendarModal(false); return true; }
+    if (showDeactivateModal) { setShowDeactivateModal(false); return true; }
+    if (showHelplineModal) { setShowHelplineModal(false); return true; }
+    if (showSectionTxHistory) { setShowSectionTxHistory(false); return true; }
+    if (activeSubView !== 'main') {
+      setActiveSubView('main');
+      return true;
     }
-  }, [activeSubView, bottomTab]);
-
-  useEffect(() => {
-    const handlePopState = (event: PopStateEvent) => {
-      const state = event.state;
-      if (state && state.dashboardModal === 'samity') {
-        const targetView = state.samitySubView || 'main';
-        const targetTab = state.samityBottomTab || 'home';
-        if (activeSubView !== targetView || bottomTab !== targetTab) {
-          pushedSubViewRef.current = { subView: targetView, tab: targetTab };
-          setActiveSubView(targetView);
-          setBottomTab(targetTab);
-        }
-      }
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => {
-      window.removeEventListener('popstate', handlePopState);
-    };
-  }, [activeSubView, bottomTab]);
+    if (bottomTab !== 'home') {
+      setBottomTab('home');
+      return true;
+    }
+    return false;
+  }, true, 25);
 
   // Ledger lists fetched from db
   const [liveDbUsers, setLiveDbUsers] = useState<User[]>([]);
@@ -164,54 +196,135 @@ export default function SamityScreen({
     user.samityAutoSavingsActive !== undefined ? user.samityAutoSavingsActive : true
   );
 
+  // Top Section Modal Control: 'none' | 'shareholder' | 'exit_switch' | 'investor'
+  const [activeTopModal, setActiveTopModal] = useState<'none' | 'shareholder' | 'exit_switch' | 'investor'>('none');
+  const [switchActionType, setSwitchActionType] = useState<'turn_off' | 'turn_on'>('turn_off');
+  const [switchOffReason, setSwitchOffReason] = useState('');
+  const [switchOnReason, setSwitchOnReason] = useState('');
+  const [switchSecurityPin, setSwitchSecurityPin] = useState('');
+  const [switchSubmitting, setSwitchSubmitting] = useState(false);
+
+  // Shareholder Upgrade Modal States
+  const [shareholderAgree, setShareholderAgree] = useState(false);
+  const [shareholderUpgradePin, setShareholderUpgradePin] = useState('');
+  const [shareholderUpgrading, setShareholderUpgrading] = useState(false);
+
+  // Investor Upgrade Modal States
+  const [investorAgree, setInvestorAgree] = useState(false);
+  const [investorUpgradePin, setInvestorUpgradePin] = useState('');
+  const [investorUpgrading, setInvestorUpgrading] = useState(false);
+
+  // Real-time live user state directly bound to Firestore document
+  const [currentUserLive, setCurrentUserLive] = useState<User>(user);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    const userRef = doc(db, 'users', user.uid);
+    const unsub = onSnapshot(userRef, (snap) => {
+      if (snap.exists()) {
+        const liveData = { uid: snap.id, ...snap.data() } as User;
+        setCurrentUserLive(liveData);
+        if (liveData.samityAutoSavingsActive !== undefined) {
+          setSamityAutoSavingsActive(liveData.samityAutoSavingsActive);
+        }
+      }
+    }, (err) => {
+      console.error("Live user snapshot error in SamityScreen:", err);
+    });
+    return () => unsub();
+  }, [user?.uid]);
+
+  useEffect(() => {
+    if (user) {
+      setCurrentUserLive(prev => ({ ...prev, ...user }));
+    }
+  }, [user]);
+
+  const effectiveUser = currentUserLive || user;
+
   useEffect(() => {
     let rawUsersList: User[] = [];
     let rawSamityAppsList: any[] = [];
 
     const syncCombined = () => {
       const usersMap = new Map<string, User>();
+      const phoneToUid = new Map<string, string>();
+      const memberIdToUid = new Map<string, string>();
+
+      const cleanDigits = (p?: string | null) => {
+        if (!p) return '';
+        return String(p).replace(/[০-৯]/g, d => String('০১২৩৪৫৬৭৮৯'.indexOf(d))).replace(/\D/g, '');
+      };
+
       rawUsersList.forEach(u => {
         const key = u.uid || (u as any).id;
         if (key) {
-          usersMap.set(key, { ...u });
+          usersMap.set(key, { ...u, uid: key });
+          const digits = cleanDigits(u.phone);
+          if (digits) {
+            phoneToUid.set(digits, key);
+            if (digits.length >= 9) phoneToUid.set(digits.slice(-9), key);
+          }
+          if (u.memberId) {
+            memberIdToUid.set(String(u.memberId).trim().toUpperCase(), key);
+          }
         }
       });
 
       rawSamityAppsList.forEach(app => {
-        const key = app.userId || app.uid || app.id || app.docId;
-        if (key) {
-          if (usersMap.has(key)) {
-            const existing = usersMap.get(key)!;
-            if (app.savings) existing.savings = Math.max(Number(existing.savings) || 0, Number(app.savings) || 0);
-            if (app.dpsBalance) existing.dpsBalance = Math.max(Number(existing.dpsBalance) || 0, Number(app.dpsBalance) || 0);
-            if (app.nomineeName) existing.nomineeName = app.nomineeName;
-            if (app.nomineePhone) existing.nomineePhone = app.nomineePhone;
-            if (app.monthlySavingsTarget) existing.monthlySavingsTarget = app.monthlySavingsTarget;
-            if (app.samityStatus === 'approved' || app.status === 'approved' || app.approved === true) {
-              existing.samityStatus = 'approved';
-              existing.samityApproved = true;
-            }
-          } else {
-            const isApproved = app.approved === true || app.status === 'approved' || app.samityStatus === 'approved';
-            const newUser: User = {
-              uid: key,
-              name: app.name || 'সদস্য আবেদনকারী',
-              phone: app.phone || '',
-              memberId: app.memberId || '',
-              pin: app.pin || '1234',
-              role: 'user',
-              balance: app.balance || 0,
-              savings: app.savings || 0,
-              dpsBalance: app.dpsBalance || 0,
-              dueLoan: app.dueLoan || 0,
-              createdAt: app.createdAt || new Date().toISOString(),
-              samityStatus: isApproved ? 'approved' : (app.status || 'pending'),
-              samityApproved: isApproved,
-              approved: isApproved,
-              status: isApproved ? 'active' : 'inactive'
-            };
-            usersMap.set(key, newUser);
+        const appUid = app.userId || app.uid || '';
+        const appPhoneDigits = cleanDigits(app.phone);
+        const appLast9 = appPhoneDigits.length >= 9 ? appPhoneDigits.slice(-9) : '';
+        const appMemberId = app.memberId ? String(app.memberId).trim().toUpperCase() : '';
+
+        let targetUid = '';
+        if (appUid && usersMap.has(appUid)) {
+          targetUid = appUid;
+        } else if (appLast9 && phoneToUid.has(appLast9)) {
+          targetUid = phoneToUid.get(appLast9)!;
+        } else if (appMemberId && memberIdToUid.has(appMemberId)) {
+          targetUid = memberIdToUid.get(appMemberId)!;
+        } else if (app.id && usersMap.has(app.id)) {
+          targetUid = app.id;
+        }
+
+        if (targetUid && usersMap.has(targetUid)) {
+          const existing = usersMap.get(targetUid)!;
+          if (app.savings !== undefined && (existing.savings === undefined || existing.savings === null)) existing.savings = Number(app.savings) || 0;
+          if (app.dpsBalance !== undefined && (existing.dpsBalance === undefined || existing.dpsBalance === null)) existing.dpsBalance = Number(app.dpsBalance) || 0;
+          if (app.nomineeName && !existing.nomineeName) existing.nomineeName = app.nomineeName;
+          if (app.nomineePhone && !existing.nomineePhone) existing.nomineePhone = app.nomineePhone;
+          if (app.monthlySavingsTarget && !existing.monthlySavingsTarget) existing.monthlySavingsTarget = app.monthlySavingsTarget;
+          if (app.samityStatus === 'approved' || app.status === 'approved' || app.approved === true) {
+            existing.samityStatus = 'approved';
+            existing.samityApproved = true;
           }
+          if (app.memberId && !existing.memberId) {
+            existing.memberId = app.memberId;
+          }
+        } else {
+          const key = appUid || app.id || app.docId || (appPhoneDigits ? `applicant_${appPhoneDigits}` : `app_${Date.now()}`);
+          const isApproved = app.approved === true || app.status === 'approved' || app.samityStatus === 'approved';
+          const newUser: User = {
+            uid: key,
+            name: app.name || 'সদস্য আবেদনকারী',
+            phone: app.phone || '',
+            memberId: app.memberId || '',
+            pin: app.pin || '1234',
+            role: 'user',
+            balance: app.balance || 0,
+            savings: app.savings || 0,
+            dpsBalance: app.dpsBalance || 0,
+            dueLoan: app.dueLoan || 0,
+            createdAt: app.createdAt || new Date().toISOString(),
+            samityStatus: isApproved ? 'approved' : (app.status || 'pending'),
+            samityApproved: isApproved,
+            approved: isApproved,
+            status: isApproved ? 'active' : 'inactive'
+          };
+          usersMap.set(key, newUser);
+          if (appLast9) phoneToUid.set(appLast9, key);
+          if (appMemberId) memberIdToUid.set(appMemberId, key);
         }
       });
 
@@ -314,7 +427,7 @@ export default function SamityScreen({
     if (regMonthlySavingsOption === 'custom') {
       const parsedAmt = parseInt(regCustomSavingsAmount, 10);
       if (isNaN(parsedAmt) || parsedAmt < 500) {
-        setRegError('মাসিক সঞ্চয়ের পরিমাণ সর্বনিম্ন ৫০০ টাকা বা তার বেশি হতে হবে (ইংলিশ সংখ্যায় লিখুন)।');
+        setRegError('মাসিক সঞ্চয়ের পরিমাণ সর্বনিম্ন 500 টাকা বা তার বেশি হতে হবে (ইংলিশ সংখ্যায় লিখুন)।');
         return;
       }
       savingsTarget = parsedAmt;
@@ -501,12 +614,12 @@ export default function SamityScreen({
             memberId: user.memberId || '',
             phone: user.phone || '',
             type: 'samity_release',
-            typeLabel: 'সমিতি সঞ্চয় মেয়ারপূর্তি রিফান্ড (২৫ ডিসেম্বর)',
+            typeLabel: 'সমিতি সঞ্চয় মেয়ারপূর্তি রিফান্ড (25 ডিসেম্বর)',
             amount: savingsToRelease,
             preBalance: user.balance || 0,
             postBalance: newBalance,
             status: 'completed',
-            description: `২৫শে ডিসেম্বর সমবায় সমিতি সঞ্চয় অফ আবেদনের নীতি অনুযায়ী জমানো ৳${savingsToRelease.toLocaleString('bn-BD')} টাকা মেইন ব্যালেন্সে স্বয়ংক্রিয়ভাবে রিফান্ড করা হয়েছে।`,
+            description: `25শে ডিসেম্বর সমবায় সমিতি সঞ্চয় অফ আবেদনের নীতি অনুযায়ী জমানো ৳${savingsToRelease.toLocaleString('bn-BD')} টাকা মেইন ব্যালেন্সে স্বয়ংক্রিয়ভাবে রিফান্ড করা হয়েছে।`,
             createdAt: nowIso,
             receiptNo: `REFUND-DEC25-${Date.now()}`
           });
@@ -514,7 +627,7 @@ export default function SamityScreen({
           await addDoc(collection(db, 'user_notifications'), {
             userId: user.uid,
             memberId: user.memberId || '',
-            title: '🎉 ২৫শে ডিসেম্বর সমবায় সঞ্চয় রিফান্ড!',
+            title: '🎉 25শে ডিসেম্বর সমবায় সঞ্চয় রিফান্ড!',
             body: `আপনার অনুমোদিত সঞ্চয় বন্ধের আবেদন অনুযায়ী সঞ্চিত ৳${savingsToRelease.toLocaleString('bn-BD')} টাকা সফলভাবে মেইন ব্যালেন্সে স্থানান্তরিত করা হয়েছে।`,
             read: false,
             isPersonal: true,
@@ -525,7 +638,7 @@ export default function SamityScreen({
 
           syncLiveProfile();
           setCustomAlert({
-            title: '🎉 ২৫শে ডিসেম্বর সমবায় সঞ্চয় রিফান্ড সম্পূর্ণ!',
+            title: '🎉 25শে ডিসেম্বর সমবায় সঞ্চয় রিফান্ড সম্পূর্ণ!',
             message: `আপনার সমবায় সমিতি সঞ্চয়ের মোট ৳${savingsToRelease.toLocaleString('bn-BD')} টাকা সফলভাবে আপনার মেইন ব্যালেন্সে জমা করা হয়েছে।`
           });
         } catch (err) {
@@ -560,85 +673,54 @@ export default function SamityScreen({
     { id: 'dec', monthNum: 12, name: 'ডিসেম্বর', short: 'Dec' },
   ];
 
-  // Monthly Auto-debit (1st to 9th of every month)
-  useEffect(() => {
-    const checkMonthlyAutoDebit = async () => {
-      const now = new Date();
-      const date = now.getDate(); // 1 to 31
-      const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-      const monthKeys = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-      const monthNames = ['জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'];
-      const currentMonthKey = monthKeys[now.getMonth()];
-      const currentMonthName = monthNames[now.getMonth()];
+  const [bulkPayLoading, setBulkPayLoading] = useState(false);
 
-      // Only run between 1st and 9th of the month when auto savings active
-      if (date >= 1 && date <= 9 && user.samityAutoSavingsActive !== false) {
-        const paidMonths: string[] = user.samityPaidMonths || [];
-        if (!paidMonths.includes(currentMonthKey) && user.lastPaidMonth !== currentYearMonth) {
-          const target = user.monthlySavingsTarget || 1000;
-          const userBalance = user.balance || 0;
+  const handlePayAllAffordableMonths = async () => {
+    if (!effectiveUser || !effectiveUser.uid) return;
+    const targetAmt = targetMonthlyRate;
+    const currentBal = getEffectiveBalance(effectiveUser);
+    if (currentBal < targetAmt) {
+      setCustomAlert({
+        title: '⚠️ পর্যাপ্ত ব্যালেন্স নেই',
+        message: `আপনার বর্তমান মেইন ব্যালেন্স ৳${currentBal.toLocaleString('bn-BD')} টাকা। প্রতি কিস্তি ৳${targetAmt.toLocaleString('bn-BD')} টাকা অনুযায়ী অন্তত 1টি কিস্তি দেওয়ার জন্য পর্যাপ্ত টাকা নেই।`
+      });
+      return;
+    }
 
-          if (userBalance >= target) {
-            try {
-              const userRef = doc(db, 'users', user.uid);
-              const updatedPaidMonths = Array.from(new Set([...paidMonths, currentMonthKey]));
-
-              await updateDoc(userRef, {
-                balance: userBalance - target,
-                savings: (user.savings || 0) + target,
-                samityPaidMonths: updatedPaidMonths,
-                lastPaidMonth: currentYearMonth
-              });
-
-              await addDoc(collection(db, 'transactions'), {
-                userId: user.uid,
-                userName: user.name || '',
-                memberId: user.memberId || '',
-                type: 'samity_deposit',
-                typeLabel: `অটো-ডেবিট সঞ্চয় जमा (${currentMonthName})`,
-                amount: target,
-                status: 'approved',
-                description: `মাসিক অটো সঞ্চয় নীতি (১-৯ তারিখ): মেইন ব্যালেন্স থেকে ${currentMonthName} মাসের কিস্তি ৳${target.toLocaleString('bn-BD')} টাকা স্বয়ংক্রিয়ভাবে সমিতি সঞ্চয় ফাণ্ডে জমা করা হয়েছে।`,
-                createdAt: now.toISOString(),
-                receiptNo: `AUTO-DEBIT-${Date.now()}`
-              });
-
-              await addDoc(collection(db, 'user_notifications'), {
-                userId: user.uid,
-                memberId: user.memberId || '',
-                title: `✅ ${currentMonthName} মাসের অটো-সঞ্চয় সম্পূর্ণ`,
-                body: `১-৯ তারিখের নিয়মিত নিয়মানুযায়ী আপনার মেইন ব্যালেন্স থেকে ${currentMonthName} মাসের সমিতি সঞ্চয় ৳${target.toLocaleString('bn-BD')} টাকা স্বয়ংক্রিয়ভাবে জমা করা হয়েছে।`,
-                read: false,
-                isPersonal: true,
-                isTransactionHistory: true,
-                category: 'transaction',
-                createdAt: now.toISOString()
-              });
-
-              syncLiveProfile();
-              setCustomAlert({
-                title: `✅ ${currentMonthName} মাসের অটো-সঞ্চয় কর্তন`,
-                message: `প্রতি মাসের ১ থেকে ৯ তারিখের মধ্যে বকেয়া কিস্তি কর্তনের নিয়ম অনুযায়ী আপনার মেইন ব্যালেন্স থেকে ৳${target.toLocaleString('bn-BD')} টাকা কেটে সমিতি সঞ্চয় ফাণ্ডে জমা করা হয়েছে।`
-              });
-            } catch (err) {
-              console.error("Auto debit error:", err);
-            }
-          }
-        }
+    setBulkPayLoading(true);
+    try {
+      // STRICT RULE: Only process at most 1 overdue month at a time!
+      // Future months (October, November, etc.) will NEVER be auto-deducted!
+      const res = await processUserSamitySavingsAutoDeduction(effectiveUser, { maxMonths: 1, isExplicitUserAction: true });
+      if (res.success && res.deductedAmount > 0) {
+        await syncLiveProfile();
+        const monthNamesStr = res.monthsPaid.map(m => `${m.name} ${m.year}`).join(', ');
+        setCustomAlert({
+          title: `🎉 কিস্তি জমা সফল!`,
+          message: `আপনার মেইন ব্যালেন্স থেকে (${monthNamesStr}) মাসের ৳${res.deductedAmount.toLocaleString('bn-BD')} টাকা সমবায় সঞ্চয় ফান্ডে জমা করা হয়েছে!`
+        });
+      } else {
+        setCustomAlert({
+          title: 'তথ্য',
+          message: res.message || 'পরিশোধ করার মতো কোনো বকেয়া কিস্তি পাওয়া যায়নি।'
+        });
       }
-    };
-
-    checkMonthlyAutoDebit();
-  }, [user.uid, user.samityAutoSavingsActive, user.balance, user.samityPaidMonths]);
+    } catch (err: any) {
+      alert('ত্রুটি: ' + (err?.message || 'কিস্তি জমা দেওয়া সম্ভব হয়নি।'));
+    } finally {
+      setBulkPayLoading(false);
+    }
+  };
 
   const handleConfirmMonthPayment = async () => {
     if (!selectedPayMonth) return;
-    const targetAmt = user.monthlySavingsTarget || 1000;
+    const targetAmt = targetMonthlyRate;
     const payYear = selectedPayMonth.year || trackerSelectedYear;
-    if ((user.balance || 0) < targetAmt) {
+    const currentBal = getEffectiveBalance(effectiveUser);
+    if (currentBal < targetAmt) {
       setCustomAlert({
         title: '⚠️ পর্যাপ্ত ব্যালেন্স নেই',
-        message: `আপনার মেইন ব্যালেন্স ৳${(user.balance || 0).toLocaleString('bn-BD')} টাকা। ${selectedPayMonth.name} ${payYear} সালের সঞ্চয় ৳${targetAmt.toLocaleString('bn-BD')} জমা দিতে পর্যাপ্ত মেইন ব্যালেন্স নেই।`
+        message: `আপনার মেইন ব্যালেন্স ৳${currentBal.toLocaleString('bn-BD')} টাকা। ${selectedPayMonth.name} ${payYear} সালের সঞ্চয় ৳${targetAmt.toLocaleString('bn-BD')} জমা দিতে পর্যাপ্ত মেইন ব্যালেন্স নেই।`
       });
       return;
     }
@@ -646,42 +728,68 @@ export default function SamityScreen({
     setMonthPayLoading(true);
     try {
       const userRef = doc(db, 'users', user.uid);
-      const existingPaid = user.samityPaidMonths || [];
       const yearMonthKey = `${payYear}-${selectedPayMonth.id}`;
-      const updatedPaid = Array.from(new Set([...existingPaid, yearMonthKey, selectedPayMonth.id]));
 
-      await updateDoc(userRef, {
-        balance: (user.balance || 0) - targetAmt,
-        mainBalance: (user.balance || 0) - targetAmt,
-        savings: (user.savings || 0) + targetAmt,
-        dpsBalance: (user.dpsBalance || (user.savings || 0)) + targetAmt,
-        samityPaidMonths: updatedPaid
-      });
+      await runTransaction(db, async (transaction) => {
+        const uSnap = await transaction.get(userRef);
+        if (!uSnap.exists()) {
+          throw new Error('ব্যবহারকারীর প্রোফাইল পাওয়া যায়নি।');
+        }
+        const freshData = uSnap.data() as User;
+        const liveBal = getEffectiveBalance(freshData);
+        const liveTargetRate = Math.max(1, Number(freshData.monthlySavingsTarget) || targetAmt);
 
-      const nowIso = new Date().toISOString();
-      await addDoc(collection(db, 'transactions'), {
-        userId: user.uid,
-        userName: user.name || '',
-        memberId: user.memberId || '',
-        type: 'samity_deposit',
-        typeLabel: `সমিতি সঞ্চয় জমা (${selectedPayMonth.name} ${payYear})`,
-        amount: targetAmt,
-        status: 'approved',
-        description: `সদস্য কর্তৃক ম্যানুয়ালি ${selectedPayMonth.name} ${payYear} সালের সমিতি সঞ্চয় কিস্তি জমা দেওয়া হয়েছে।`,
-        createdAt: nowIso,
-        receiptNo: `DEP-MONTH-${Date.now()}`
-      });
+        if (liveBal < liveTargetRate) {
+          throw new Error(`আপনার মেইন ব্যালেন্স ৳${liveBal.toLocaleString('bn-BD')} টাকা। ${selectedPayMonth.name} ${payYear} সালের সঞ্চয় ৳${liveTargetRate.toLocaleString('bn-BD')} জমা দিতে পর্যাপ্ত মেইন ব্যালেন্স নেই।`);
+        }
 
-      await addDoc(collection(db, 'user_notifications'), {
-        userId: user.uid,
-        memberId: user.memberId || '',
-        title: `✅ ${selectedPayMonth.name} ${payYear} সালের সঞ্চয় জমা সফল`,
-        body: `আপনার মেইন ব্যালেন্স থেকে ${selectedPayMonth.name} ${payYear} সালের কিস্তি ৳${targetAmt.toLocaleString('bn-BD')} টাকা সমিতি সঞ্চয় ফান্ডে জমা হয়েছে।`,
-        read: false,
-        isPersonal: true,
-        isTransactionHistory: true,
-        category: 'transaction',
-        createdAt: nowIso
+        const existingPaid = Array.isArray(freshData.samityPaidMonths) ? freshData.samityPaidMonths : [];
+        const currentSavings = Number(freshData.savings) || 0;
+
+        const updatedPaid = normalizePaidMonthsArray([...existingPaid, yearMonthKey], currentSavings + liveTargetRate, liveTargetRate);
+        const newSavings = currentSavings + liveTargetRate;
+        const newMainBal = Math.max(0, liveBal - liveTargetRate);
+
+        transaction.update(userRef, {
+          balance: newMainBal,
+          mainBalance: newMainBal,
+          savings: newSavings,
+          dpsBalance: newSavings,
+          samityPaidMonths: updatedPaid
+        });
+
+        const txRef = doc(collection(db, 'transactions'));
+        const notifRef = doc(collection(db, 'user_notifications'));
+        const nowIso = new Date().toISOString();
+
+        transaction.set(txRef, {
+          id: txRef.id,
+          userId: user.uid,
+          userName: freshData.name || user.name || '',
+          memberId: freshData.memberId || user.memberId || '',
+          type: 'samity_deposit',
+          typeLabel: `সমিতি সঞ্চয় জমা (${selectedPayMonth.name} ${payYear})`,
+          amount: liveTargetRate,
+          status: 'approved',
+          isApproved: true,
+          paymentMethod: 'BNB Wallet',
+          description: `সদস্য কর্তৃক ওয়ালেট থেকে ${selectedPayMonth.name} ${payYear} সালের সমিতি সঞ্চয় কিস্তি ৳${liveTargetRate.toLocaleString('bn-BD')} জমা দেওয়া হয়েছে।`,
+          createdAt: nowIso,
+          receiptNo: `DEP-MONTH-${Date.now()}`
+        });
+
+        transaction.set(notifRef, {
+          id: notifRef.id,
+          userId: user.uid,
+          memberId: freshData.memberId || user.memberId || '',
+          title: `✅ ${selectedPayMonth.name} ${payYear} সালের সঞ্চয় জমা সফল`,
+          body: `আপনার মেইন ব্যালেন্স থেকে ${selectedPayMonth.name} ${payYear} সালের কিস্তি ৳${liveTargetRate.toLocaleString('bn-BD')} টাকা সমিতি সঞ্চয় ফান্ডে জমা হয়েছে।`,
+          read: false,
+          isPersonal: true,
+          isTransactionHistory: true,
+          category: 'transaction',
+          createdAt: nowIso
+        });
       });
 
       await syncLiveProfile();
@@ -690,9 +798,9 @@ export default function SamityScreen({
         title: `🎉 ${selectedPayMonth.name} ${payYear} সালের জমা সফল`,
         message: `${selectedPayMonth.name} ${payYear} সালের সমিতি সঞ্চয় কিস্তি ৳${targetAmt.toLocaleString('bn-BD')} টাকা সফলভাবে জমা হয়েছে!`
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error('Month payment error:', err);
-      alert('টাকা জমা প্রক্রিয়ায় সমস্যা ঘটেছে। আবার চেষ্টা করুন।');
+      alert(err?.message || 'টাকা জমা প্রক্রিয়ায় সমস্যা ঘটেছে। আবার চেষ্টা করুন।');
     } finally {
       setMonthPayLoading(false);
     }
@@ -879,178 +987,401 @@ export default function SamityScreen({
     requestAlert('সিস্টেম রিকোয়েস্ট', msg);
   };
 
-  const handleToggleAutoSavingsSwitch = () => {
-    const nextState = !samityAutoSavingsActive;
-
-    // Strict Admin Permission and Application logic when member attempts to turn OFF auto savings
-    if (nextState === false) {
-      const now = new Date();
-      const currentMonth = now.getMonth(); // 11 is December
-      const currentDate = now.getDate();
-
-      // Dec 25 cutoff rule: cannot request new deactivation after Dec 25 until Jan 1
-      if (currentMonth === 11 && currentDate > 25) {
-        setCustomAlert({
-          title: "❌ ২৫ ডিসেম্বরের সময়সীমা অতিক্রান্ত",
-          message: "চলতি বছরের ২৫শে ডিসেম্বরের সময়সীমা অতিক্রান্ত হয়েছে। ২৫শে ডিসেম্বরের পর সঞ্চয় বন্ধের নতুন আবেদন গ্রহণ করা সম্ভব নয়। আপনি আগামী ১লা জানুয়ারি থেকে নতুন বছরের জন্য বন্ধের আবেদন জমা দিতে পারবেন।"
-        });
-        return;
-      }
-
-      // Check if user has pending request
-      if (user.samityDeactivateStatus === 'pending') {
-        setCustomAlert({
-          title: "⏳ আবেদন প্রক্রিয়াধীন (Pending Review)",
-          message: "আপনার সমিতি সঞ্চয় বন্ধের আবেদনটি ইতিমধ্যেই এডমিন প্যানেলে জমা আছে এবং পর্যালোচনায় রয়েছে। এডমিন অনুমোদন দিলে আগামী ২৫শে ডিসেম্বর আপনার সঞ্চিত মোট ৳" + (user.savings || 0).toLocaleString('bn-BD') + " টাকা স্বয়ংক্রিয়ভাবে মেইন ব্যালেন্সে ট্রান্সফার হবে।"
-        });
-        return;
-      }
-
-      // Check if admin permission is already granted
-      const isAllowedByAdmin = Boolean(
-        user.samityDeactivateStatus === 'approved' ||
-        user?.canDisableAutoSavings ||
-        user?.allowAutoSavingsToggle
-      );
-
-      if (!isAllowedByAdmin) {
-        // Show Deactivation Application Modal to collect reason & security PIN
-        setShowDeactivateModal(true);
-        return;
-      }
-    }
-
-    const actionText = nextState ? "সচল (ON)" : "বন্ধ (OFF)";
-
-    const enteredPin = window.prompt(
-      `🔒 সিকিউরিটি পিন কোড দিন:\n\nঅটো সঞ্চয় ডিপোজিট সুইচ ${actionText} করতে আপনার ৪ ডিজিটের সিকিউরিটি পিন কোড প্রবেশ করান:`
-    );
-
-    if (enteredPin === null) return; // User cancelled prompt
-
-    const userPin = String(user?.pin || (user as any)?.pinCode || (user as any)?.securityPin || '').trim();
-
-    if (userPin && enteredPin.trim() !== userPin) {
-      setCustomAlert({
-        title: "❌ ভুল সিকিউরিটি পিন কোড",
-        message: "আপনার প্রবেশ করানো পিন কোডটি সঠিক নয়! দুর্ঘটনাবশত অটো সঞ্চয় সুইচ অন/অফ হাওয়া রোধ করতে পরিবর্তন বাতিল করা হলো।"
-      });
-      return;
-    }
-
-    if (!userPin && enteredPin.trim().length !== 4) {
-      setCustomAlert({
-        title: "❌ ৪ ডিজিটের পিন আবশ্যক",
-        message: "অনুগ্রহ করে আপনার ৪ ডিজিটের সিকিউরিটি পিন কোডটি সঠিকভাবে দিন।"
-      });
-      return;
-    }
-
-    // Proceed with state change after valid PIN verification
-    setSamityAutoSavingsActive(nextState);
-    (async () => {
-      try {
-        const userRef = doc(db, 'users', user.uid);
-        await updateDoc(userRef, {
-          samityAutoSavingsActive: nextState
-        });
-
-        await addDoc(collection(db, 'user_notifications'), {
-          id: `notif-auto-savings-${Date.now()}`,
-          userId: user.uid,
-          memberId: user.memberId || '',
-          title: nextState ? '🔄 অটো সঞ্চয় সচল করা হয়েছে' : '⏸️ অটো সঞ্চয় বন্ধ করা হয়েছে',
-          body: nextState
-            ? 'আপনার সমবায় সমিতির মাসিক অটো সঞ্চয় প্রক্রিয়া পুনরায় সচল করা হলো।'
-            : 'আপনার সমবায় সমিতির অটো সঞ্চয় প্রক্রিয়া বন্ধ করা হয়েছে। ২৫শে ডিসেম্বর আপনার মোট জমাকৃত অর্থ মেইন ব্যালেন্সে স্বয়ংক্রিয়ভাবে স্থানান্তর হবে।',
-          read: false,
-          isPersonal: true,
-          createdAt: new Date().toISOString()
-        });
-
-        syncLiveProfile();
-        setCustomAlert({
-          title: nextState ? "অটো সঞ্চয় সচল" : "অটো সঞ্চয় বন্ধ",
-          message: nextState
-            ? "আপনার অটো সঞ্চয় সফলভাবে সচল করা হয়েছে।"
-            : "আপনার অটো সঞ্চয় বন্ধ করা হয়েছে। একাউন্ট থেকে আর অটো টাকা কাটবে না এবং আগামী ২৫শে ডিসেম্বর জমানো সমিতি টাকা মেইন ব্যালেন্সে স্থানান্তর হবে।"
-        });
-      } catch (err: any) {
-        console.error("Error setting auto savings switch:", err);
-      }
-    })();
-  };
-
-  const handleSubmitDeactivateRequest = async (e: React.FormEvent) => {
+  const handleToggleAutoSavingsOff = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!deactivateReason.trim()) {
+    if (!switchOffReason.trim()) {
       setCustomAlert({ title: "⚠️ কারণ প্রয়োজন", message: "কেন আপনি সমবায় সমিতি সঞ্চয় বন্ধ/লিভ নিতে চান তা বিস্তারিত লিখুন।" });
       return;
     }
     const userPin = String(user?.pin || (user as any)?.pinCode || (user as any)?.securityPin || '').trim();
-    if (userPin && deactivatePin.trim() !== userPin) {
-      setCustomAlert({ title: "❌ ভুল পিন কোড", message: "আপনার ৪ ডিজিটের পিন কোডটি সঠিক নয়!" });
+    if (userPin && switchSecurityPin.trim() !== userPin) {
+      setCustomAlert({ title: "❌ ভুল পিন কোড", message: "আপনার 4 ডিজিটের সিকিউরিটি পিন কোডটি সঠিক নয়!" });
       return;
     }
-    if (!userPin && deactivatePin.trim().length !== 4) {
-      setCustomAlert({ title: "❌ ৪ ডিজিটের পিন আবশ্যক", message: "অনুগ্রহ করে আপনার ৪ ডিজিটের সিকিউরিটি পিন কোড দিন।" });
+    if (!userPin && switchSecurityPin.trim().length !== 4) {
+      setCustomAlert({ title: "❌ 4 ডিজিটের পিন আবশ্যক", message: "অনুগ্রহ করে আপনার 4 ডিজিটের সিকিউরিটি পিন কোড দিন।" });
       return;
     }
 
-    setDeactivateSubmitting(true);
+    setSwitchSubmitting(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const userRef = doc(db, 'users', user.uid);
+      const totalSaved = Number(user.savings !== undefined ? user.savings : (user as any).dpsBalance) || 0;
+
+      await updateDoc(userRef, {
+        samityAutoSavingsActive: false,
+        samityDeactivateStatus: 'self_opted_out',
+        samitySwitchStatus: 'OFF',
+        samityOptOutReason: switchOffReason.trim(),
+        samityOptOutDate: nowIso,
+        samitySwitchLastUpdated: nowIso,
+        updatedAt: serverTimestamp()
+      });
+
+      setSamityAutoSavingsActive(false);
+
+      // Create a pending transaction record so Admin Panel & Header Pending Center immediately display it
+      try {
+        const withdrawTxId = `TX-SAMITY-WD-${Date.now()}`;
+        await addDoc(collection(db, 'transactions'), {
+          id: withdrawTxId,
+          userId: user.uid,
+          userName: user.name || '',
+          userPhone: user.phone || '',
+          memberId: user.memberId || '',
+          type: 'withdraw',
+          typeLabel: 'সমবায় অটো সঞ্চয় বন্ধ ও উত্তোলন আবেদন',
+          category: 'samity_withdraw',
+          amount: totalSaved,
+          savingsAmount: totalSaved,
+          status: 'pending',
+          isSavingsWithdraw: true,
+          reason: switchOffReason.trim(),
+          paymentMethod: 'মেইন ওয়ালেট রিফান্ড / ব্যাংক / ক্যাশ',
+          method: 'wallet_refund',
+          accountTitle: user.name || '',
+          accountNumber: user.phone || '',
+          description: `সমবায় সমিতি অটো সঞ্চয় বন্ধ ও টাকা উত্তোলনের আবেদন। কারণ: "${switchOffReason.trim()}"। জমাকৃত মোট সঞ্চয়: ৳${totalSaved.toLocaleString('bn-BD')} টাকা।`,
+          createdAt: nowIso,
+          date: new Date().toLocaleDateString('en-GB'),
+          time: new Date().toLocaleTimeString(),
+          receiptNo: `REC-SAMITY-WD-${Math.floor(100000 + Math.random() * 900000)}`
+        });
+      } catch (txErr) {
+        console.warn("transactions pending write failed:", txErr);
+      }
+
+      // Dispatch Real-Time Admin Notification
+      try {
+        await addDoc(collection(db, 'admin_notifications'), {
+          title: '⏸️ সদস্য সমিতি সঞ্চয় বন্ধ ও উত্তোলন আবেদন করেছেন',
+          message: `${user.name || 'সদস্য'} (আইডি: ${user.memberId || 'N/A'}, মোবাইল: ${user.phone || 'N/A'}) সমিতি সঞ্চয় সুইচ অফ ও ৳${totalSaved.toLocaleString('bn-BD')} টাকা উত্তোলনের আবেদন করেছেন। কারণ: "${switchOffReason.trim()}"।`,
+          userId: user.uid,
+          memberId: user.memberId || '',
+          userName: user.name || '',
+          userPhone: user.phone || '',
+          action: 'OFF',
+          reason: switchOffReason.trim(),
+          savingsAmount: totalSaved,
+          type: 'samity_opt_out',
+          read: false,
+          createdAt: serverTimestamp()
+        });
+
+        // Also save in user_notifications
+        await addDoc(collection(db, 'user_notifications'), {
+          title: '⏸️ সমবায় সমিতি সঞ্চয় বন্ধ ও উত্তোলন আবেদন',
+          message: `${user.name || 'সদস্য'} (আইডি: ${user.memberId || 'N/A'}) সমিতি সঞ্চয় সুইচ অফ করেছেন। কারণ: ${switchOffReason.trim()}। এডমিন অনুমোদন সাপেক্ষে জমাকৃত মোট ৳${totalSaved.toLocaleString('bn-BD')} টাকা মেইন ব্যালেন্সে জমা হবে অথবা 25শে ডিসেম্বর স্বয়ংক্রিয়ভাবে প্রদান করা হবে।`,
+          body: `${user.name || 'সদস্য'} (আইডি: ${user.memberId || 'N/A'}) সমিতি সঞ্চয় সুইচ অফ করেছেন। কারণ: ${switchOffReason.trim()}। এডমিন অনুমোদন সাপেক্ষে জমাকৃত মোট ৳${totalSaved.toLocaleString('bn-BD')} টাকা মেইন ব্যালেন্সে জমা হবে অথবা 25শে ডিসেম্বর স্বয়ংক্রিয়ভাবে প্রদান করা হবে।`,
+          userId: user.uid,
+          memberId: user.memberId || '',
+          userName: user.name || '',
+          category: 'system',
+          type: 'samity_opt_out',
+          isPersonal: false,
+          read: false,
+          date: new Date().toLocaleDateString('en-GB'),
+          time: new Date().toLocaleTimeString(),
+          createdAt: serverTimestamp()
+        });
+      } catch (e) {
+        console.warn("admin_notifications write failed:", e);
+      }
+
+      // Dispatch User Personal Notification
+      try {
+        await addDoc(collection(db, 'user_notifications'), {
+          userId: user.uid,
+          memberId: user.memberId || '',
+          title: '⏸️ সমিতি অটো সঞ্চয় সুইচ বন্ধ ও টাকা উত্তোলন আবেদন',
+          message: `আপনার অটো সঞ্চয় বন্ধ ও ৳${totalSaved.toLocaleString('bn-BD')} টাকা উত্তোলনের আবেদন এডমিন প্যানেলে জমা হয়েছে। এডমিন যাচাই করে অনুমোদন করার পর টাকা আপনার মেইন ব্যালেন্সে জমা হবে অথবা 25শে ডিসেম্বর স্বয়ংক্রিয়ভাবে রিফান্ড হবে।`,
+          body: `আপনার অটো সঞ্চয় বন্ধ ও ৳${totalSaved.toLocaleString('bn-BD')} টাকা উত্তোলনের আবেদন এডমিন প্যানেলে জমা হয়েছে। এডমিন যাচাই করে অনুমোদন করার পর টাকা আপনার মেইন ব্যালেন্সে জমা হবে অথবা 25শে ডিসেম্বর স্বয়ংক্রিয়ভাবে রিফান্ড হবে।`,
+          isPersonal: true,
+          read: false,
+          type: 'samity',
+          date: new Date().toLocaleDateString('en-GB'),
+          time: new Date().toLocaleTimeString(),
+          createdAt: serverTimestamp()
+        });
+      } catch (e) {
+        console.warn("user_notifications write failed:", e);
+      }
+
+      syncLiveProfile();
+      setActiveTopModal('none');
+      setSwitchOffReason('');
+      setSwitchSecurityPin('');
+
+      setCustomAlert({
+        title: "⏸️ অটো সঞ্চয় বন্ধ ও উত্তোলন আবেদন",
+        message: `আপনার অটো সঞ্চয় বন্ধ ও ৳${totalSaved.toLocaleString('bn-BD')} টাকা উত্তোলনের আবেদনটি সফলভাবে এডমিন প্যানেলে জমা হয়েছে। এডমিন প্যানেল যাচাই করে অনুমোদন দেওয়ার পর টাকা আপনার মেইন একাউন্টে যোগ হবে অথবা 25শে ডিসেম্বর স্বয়ংক্রিয়ভাবে মেইন ব্যালেন্সে চলে যাবে।`
+      });
+    } catch (err: any) {
+      console.error("Error setting auto savings switch off:", err);
+      setCustomAlert({ title: "❌ ত্রুটি", message: "সঞ্চয় বন্ধ করতে ব্যর্থ হয়েছে। অনুগ্রহ করে পুনরায় চেষ্টা করুন।" });
+    } finally {
+      setSwitchSubmitting(false);
+    }
+  };
+
+  const handleToggleAutoSavingsOn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!switchOnReason.trim()) {
+      setCustomAlert({ title: "⚠️ কারণ আবশ্যক", message: "সঞ্চয় পুনরায় চালু (ON) করার কারণ উল্লেখ করুন।" });
+      return;
+    }
+    const userPin = String(user?.pin || (user as any)?.pinCode || (user as any)?.securityPin || '').trim();
+    if (userPin && switchSecurityPin.trim() !== userPin) {
+      setCustomAlert({ title: "❌ ভুল পিন কোড", message: "আপনার 4 ডিজিটের সিকিউরিটি পিন কোডটি সঠিক নয়!" });
+      return;
+    }
+    if (!userPin && switchSecurityPin.trim().length !== 4) {
+      setCustomAlert({ title: "❌ 4 ডিজিটের পিন আবশ্যক", message: "অনুগ্রহ করে আপনার 4 ডিজিটের সিকিউরিটি পিন কোড দিন।" });
+      return;
+    }
+
+    setSwitchSubmitting(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const userRef = doc(db, 'users', user.uid);
+      await updateDoc(userRef, {
+        samityAutoSavingsActive: true,
+        samityDeactivateStatus: 'active',
+        samitySwitchStatus: 'ON',
+        samityOptInReason: switchOnReason.trim(),
+        samityOptInDate: nowIso,
+        samitySwitchLastUpdated: nowIso,
+        updatedAt: serverTimestamp()
+      });
+
+      setSamityAutoSavingsActive(true);
+
+      // Dispatch Real-Time Admin Notification
+      try {
+        await addDoc(collection(db, 'admin_notifications'), {
+          title: '🔄 সদস্য সমিতি সঞ্চয় পুনরায় সচল (ON) করেছেন',
+          message: `${user.name || 'সদস্য'} (আইডি: ${user.memberId || 'N/A'}, মোবাইল: ${user.phone || 'N/A'}) সমিতি সঞ্চয় পুনরায় সচল (ON) করেছেন। কারণ: "${switchOnReason.trim()}"।`,
+          userId: user.uid,
+          memberId: user.memberId || '',
+          userName: user.name || '',
+          userPhone: user.phone || '',
+          action: 'ON',
+          reason: switchOnReason.trim(),
+          type: 'samity_opt_in',
+          read: false,
+          createdAt: serverTimestamp()
+        });
+
+        // Also save in user_notifications
+        await addDoc(collection(db, 'user_notifications'), {
+          title: '🔄 সমবায় সমিতি সঞ্চয় পুনরায় সচল (ON) নোটিফিকেশন',
+          message: `${user.name || 'সদস্য'} (আইডি: ${user.memberId || 'N/A'}) সমিতি সঞ্চয় পুনরায় চালু করেছেন। কারণ: ${switchOnReason.trim()}।`,
+          body: `${user.name || 'সদস্য'} (আইডি: ${user.memberId || 'N/A'}) সমিতি সঞ্চয় পুনরায় চালু করেছেন। কারণ: ${switchOnReason.trim()}।`,
+          userId: user.uid,
+          memberId: user.memberId || '',
+          userName: user.name || '',
+          category: 'system',
+          type: 'samity_opt_in',
+          isPersonal: false,
+          read: false,
+          date: new Date().toLocaleDateString('en-GB'),
+          time: new Date().toLocaleTimeString(),
+          createdAt: serverTimestamp()
+        });
+      } catch (e) {
+        console.warn("admin_notifications write failed:", e);
+      }
+
+      // Notification to user
+      try {
+        await addDoc(collection(db, 'user_notifications'), {
+          userId: user.uid,
+          memberId: user.memberId || '',
+          title: '🔄 সমিতি অটো সঞ্চয় পুনরায় সচল (ON)',
+          body: `আপনার সমবায় সমিতির মাসিক অটো সঞ্চয় প্রক্রিয়া সফলভাবে পুনরায় সচল করা হয়েছে। কারণ: ${switchOnReason.trim()}`,
+          message: `আপনার সমবায় সমিতির মাসিক অটো সঞ্চয় প্রক্রিয়া সফলভাবে পুনরায় সচল করা হয়েছে। কারণ: ${switchOnReason.trim()}`,
+          isPersonal: true,
+          read: false,
+          type: 'samity',
+          date: new Date().toLocaleDateString('en-GB'),
+          time: new Date().toLocaleTimeString(),
+          createdAt: serverTimestamp()
+        });
+      } catch (e) {
+        console.warn("user_notifications write failed:", e);
+      }
+
+      syncLiveProfile();
+      setActiveTopModal('none');
+      setSwitchOnReason('');
+      setSwitchSecurityPin('');
+
+      setCustomAlert({
+        title: "🔄 অটো সঞ্চয় সচল (ON)",
+        message: "আপনার অটো সঞ্চয় সফলভাবে পুনরায় সচল (ON) করা হয়েছে। এডমিন প্যানেলে নোটিফিকেশন পৌঁছে গেছে।"
+      });
+    } catch (err: any) {
+      console.error("Error setting auto savings switch on:", err);
+      setCustomAlert({ title: "❌ ত্রুটি", message: "সঞ্চয় সচল করতে ব্যর্থ হয়েছে।" });
+    } finally {
+      setSwitchSubmitting(false);
+    }
+  };
+
+  const handleUpgradeToShareholder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!shareholderAgree) {
+      setCustomAlert({
+        title: "⚠️ শর্তাবলীতে সম্মতি প্রয়োজন",
+        message: "শেয়ার হোল্ডার হতে হলে আবশ্যকীয় শর্তাবলী ও বড় প্রজেক্ট/জমি ক্রয়ে 50 হাজার থেকে 5 লাখ টাকা মূলধন যোগানের নীতিতে টিক দিয়ে সম্মতি দিতে হবে।"
+      });
+      return;
+    }
+    const userPin = String(user?.pin || (user as any)?.pinCode || (user as any)?.securityPin || '').trim();
+    if (userPin && shareholderUpgradePin.trim() !== userPin) {
+      setCustomAlert({ title: "❌ ভুল পিন কোড", message: "আপনার 4 ডিজিটের সিকিউরিটি পিন কোডটি সঠিক নয়!" });
+      return;
+    }
+    if (!userPin && shareholderUpgradePin.trim().length !== 4) {
+      setCustomAlert({ title: "❌ 4 ডিজিটের পিন আবশ্যক", message: "অনুগ্রহ করে আপনার 4 ডিজিটের সিকিউরিটি পিন কোড দিন।" });
+      return;
+    }
+
+    setShareholderUpgrading(true);
     try {
       const nowIso = new Date().toISOString();
       const userRef = doc(db, 'users', user.uid);
 
       await updateDoc(userRef, {
-        samityDeactivateStatus: 'pending',
-        samityDeactivateReason: deactivateReason.trim(),
-        samityDeactivateRequestedAt: nowIso
+        memberCategory: 'shareholder',
+        categoryUpgradeDate: nowIso,
+        updatedAt: serverTimestamp()
       });
 
-      await addDoc(collection(db, 'samity_deactivate_requests'), {
-        userId: user.uid,
-        userName: user.name || '',
-        userPhone: user.phone || '',
-        memberId: user.memberId || '',
-        savings: user.savings || 0,
-        reason: deactivateReason.trim(),
-        status: 'pending',
-        createdAt: nowIso
-      });
+      // Dispatch Admin Notification
+      try {
+        await addDoc(collection(db, 'admin_notifications'), {
+          title: '👑 নতুন শেয়ার হোল্ডার সদস্য আপগ্রেড',
+          message: `${user.name || 'সদস্য'} (আইডি: ${user.memberId || 'N/A'}, ফোন: ${user.phone || 'N/A'}) সকল শর্তাবলী মেনে ও 50 হাজার থেকে 5 লাখ টাকা মূলধন দেওয়ার প্রতিশ্রুতি দিয়ে শেয়ার হোল্ডার হিসেবে একাউন্ট আপগ্রেড করেছেন।`,
+          userId: user.uid,
+          memberId: user.memberId || '',
+          userName: user.name || '',
+          userPhone: user.phone || '',
+          type: 'shareholder_upgrade',
+          read: false,
+          createdAt: serverTimestamp()
+        });
 
-      await addDoc(collection(db, 'admin_notifications'), {
-        title: '🚨 সমিতি সঞ্চয় বন্ধের আবেদন',
-        message: `${user.name || 'সদস্য'} (${user.phone}) সমিতি সঞ্চয় বন্ধ করার আবেদন জমা দিয়েছেন। কারণ: ${deactivateReason.trim()}`,
-        type: 'samity_deactivate',
-        userId: user.uid,
-        createdAt: nowIso,
-        read: false
-      });
+        await addDoc(collection(db, 'user_notifications'), {
+          userId: user.uid,
+          memberId: user.memberId || '',
+          title: '👑 অভিনন্দন! আপনি এখন একজন শেয়ার হোল্ডার',
+          body: 'আপনি সফলভাবে সমবায় সমিতির শেয়ার হোল্ডার পদে যুক্ত হয়েছেন। এখন থেকে আপনি ব্যবসার শতভাগ (100%) বাণিজ্যিক মুনাফা ও ভোটাধিকার উপভোগ করবেন।',
+          message: 'আপনি সফলভাবে সমবায় সমিতির শেয়ার হোল্ডার পদে যুক্ত হয়েছেন। এখন থেকে আপনি ব্যবসার শতভাগ (100%) বাণিজ্যিক মুনাফা ও ভোটাধিকার উপভোগ করবেন।',
+          isPersonal: true,
+          read: false,
+          type: 'shareholder',
+          date: new Date().toLocaleDateString('en-GB'),
+          time: new Date().toLocaleTimeString(),
+          createdAt: serverTimestamp()
+        });
+      } catch (e) {
+        console.warn("Notification error:", e);
+      }
 
-      await addDoc(collection(db, 'user_notifications'), {
-        userId: user.uid,
-        title: '📝 সঞ্চয় বন্ধের আবেদন জমা হয়েছে',
-        message: 'আপনার সমিতি সঞ্চয় বন্ধ ও লিভ আবেদন এডমিন প্যানেলে প্রেরিত হয়েছে। এডমিন অনুমোদন দিলে আগামী ২৫শে ডিসেম্বর জমানো টাকা মেইন ব্যালেন্সে ট্রান্সফার হবে।',
-        type: 'samity_deactivate_submitted',
-        read: false,
-        createdAt: nowIso
-      });
-
-      setShowDeactivateModal(false);
-      setDeactivateReason('');
-      setDeactivatePin('');
       syncLiveProfile();
+      setActiveTopModal('none');
+      setShareholderAgree(false);
+      setShareholderUpgradePin('');
 
       setCustomAlert({
-        title: "✅ আবেদন জমা হয়েছে",
-        message: "আপনার সমবায় সমিতি সঞ্চয় বন্ধের আবেদন সফলভাবে এডমিন প্যানেলে প্রেরিত হয়েছে! এডমিন এটি অনুমোদন দিলে আগামী ২৫শে ডিসেম্বর আপনার সমস্ত জমানো সঞ্চয় (৳" + (user.savings || 0).toLocaleString('bn-BD') + ") স্বয়ংক্রিয়ভাবে মেইন ব্যালেন্সে যুক্ত হয়ে যাবে।"
+        title: "👑 অভিনন্দন!",
+        message: "আপনি সফলভাবে শেয়ার হোল্ডার সদস্য হিসেবে নিবন্ধিত হয়েছেন। এখন থেকে আপনি সমিতির 100% পূর্ণ বাণিজ্যিক মুনাফা অংশীদারিত্ব ও ভোটাধিকারের সুবিধা পাবেন।"
       });
     } catch (err: any) {
-      console.error("Deactivate request error:", err);
-      alert("আবেদন প্রেরণে ত্রুটি ঘটেছে: " + (err?.message || "আবার চেষ্টা করুন।"));
+      console.error("Error upgrading to shareholder:", err);
+      setCustomAlert({ title: "❌ ব্যর্থ হয়েছে", message: "শেয়ার হোল্ডার পদবীতে আপগ্রেড সম্পন্ন করা সম্ভব হয়নি।" });
     } finally {
-      setDeactivateSubmitting(false);
+      setShareholderUpgrading(false);
+    }
+  };
+
+  const handleUpgradeToInvestor = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!investorAgree) {
+      setCustomAlert({
+        title: "⚠️ শর্তাবলীতে সম্মতি প্রয়োজন",
+        message: "ইনভেস্টার হতে হলে মাসিক সঞ্চয় ও 50% লাভ শেয়ারের নীতিতে টিক দিয়ে সম্মতি দিতে হবে।"
+      });
+      return;
+    }
+    const userPin = String(user?.pin || (user as any)?.pinCode || (user as any)?.securityPin || '').trim();
+    if (userPin && investorUpgradePin.trim() !== userPin) {
+      setCustomAlert({ title: "❌ ভুল পিন কোড", message: "আপনার 4 ডিজিটের সিকিউরিটি পিন কোডটি সঠিক নয়!" });
+      return;
+    }
+    if (!userPin && investorUpgradePin.trim().length !== 4) {
+      setCustomAlert({ title: "❌ 4 ডিজিটের পিন আবশ্যক", message: "অনুগ্রহ করে আপনার 4 ডিজিটের সিকিউরিটি পিন কোড দিন।" });
+      return;
+    }
+
+    setInvestorUpgrading(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const userRef = doc(db, 'users', user.uid);
+
+      await updateDoc(userRef, {
+        memberCategory: 'investor',
+        categoryUpgradeDate: nowIso,
+        updatedAt: serverTimestamp()
+      });
+
+      // Dispatch Admin Notification
+      try {
+        await addDoc(collection(db, 'admin_notifications'), {
+          title: '💎 নতুন ইনভেস্টার সদস্য নিবন্ধন',
+          message: `${user.name || 'সদস্য'} (আইডি: ${user.memberId || 'N/A'}, ফোন: ${user.phone || 'N/A'}) ইনভেস্টার সদস্য হিসেবে একাউন্ট যুক্ত করেছেন (50% লাভ শেয়ার)।`,
+          userId: user.uid,
+          memberId: user.memberId || '',
+          userName: user.name || '',
+          userPhone: user.phone || '',
+          type: 'investor_upgrade',
+          read: false,
+          createdAt: serverTimestamp()
+        });
+
+        await addDoc(collection(db, 'user_notifications'), {
+          userId: user.uid,
+          memberId: user.memberId || '',
+          title: '💎 অভিনন্দন! আপনি এখন একজন ইনভেস্টার',
+          body: 'আপনি সফলভাবে সমবায় সমিতির ইনভেস্টার পদে যুক্ত হয়েছেন। এখন থেকে আপনি 50% বাণিজ্যিক মুনাফা শেয়ার পাবেন।',
+          message: 'আপনি সফলভাবে সমবায় সমিতির ইনভেস্টার পদে যুক্ত হয়েছেন। এখন থেকে আপনি 50% বাণিজ্যিক মুনাফা শেয়ার পাবেন।',
+          isPersonal: true,
+          read: false,
+          type: 'investor',
+          date: new Date().toLocaleDateString('en-GB'),
+          time: new Date().toLocaleTimeString(),
+          createdAt: serverTimestamp()
+        });
+      } catch (e) {
+        console.warn("Notification error:", e);
+      }
+
+      syncLiveProfile();
+      setActiveTopModal('none');
+      setInvestorAgree(false);
+      setInvestorUpgradePin('');
+
+      setCustomAlert({
+        title: "💎 অভিনন্দন!",
+        message: "আপনি সফলভাবে ইনভেস্টার সদস্য হিসেবে নিবন্ধিত হয়েছেন। আপনি 50% বাণিজ্যিক মুনাফা অংশীদারিত্বের সুবিধা পাবেন।"
+      });
+    } catch (err: any) {
+      console.error("Error upgrading to investor:", err);
+      setCustomAlert({ title: "❌ ব্যর্থ হয়েছে", message: "ইনভেস্টার পদবীতে পরিবর্তন সম্পন্ন করা সম্ভব হয়নি।" });
+    } finally {
+      setInvestorUpgrading(false);
     }
   };
 
@@ -1374,7 +1705,7 @@ export default function SamityScreen({
           }
 
           await Promise.all(promises);
-          customAlertFn('⚡ ১ সেকেন্ডে সফলভাবে আবেদনটি বাতিল করা হয়েছে!');
+          customAlertFn('⚡ 1 সেকেন্ডে সফলভাবে আবেদনটি বাতিল করা হয়েছে!');
         } catch (err: any) {
           console.error(err);
           customAlertFn('বাতিল করতে সমস্যা হয়েছে: ' + (err?.message || err));
@@ -1573,7 +1904,7 @@ export default function SamityScreen({
 
   // States for new features
   // 1. Monthly Investment states
-  const [selectedInvestmentAmount, setSelectedInvestmentAmount] = useState<number>(user.monthlySavingsTarget || 1000);
+  const [selectedInvestmentAmount, setSelectedInvestmentAmount] = useState<number>(user.monthlySavingsTarget || 500);
   const [simulatedDay, setSimulatedDay] = useState<number>(5); // Default is 5th (no penalty)
   const [samityPinPrompt, setSamityPinPrompt] = useState<'none' | 'close' | 'active' | 'pay_reactivate'>('none');
   const [samityPinInput, setSamityPinInput] = useState('');
@@ -1597,36 +1928,66 @@ export default function SamityScreen({
   const [customDepositPin, setCustomDepositPin] = useState<string>('');
 
   // Fallbacks for dynamic DPS and profit balances
-  const userDps = user.dpsBalance !== undefined ? user.dpsBalance : 0;
-  const userProfits = user.profitsBalance !== undefined ? user.profitsBalance : 0;
+  const userDps = effectiveUser.dpsBalance !== undefined ? effectiveUser.dpsBalance : (effectiveUser.savings || 0);
+  const userProfits = effectiveUser.profitsBalance !== undefined ? effectiveUser.profitsBalance : 0;
+  const userSavings = Number(effectiveUser.savings !== undefined ? effectiveUser.savings : effectiveUser.dpsBalance) || 0;
   
-  // Custom Helper to verify if a month is marked paid in user.samityPaidMonths array
-  const checkIsMonthPaid = (mId: string, yr: number, idx: number): boolean => {
-    const paidList: string[] = Array.isArray(user.samityPaidMonths) ? user.samityPaidMonths : [];
-    const yearKey = `${yr}-${mId}`;
-    const yearKeyAlt = `${yr}_${mId}`;
-    if (paidList.includes(yearKey) || paidList.includes(yearKeyAlt)) return true;
-    if (yr === 2026 && paidList.includes(mId)) return true;
-    if (paidList.length === 0 && (user.savings || 0) > 0) {
-      const targetMonthly = user.monthlySavingsTarget || 1000;
-      const monthIndexFromStart = (yr - 2026) * 12 + idx;
-      return monthIndexFromStart < Math.floor((user.savings || 0) / targetMonthly);
+  const targetMonthlyRate = Math.max(1, Number(effectiveUser.monthlySavingsTarget) || 1000);
+
+  // Reconciled effective paid months strictly verified against actual savings deposits
+  const effectivePaidMonths = useMemo(() => {
+    return getEffectivePaidMonthsList(
+      effectiveUser?.samityPaidMonths || [],
+      userSavings,
+      targetMonthlyRate
+    );
+  }, [effectiveUser?.samityPaidMonths, userSavings, targetMonthlyRate]);
+
+  // Custom Helper to verify if a month is marked paid based on mathematical reconciliation
+  const checkIsMonthPaid = (mId: string, yr: number, _idx?: number): boolean => {
+    const cleanId = (mId || '').toLowerCase().trim();
+    const yearKey = `${yr}-${cleanId}`;
+    const yearKeyAlt = `${yr}_${cleanId}`;
+    if (effectivePaidMonths.includes(yearKey) || effectivePaidMonths.includes(yearKeyAlt)) return true;
+    if (yr === 2026 && (effectivePaidMonths.includes(cleanId) || effectivePaidMonths.includes(`2026-${cleanId}`))) return true;
+
+    const mIdx = _idx !== undefined ? _idx : SAMITY_MONTHS.findIndex(m => m.id === cleanId);
+    if (mIdx >= 0) {
+      const mNum = mIdx + 1;
+      const mNumPad = mNum < 10 ? `0${mNum}` : `${mNum}`;
+      if (effectivePaidMonths.includes(`${yr}-${mNum}`) || effectivePaidMonths.includes(`${yr}-${mNumPad}`)) return true;
+      if (yr === 2026 && (effectivePaidMonths.includes(`${mNum}`) || effectivePaidMonths.includes(`${mNumPad}`))) return true;
     }
     return false;
   };
 
-  const calcSavingsFromMonths = Array.isArray(user.samityPaidMonths) && user.samityPaidMonths.length > 0 
-    ? user.samityPaidMonths.length * (user.monthlySavingsTarget || 1000)
-    : (user.savings || 0);
+  // Automatically & permanently sync reconciled effective paid months to Firestore
+  useEffect(() => {
+    const uid = effectiveUser?.uid || effectiveUser?.id;
+    if (!uid) return;
 
-  const userSavings = (Array.isArray(user.samityPaidMonths) && user.samityPaidMonths.length > 0)
-    ? calcSavingsFromMonths
-    : (user.savings !== undefined ? user.savings : 0);
-  
+    const currentFirestoreList = Array.isArray(effectiveUser?.samityPaidMonths) ? effectiveUser.samityPaidMonths : [];
+    const hasDiscrepancy = 
+      effectivePaidMonths.length !== currentFirestoreList.length ||
+      effectivePaidMonths.some(m => !currentFirestoreList.includes(m));
+
+    if (hasDiscrepancy && effectivePaidMonths.length > 0) {
+      updateDoc(doc(db, 'users', uid), {
+        samityPaidMonths: effectivePaidMonths
+      }).catch(err => {
+        console.warn("Auto-sync samityPaidMonths to Firestore error:", err);
+      });
+    }
+  }, [effectivePaidMonths, effectiveUser?.uid, effectiveUser?.id, effectiveUser?.samityPaidMonths]);
+
+  const uniquePaidCount = effectivePaidMonths.length;
+
+  const calcSavingsFromMonths = userSavings > 0 ? userSavings : (uniquePaidCount * targetMonthlyRate);
+
   // Compute dynamic stats from user transaction histories to prevent hardcoded leaks
   const currentMonthDeposits = userTxHistory
     .filter(tx => {
-      if (tx.type !== 'coop_savings_deposit') return false;
+      if (tx.type !== 'coop_savings_deposit' && tx.type !== 'samity_deposit') return false;
       if (tx.status !== 'success' && tx.status !== 'approved') return false;
       if (!tx.createdAt) return false;
       const txDate = new Date(tx.createdAt);
@@ -1638,7 +1999,7 @@ export default function SamityScreen({
   // Find the last successful deposit transaction to display in the "জমা" card
   const lastDepositTx = userTxHistory
     .filter(tx => {
-      if (tx.type !== 'coop_savings_deposit') return false;
+      if (tx.type !== 'coop_savings_deposit' && tx.type !== 'samity_deposit') return false;
       return tx.status === 'success' || tx.status === 'approved';
     })
     .sort((a, b) => {
@@ -1649,13 +2010,14 @@ export default function SamityScreen({
 
   const lastDepositAmount = lastDepositTx ? (lastDepositTx.amount || 0) : 0;
 
-  const totalCoopBalance = userSavings + userDps + userProfits;
+  // Total Samity Balance ("আমার মোট টাকা") = Accumulated Savings + Profits
+  const totalCoopBalance = userSavings + userProfits;
 
   const profitPercentage = userSavings > 0
     ? ((userProfits / userSavings) * 100).toFixed(1)
     : "0.0";
 
-  const targetGoal = user.monthlySavingsTarget ? user.monthlySavingsTarget * 12 : 50000;
+  const targetGoal = targetMonthlyRate * 12;
   const progressPercent = targetGoal > 0 ? Math.min(100, Math.round((userSavings / targetGoal) * 100)) : 0;
   const remainingTarget = Math.max(0, targetGoal - userSavings);
 
@@ -1673,20 +2035,58 @@ export default function SamityScreen({
     setLoanApplyPin('');
   };
 
-  // Fetch transactions logs specifically for cooperative receipts
+  // Fetch transactions logs specifically for cooperative receipts with multi-vector resilience
   const fetchUserTransactions = async () => {
     setLoadingTx(true);
     try {
-      const q = query(
-        collection(db, 'transactions'),
-        where('userId', '==', user.uid)
-      );
-      const snapshot = await getDocs(q);
-      const list: Transaction[] = [];
-      snapshot.forEach(docSnap => {
-        list.push({ id: docSnap.id, ...docSnap.data() } as Transaction);
-      });
-      list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      const txMap = new Map<string, Transaction>();
+
+      // 1. Seed with passed-in transactions from props
+      if (Array.isArray(transactions) && transactions.length > 0) {
+        transactions.forEach(t => {
+          const key = t.id || t.docId;
+          if (key) txMap.set(key, t);
+        });
+      }
+
+      // 2. Query transactions by userId
+      if (user?.uid) {
+        const q1 = query(
+          collection(db, 'transactions'),
+          where('userId', '==', user.uid)
+        );
+        const s1 = await getDocs(q1);
+        s1.forEach(docSnap => {
+          txMap.set(docSnap.id, { id: docSnap.id, docId: docSnap.id, ...docSnap.data() } as Transaction);
+        });
+      }
+
+      // 3. Query transactions by memberId
+      if (user?.memberId) {
+        const q2 = query(
+          collection(db, 'transactions'),
+          where('memberId', '==', user.memberId)
+        );
+        const s2 = await getDocs(q2);
+        s2.forEach(docSnap => {
+          txMap.set(docSnap.id, { id: docSnap.id, docId: docSnap.id, ...docSnap.data() } as Transaction);
+        });
+      }
+
+      // 4. Query transactions by phone
+      if (user?.phone) {
+        const q3 = query(
+          collection(db, 'transactions'),
+          where('phone', '==', user.phone)
+        );
+        const s3 = await getDocs(q3);
+        s3.forEach(docSnap => {
+          txMap.set(docSnap.id, { id: docSnap.id, docId: docSnap.id, ...docSnap.data() } as Transaction);
+        });
+      }
+
+      const list = Array.from(txMap.values());
+      list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
       setUserTxHistory(list);
     } catch (e) {
       console.error("Error fetching co-op tx:", e);
@@ -1697,7 +2097,7 @@ export default function SamityScreen({
 
   useEffect(() => {
     fetchUserTransactions();
-  }, [user.uid, activeSubView]);
+  }, [user.uid, user.memberId, user.phone, activeSubView, transactions]);
 
   // Handle co-op deposit submission
   const handleCoopDepositSubmit = async (e: React.FormEvent) => {
@@ -1711,13 +2111,14 @@ export default function SamityScreen({
       return;
     }
 
-    if (user.balance < amt) {
-      setFormError(`দুঃখিত! আপনার মেইন ব্যালেন্স পর্যাপ্ত নয়। আপনার বর্তমান মেইন ব্যালেন্স ৳${(user.balance || 0).toLocaleString('bn-BD')} BDT.`);
+    const currentBal = getEffectiveBalance(user);
+    if (currentBal < amt) {
+      setFormError(`দুঃখিত! আপনার মেইন ব্যালেন্স পর্যাপ্ত নয়। আপনার বর্তমান মেইন ব্যালেন্স ৳${currentBal.toLocaleString('bn-BD')} BDT.`);
       return;
     }
 
     if (!depositPin || depositPin !== user.pin) {
-      setFormError('ভুল ৪-ডিজিটের সিকিউরিটি পিন! আবার চেষ্টা করুন।');
+      setFormError('ভুল 4-ডিজিটের সিকিউরিটি পিন! আবার চেষ্টা করুন।');
       return;
     }
 
@@ -1725,21 +2126,15 @@ export default function SamityScreen({
     try {
       const userRef = doc(db, 'users', user.uid);
       
-      let newBalance = user.balance - amt;
-      let updateFields: Record<string, any> = { balance: newBalance, mainBalance: newBalance };
-
       let typeLabel = '';
       let typeStr: Transaction['type'] = 'coop_savings_deposit';
       let descriptionStr = '';
 
       if (depositPurpose === 'savings') {
-        updateFields.savings = (user.savings || 0) + amt;
-        updateFields.dpsBalance = (user.dpsBalance || (user.savings || 0)) + amt;
         typeStr = 'coop_savings_deposit';
         typeLabel = 'সঞ্চয় আমানত জমা';
         descriptionStr = `মেইন ব্যালেন্স হতে ৳${amt.toLocaleString('bn-BD')} টাকা সরাসরি ইনভেস্টর সাধারণ সঞ্চয় তহবিলে স্থানান্তর করা হয়েছে।`;
       } else if (depositPurpose === 'loan') {
-        updateFields.dueLoan = Math.max(0, (user.dueLoan || 0) - amt);
         typeStr = 'loan_repayment';
         typeLabel = 'সমিতি লোন কিস্তি পরিশোধ';
         descriptionStr = `মেইন ব্যালেন্স হতে ৳${amt.toLocaleString('bn-BD')} টাকা সরাসরি সমবায় ঋণের কিস্তি পরিশোধ করা হয়েছে।`;
@@ -1749,25 +2144,44 @@ export default function SamityScreen({
         descriptionStr = `মেইন ব্যালেন্স হতে ৳${amt.toLocaleString('bn-BD')} টাকা সরাসরি ভর্তি ফি ও সার্ভিস চার্জ পরিশোধ করা হয়েছে।`;
       }
 
-      // Update User Document
-      await updateDoc(userRef, updateFields);
+      await runTransaction(db, async (transaction) => {
+        const uSnap = await transaction.get(userRef);
+        if (!uSnap.exists()) throw new Error('সদস্য একাউন্ট খুঁজে পাওয়া যায়নি।');
+        const freshData = uSnap.data();
+        const liveBal = getEffectiveBalance(freshData);
+        if (liveBal < amt) {
+          throw new Error(`দুঃখিত! আপনার মেইন ব্যালেন্স পর্যাপ্ত নয়। আপনার বর্তমান মেইন ব্যালেন্স ৳${liveBal.toLocaleString('bn-BD')} BDT.`);
+        }
 
-      // Create a Successful Transaction Log
-      const newTx: Partial<Transaction> = {
-        userId: user.uid,
-        userName: user.name,
-        memberId: user.memberId || user.phone,
-        type: typeStr,
-        typeLabel: typeLabel,
-        amount: amt,
-        status: 'success',
-        paymentMethod: 'Main Balance',
-        description: descriptionStr,
-        createdAt: new Date().toISOString(),
-        receiptNo: `REC-${Math.floor(100000 + Math.random() * 900000)}`
-      };
+        const newBalance = Math.max(0, liveBal - amt);
+        let updateFields: Record<string, any> = { balance: newBalance, mainBalance: newBalance };
 
-      await addDoc(collection(db, 'transactions'), newTx);
+        if (depositPurpose === 'savings') {
+          updateFields.savings = (Number(freshData.savings) || 0) + amt;
+          updateFields.dpsBalance = (Number(freshData.dpsBalance) || Number(freshData.savings) || 0) + amt;
+        } else if (depositPurpose === 'loan') {
+          updateFields.dueLoan = Math.max(0, (Number(freshData.dueLoan) || 0) - amt);
+        }
+
+        transaction.update(userRef, updateFields);
+
+        const txRef = doc(collection(db, 'transactions'));
+        transaction.set(txRef, {
+          id: txRef.id,
+          userId: user.uid,
+          userName: freshData.name || user.name || '',
+          memberId: freshData.memberId || user.memberId || user.phone,
+          type: typeStr,
+          typeLabel: typeLabel,
+          amount: amt,
+          status: 'success',
+          isApproved: true,
+          paymentMethod: 'Main Balance',
+          description: descriptionStr,
+          createdAt: new Date().toISOString(),
+          receiptNo: `REC-${Math.floor(100000 + Math.random() * 900000)}`
+        });
+      });
       
       setFormSuccess(`আলহামদুলিল্লাহ! আপনার মেইন ব্যালেন্স হতে ৳${amt.toLocaleString('bn-BD')} টাকা সফলভাবে স্থানান্তরিত ও সচল করা হয়েছে।`);
       setTimeout(() => {
@@ -1793,45 +2207,62 @@ export default function SamityScreen({
       return;
     }
 
-    if (user.balance < amountToDeposit) {
-      setFormError(`দুঃখিত! আপনার মেইন ব্যালেন্স পর্যাপ্ত নয়। আপনার বর্তমান মেইন ব্যালেন্স ৳${(user.balance || 0).toLocaleString('bn-BD')} BDT.`);
+    const currentBal = getEffectiveBalance(user);
+    if (currentBal < amountToDeposit) {
+      setFormError(`দুঃখিত! আপনার মেইন ব্যালেন্স পর্যাপ্ত নয়। আপনার বর্তমান মেইন ব্যালেন্স ৳${currentBal.toLocaleString('bn-BD')} BDT.`);
       return;
     }
 
     if (!pin || pin !== user.pin) {
-      setFormError('ভুল ৪-ডিজিটের সিকিউরিটি পিন! আবার চেষ্টা করুন।');
+      setFormError('ভুল 4-ডিজিটের সিকিউরিটি পিন! আবার চেষ্টা করুন।');
       return;
     }
 
     setActionLoading(true);
     try {
       const userRef = doc(db, 'users', user.uid);
-      let newBalance = user.balance - amountToDeposit;
-      let newDpsBalance = (user.dpsBalance || 0) + amountToDeposit;
-      let newSavings = (user.savings || 0) + amountToDeposit;
 
-      await updateDoc(userRef, {
-        balance: newBalance,
-        mainBalance: newBalance,
-        savings: newSavings,
-        dpsBalance: newDpsBalance
+      await runTransaction(db, async (transaction) => {
+        const uSnap = await transaction.get(userRef);
+        if (!uSnap.exists()) throw new Error('সদস্য একাউন্ট খুঁজে পাওয়া যায়নি।');
+        const freshData = uSnap.data();
+        const liveBal = getEffectiveBalance(freshData);
+        if (liveBal < amountToDeposit) {
+          throw new Error(`দুঃখিত! আপনার মেইন ব্যালেন্স পর্যাপ্ত নয়। আপনার বর্তমান মেইন ব্যালেন্স ৳${liveBal.toLocaleString('bn-BD')} BDT.`);
+        }
+
+        const newBalance = Math.max(0, liveBal - amountToDeposit);
+        const newSavings = (Number(freshData.savings) || 0) + amountToDeposit;
+        const newDpsBalance = (Number(freshData.dpsBalance) || Number(freshData.savings) || 0) + amountToDeposit;
+        const targetRate = Number(freshData.monthlySavingsTarget) || 1000;
+        const updatedPaidMonths = normalizePaidMonthsArray(freshData.samityPaidMonths || [], newSavings, targetRate);
+
+        transaction.update(userRef, {
+          balance: newBalance,
+          mainBalance: newBalance,
+          savings: newSavings,
+          dpsBalance: newDpsBalance,
+          samityPaidMonths: updatedPaidMonths
+        });
+
+        const txRef = doc(collection(db, 'transactions'));
+        transaction.set(txRef, {
+          id: txRef.id,
+          userId: user.uid,
+          userName: freshData.name || user.name || '',
+          memberId: freshData.memberId || user.memberId || user.phone,
+          type: 'coop_savings_deposit',
+          typeLabel: 'সঞ্চয় আমানত',
+          amount: amountToDeposit,
+          status: 'success',
+          isApproved: true,
+          paymentMethod: 'Main Balance',
+          description: `মেইন ব্যালেন্স হতে ৳${amountToDeposit.toLocaleString('bn-BD')} টাকা সাধারণ সঞ্চয় ওয়ালেটে স্থানান্তর করা হয়েছে।`,
+          createdAt: new Date().toISOString(),
+          receiptNo: `REC-${Math.floor(100000 + Math.random() * 900000)}`
+        });
       });
 
-      const tx: Partial<Transaction> = {
-        userId: user.uid,
-        userName: user.name,
-        memberId: user.memberId || user.phone,
-        type: 'coop_savings_deposit',
-        typeLabel: 'সঞ্চয় আমানত',
-        amount: amountToDeposit,
-        status: 'success',
-        paymentMethod: 'Main Balance',
-        description: `মেইন ব্যালেন্স হতে ৳${amountToDeposit.toLocaleString('bn-BD')} টাকা সাধারণ সঞ্চয় ওয়ালেটে স্থানান্তর করা হয়েছে।`,
-        createdAt: new Date().toISOString(),
-        receiptNo: `REC-${Math.floor(100000 + Math.random() * 900000)}`
-      };
-
-      await addDoc(collection(db, 'transactions'), tx);
       setFormSuccess(`আলহামদুলিল্লাহ! আপনার মেইন ব্যালেন্স হতে ৳${amountToDeposit.toLocaleString('bn-BD')} টাকা সফলভাবে আপনার সঞ্চয় তহবিলে জমা করা হয়েছে।`);
       
       // Reset inputs
@@ -1866,15 +2297,17 @@ export default function SamityScreen({
     }
 
     if (!withdrawPin || withdrawPin !== user.pin) {
-      setFormError('ভুল ৪-ডিজিটের সিকিউরিটি পিন! আবার চেষ্টা করুন।');
+      setFormError('ভুল 4-ডিজিটের সিকিউরিটি পিন! আবার চেষ্টা করুন।');
       return;
     }
 
     const now = new Date();
     const isDec25 = (now.getMonth() === 11 && now.getDate() === 25) || user.role === 'admin';
+    const isExitApproved = user.samityDeactivateStatus === 'approved' || user.samityDeactivateStatus === 'released';
+    const canWithdraw = isDec25 || isExitApproved;
 
-    if (!isDec25) {
-      setFormError('🔒 সমবায় সমিতি সঞ্চয় নীতিমালা: সমবায় সমিতি থেকে সঞ্চয়কৃত আমানত কেবল প্রতিবছরের ২৫শে ডিসেম্বর উত্তোলন বা উত্তোলনের আবেদন করা যাবে এবং তা এডমিন প্যানেলের এপ্রুভ সাপেক্ষে পরিশোধ হবে। বছরের অন্য কোন তারিখে সমিতি সঞ্চয় উত্তোলন গ্রহণযোগ্য নয়।');
+    if (!canWithdraw) {
+      setFormError('🔒 সমবায় সমিতি সঞ্চয় নীতিমালা: সমিতি ফান্ডে কেবল টাকা জমা রাখা যাবে। 25শে ডিসেম্বরের পূর্বে কোনো সঞ্চয় উত্তোলন করা যাবে না। তবে যদি আপনি 25শে ডিসেম্বরের আগে "সমিতি বাতিল / সদস্যপদ প্রত্যাহার (আমি আর থাকবো না)" আবেদন করে থাকেন এবং তা এডমিন কর্তৃক অনুমোদিত হয়, তবেই সঞ্চয় উত্তোলন করা যাবে।');
       return;
     }
 
@@ -1885,16 +2318,18 @@ export default function SamityScreen({
         userName: user.name,
         memberId: user.memberId || user.phone,
         type: 'withdraw',
-        typeLabel: 'সমবায় সঞ্চয় উত্তোলন (২৫শে ডিসেম্বর)',
+        typeLabel: isExitApproved ? 'সমবায় সঞ্চয় উত্তোলন (সদস্যপদ প্রত্যাহার)' : 'সমবায় সঞ্চয় উত্তোলন (25শে ডিসেম্বর)',
         amount: amt,
         status: 'pending',
-        description: `সমবায় সমিতি সঞ্চয় আমানত হতে ৳${amt.toLocaleString('bn-BD')} টাকা উত্তোলনের আবেদন। এডমিন প্যানেলের অনুমোদনের পর মেইন ব্যালেন্সে জমা হবে।`,
+        description: isExitApproved 
+          ? `সমবায় সমিতি সদস্যপদ প্রত্যাহার অনুমোদন সাপেক্ষে সঞ্চয় আমানত হতে ৳${amt.toLocaleString('bn-BD')} টাকা উত্তোলনের আবেদন।`
+          : `সমবায় সমিতি সঞ্চয় আমানত হতে ৳${amt.toLocaleString('bn-BD')} টাকা উত্তোলনের আবেদন (25শে ডিসেম্বর)।`,
         createdAt: new Date().toISOString(),
         receiptNo: `REC-WD-${Math.floor(100000 + Math.random() * 900000)}`
       };
 
       await addDoc(collection(db, 'transactions'), newTx);
-      setFormSuccess('আপনার ২৫শে ডিসেম্বরের সমবায় সঞ্চয় উত্তোলনের আবেদনটি সফলভাবে জমা দেওয়া হয়েছে! অ্যাডমিন প্যানেল আবেদনটি যাচাই করে অনুমোদন করার পর টাকা আপনার মেইন ব্যালেন্সে জমা হবে।');
+      setFormSuccess('আপনার সমবায় সঞ্চয় উত্তোলনের আবেদনটি সফলভাবে জমা দেওয়া হয়েছে! অ্যাডমিন প্যানেল আবেদনটি যাচাই করে অনুমোদন করার পর টাকা আপনার মেইন ব্যালেন্সে জমা হবে।');
       setWithdrawAmount('');
       setWithdrawPin('');
       setTimeout(() => {
@@ -1921,7 +2356,7 @@ export default function SamityScreen({
     }
 
     if (amt > 50000) {
-      setFormError('BNB ম্যানেজমেন্ট কোম্পানি ইনভেস্টর নীতি অনুযায়ী নতুন লোন সর্বোচ্চ ৫০,০০০ টাকার বেশি হওয়া সম্ভব নয়।');
+      setFormError('BNB ম্যানেজমেন্ট কোম্পানি ইনভেস্টর নীতি অনুযায়ী নতুন লোন সর্বোচ্চ 50,000 টাকার বেশি হওয়া সম্ভব নয়।');
       return;
     }
 
@@ -2001,7 +2436,7 @@ export default function SamityScreen({
           list.push({ id: docSnap.id, ...docSnap.data() });
         }
       });
-      list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
       setShareTransfers(list);
     } catch (e) {
       console.error("Error fetching share transfers:", e);
@@ -2021,7 +2456,7 @@ export default function SamityScreen({
     setFormSuccess('');
     
     if (selectedInvestmentAmount < 500 || selectedInvestmentAmount > 5000) {
-      setFormError('বিনিযোগের পরিমাণ সর্বনিম্ন ৫০০ টাকা এবং সর্বোচ্চ ৫,০০০ টাকা হতে হবে।');
+      setFormError('বিনিযোগের পরিমাণ সর্বনিম্ন 500 টাকা এবং সর্বোচ্চ 5,000 টাকা হতে হবে।');
       return;
     }
     
@@ -2040,10 +2475,20 @@ export default function SamityScreen({
     }
   };
 
-  const getPenaltyAmount = (day: number): number => {
+  const getPenaltyAmount = (day: number, checkDate?: Date): number => {
     const policy = appConfig?.samityPolicyConfig;
-    if (policy?.pausePenaltyUntil15th) {
-      const exemptionDay = policy.penaltyExemptionUntilDay || 15;
+    const now = checkDate || new Date();
+    const currentYear = now.getFullYear();
+    const currentMonthNum = String(now.getMonth() + 1).padStart(2, '0');
+    const currentMonthKey = `${currentYear}-${currentMonthNum}`;
+
+    const monthCfg = policy?.exemptedMonthsConfig?.[currentMonthKey];
+    const isExempted = monthCfg !== undefined 
+      ? monthCfg.isExempted 
+      : Boolean(policy?.exemptedMonths?.[currentMonthKey] || policy?.pausePenaltyUntil15th);
+    
+    if (isExempted) {
+      const exemptionDay = monthCfg?.exemptUntilDay || policy?.penaltyExemptionUntilDay || 31;
       if (day <= exemptionDay) {
         return 0;
       }
@@ -2061,7 +2506,7 @@ export default function SamityScreen({
         }
       }
     }
-    if (day <= 9) return 0;
+    if (day <= (policy?.defaultGracePeriodDays || 9)) return 0;
     if (day >= 10 && day <= 19) return 10;
     if (day >= 20 && day <= 29) return 20;
     if (day >= 30 && day <= 39) return 30;
@@ -2073,43 +2518,41 @@ export default function SamityScreen({
     setFormError('');
     setFormSuccess('');
 
-    const targetAmt = user.monthlySavingsTarget || 1000;
-    if (targetAmt < 500 || targetAmt > 5000) {
-      setFormError('দয়া করে প্রথমে আপনার মাসিক বিনিয়োগ লক্ষ্য নির্ধারণ করুন (৫০০ - ৫,০০০ BDT)।');
-      return;
-    }
+    const targetAmt = targetMonthlyRate;
+    const curBal = getEffectiveBalance(effectiveUser);
+    const curSavings = userSavings;
 
     // Determine penalty based on simulated date
     const penalty = getPenaltyAmount(simulatedDay);
 
     const totalNeeded = targetAmt + penalty;
-    const hasEnoughBalance = user.balance >= totalNeeded;
+    const hasEnoughBalance = curBal >= totalNeeded;
 
     setActionLoading(true);
     try {
-      const userRef = doc(db, 'users', user.uid);
+      const userRef = doc(db, 'users', effectiveUser.uid);
       
       let balanceDeduction = 0;
       let savingsDeduction = 0;
-      let newBalance = user.balance;
-      let newSavings = user.savings || 0;
+      let newBalance = curBal;
+      let newSavings = curSavings;
       let adjustmentDetails = '';
 
       if (hasEnoughBalance) {
-        newBalance = user.balance - totalNeeded;
-        newSavings = (user.savings || 0) + targetAmt;
+        newBalance = curBal - totalNeeded;
+        newSavings = curSavings + targetAmt;
         balanceDeduction = totalNeeded;
         adjustmentDetails = `আপনার মেইন ব্যালেন্স থেকে ৳${totalNeeded.toLocaleString('bn-BD')} কেটে নেওয়া হয়েছে।`;
       } else {
-        const partialFromBalance = user.balance;
+        const partialFromBalance = curBal;
         const remainingToDeduct = totalNeeded - partialFromBalance;
         
-        if ((user.savings || 0) + partialFromBalance < totalNeeded) {
+        if (curSavings + partialFromBalance < totalNeeded) {
           throw new Error(`দুঃখিত! আপনার মেইন ব্যালেন্স এবং পূর্বের জমানো সঞ্চয় মিলিয়েও প্রয়োজনীয় ৳${totalNeeded.toLocaleString('bn-BD')} (কিস্তি ৳${targetAmt} + জরিমানা ৳${penalty}) নেই। অনুগ্রহ করে প্রথমে ব্যালেন্স রিচার্জ করুন।`);
         }
 
         newBalance = 0;
-        newSavings = (user.savings || 0) + targetAmt - remainingToDeduct;
+        newSavings = curSavings + targetAmt - remainingToDeduct;
         balanceDeduction = partialFromBalance;
         savingsDeduction = remainingToDeduct;
         
@@ -2150,7 +2593,7 @@ export default function SamityScreen({
         await addDoc(collection(db, 'transactions'), penaltyTx);
       }
 
-      setFormSuccess(`আলহামদুলিল্লাহ! আপনার জুন ২০২৬ মাসের সঞ্চয় সফলভাবে জমা হয়েছে। ${adjustmentDetails}`);
+      setFormSuccess(`আলহামদুলিল্লাহ! আপনার জুন 2026 মাসের সঞ্চয় সফলভাবে জমা হয়েছে। ${adjustmentDetails}`);
       syncLiveProfile();
     } catch (e: any) {
       setFormError(e.message || 'পেমেন্ট সম্পন্ন করা যায়নি।');
@@ -2180,7 +2623,7 @@ export default function SamityScreen({
         userId: user.uid,
         memberId: user.memberId || 'N/A',
         title: '🔴 মাসিক বিনিয়োগ সাময়িকভাবে বন্ধ করা হয়েছে',
-        body: `আপনার মাসিক বিনিয়োগ স্কিমটি বন্ধ করা হয়েছে। নতুন মাসিক কিস্তি আর অটো-ডেবিট হবে না। ২৫শে ডিসেম্বরের পূর্বে আপনার সঞ্চিত টাকা উত্তোলন করতে পারবেন না।`,
+        body: `আপনার মাসিক বিনিয়োগ স্কিমটি বন্ধ করা হয়েছে। নতুন মাসিক কিস্তি আর অটো-ডেবিট হবে না। 25শে ডিসেম্বরের পূর্বে আপনার সঞ্চিত টাকা উত্তোলন করতে পারবেন না।`,
         read: false,
         isPersonal: true,
         category: 'samity_msg',
@@ -2241,7 +2684,8 @@ export default function SamityScreen({
   const handlePayArrearsAndReactivate = async () => {
     setFormError('');
     setFormSuccess('');
-    if (!samityPinInput || samityPinInput !== user.pin) {
+    const userSamityPin = effectiveUser?.pin ? String(effectiveUser.pin).trim() : '';
+    if (!samityPinInput || !userSamityPin || samityPinInput.trim() !== userSamityPin) {
       setFormError('ভুল সিকিউরিটি পিন! আবার চেষ্টা করুন।');
       setSamityPinPrompt('none');
       setSamityPinInput('');
@@ -2249,26 +2693,32 @@ export default function SamityScreen({
     }
     setActionLoading(true);
     try {
-      const targetAmt = user.monthlySavingsTarget || 1000;
-      const dueMonths = user.dueMonths || 1;
+      const targetAmt = targetMonthlyRate;
+      const dueMonths = effectiveUser.dueMonths || 1;
       const totalDueAmount = targetAmt * dueMonths;
+      const curBal = getEffectiveBalance(effectiveUser);
 
-      if (user.balance < totalDueAmount) {
-        throw new Error(`বকেয়া কিস্তি পরিশোধ করার জন্য আপনার মেইন ব্যালেন্সে পর্যাপ্ত টাকা নেই। মোট প্রয়োজন ৳${totalDueAmount.toLocaleString('bn-BD')} BDT, কিন্তু আপনার মেইন ব্যালেন্স ৳${(user.balance || 0).toLocaleString('bn-BD')} BDT।`);
+      if (curBal < totalDueAmount) {
+        throw new Error(`বকেয়া কিস্তি পরিশোধ করার জন্য আপনার মেইন ব্যালেন্সে পর্যাপ্ত টাকা নেই। মোট প্রয়োজন ৳${totalDueAmount.toLocaleString('bn-BD')} BDT, কিন্তু আপনার মেইন ব্যালেন্স ৳${curBal.toLocaleString('bn-BD')} BDT।`);
       }
 
-      const userRef = doc(db, 'users', user.uid);
+      const userRef = doc(db, 'users', effectiveUser.uid);
+      const newSavings = userSavings + totalDueAmount;
+      const newBal = curBal - totalDueAmount;
+
       await updateDoc(userRef, {
-        balance: user.balance - totalDueAmount,
-        savings: (user.savings || 0) + totalDueAmount,
+        balance: newBal,
+        mainBalance: newBal,
+        savings: newSavings,
+        dpsBalance: newSavings,
         samitySchemeActive: true,
         dueMonths: 0
       });
 
       await addDoc(collection(db, 'transactions'), {
-        userId: user.uid,
-        userName: user.name,
-        memberId: user.memberId || user.phone,
+        userId: effectiveUser.uid,
+        userName: effectiveUser.name,
+        memberId: effectiveUser.memberId || effectiveUser.phone,
         type: 'deposit',
         typeLabel: 'বকেয়া কিস্তি ও পুনঃসচলকরণ',
         amount: totalDueAmount,
@@ -2371,7 +2821,7 @@ export default function SamityScreen({
     }
 
     if (isNaN(count) || count <= 0) {
-      setFormError('শেয়ার সংখ্যা অবশ্যই ১ বা তার বেশি হতে হবে।');
+      setFormError('শেয়ার সংখ্যা অবশ্যই 1 বা তার বেশি হতে হবে।');
       return;
     }
 
@@ -2381,7 +2831,7 @@ export default function SamityScreen({
     }
 
     if (shareTransferPin !== user.pin) {
-      setFormError('ভুল ৪-ডিজিটের সিকিউরিটি পিন! দয়া করে সঠিক পিন দিন।');
+      setFormError('ভুল 4-ডিজিটের সিকিউরিটি পিন! দয়া করে সঠিক পিন দিন।');
       return;
     }
 
@@ -2435,12 +2885,13 @@ export default function SamityScreen({
   // Real Samity member count (fallback to membersToUse if filter hasn't flagged users yet)
   const activeMembersNum = samityMembersList.length > 0 ? samityMembersList.length : membersToUse.length;
 
-  // Calculated deposits in Samity across members (savings + dpsBalance ONLY - main balance excluded)
+  // Calculated deposits in Samity across members (single accurate savings/share deposit sum)
   const calculatedDeposits = membersToUse.reduce((sum, u) => {
     const isSelf = u.uid === user.uid;
-    const s = isSelf ? Math.max(Number(u.savings) || 0, Number(user.savings) || 0) : (Number(u.savings) || 0);
-    const d = isSelf ? Math.max(Number(u.dpsBalance) || 0, Number(user.dpsBalance) || 0) : (Number(u.dpsBalance) || 0);
-    return sum + s + d;
+    const s = isSelf 
+      ? Math.max(Number(user.savings !== undefined ? user.savings : user.dpsBalance) || 0, Number(u.savings !== undefined ? u.savings : u.dpsBalance) || 0)
+      : (Number(u.savings !== undefined ? u.savings : u.dpsBalance) || 0);
+    return sum + s;
   }, 0);
 
   // Sync with manual override from Admin Panel appConfig if set
@@ -2463,34 +2914,43 @@ export default function SamityScreen({
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col relative" id="samity-screen-root">
       
-      {/* 1. Header (১. হেডার) styled absolutely matching the forest-green app header */}
-      <header className="bg-gradient-to-r from-teal-700 via-teal-800 to-emerald-800 text-white px-4 py-4 rounded-b-3xl shadow-lg relative overflow-hidden z-20">
+      {/* 1. Header (1. হেডার) styled absolutely matching the forest-green app header - Ultra Compact */}
+      <header className="bg-gradient-to-r from-teal-700 via-teal-800 to-emerald-800 text-white px-3 py-2.5 rounded-b-2xl shadow-md relative overflow-hidden z-20">
         {/* Decorative subtle header glows */}
-        <div className="absolute -top-10 -right-10 w-32 h-32 bg-teal-500/10 rounded-full blur-2xl" />
-        <div className="absolute -bottom-10 -left-10 w-32 h-32 bg-emerald-500/15 rounded-full blur-2xl" />
+        <div className="absolute -top-10 -right-10 w-28 h-28 bg-teal-500/10 rounded-full blur-xl" />
+        <div className="absolute -bottom-10 -left-10 w-28 h-28 bg-emerald-500/15 rounded-full blur-xl" />
 
         <div className="flex items-center justify-between relative z-10">
-          <div className="flex items-center gap-3">
-            <button 
+          <div className="flex items-center gap-2">
+            <UnifiedBackButton
               onClick={() => {
-                if (activeSubView !== 'main' || bottomTab !== 'home') {
-                  window.history.back();
-                } else {
-                  onBack();
+                if (show2050CalendarModal) { setShow2050CalendarModal(false); return; }
+                if (showDeactivateModal) { setShowDeactivateModal(false); return; }
+                if (showHelplineModal) { setShowHelplineModal(false); return; }
+                if (showSectionTxHistory) { setShowSectionTxHistory(false); return; }
+                if (activeSubView !== 'main') {
+                  setActiveSubView('main');
+                  return;
                 }
+                if (bottomTab !== 'home') {
+                  setBottomTab('home');
+                  return;
+                }
+                onBack();
               }}
-              className="p-2 bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl text-white transition active:scale-95"
-            >
-              {activeSubView !== 'main' || bottomTab !== 'home' ? (
-                <ChevronLeft className="w-5 h-5" />
-              ) : (
-                <Menu className="w-5 h-5" />
-              )}
-            </button>
+              variant="glass"
+              title="পিছনে যান"
+            />
             
-            <div className="flex items-center gap-2.5">
-              {/* Profile Image with high-contrast borders */}
-              <div className="w-10 h-10 rounded-full bg-slate-200 border-2 border-white/80 overflow-hidden shadow-xs relative flex items-center justify-center shrink-0">
+            <div className="flex items-center gap-2">
+              {/* Profile Image with category border (Red for Shareholder, Blue for Investor) */}
+              <div className={`w-8.5 h-8.5 rounded-full overflow-hidden shadow-xs relative flex items-center justify-center shrink-0 border-2 transition-all ${
+                getMembershipCategory(effectiveUser).key === 'shareholder'
+                  ? 'border-red-500 ring-1 ring-red-500 bg-red-950/40'
+                  : getMembershipCategory(effectiveUser).key === 'investor'
+                  ? 'border-blue-500 ring-1 ring-blue-500 bg-blue-950/40'
+                  : 'border-white/80 bg-slate-200'
+              }`}>
                 {user.profilePic ? (
                   user.profilePic.startsWith('http') || user.profilePic.startsWith('data:image/') ? (
                     <img src={user.profilePic} referrerPolicy="no-referrer" alt="User Profile" className="w-full h-full object-cover rounded-full" />
@@ -2505,7 +2965,7 @@ export default function SamityScreen({
                     ];
                     const activeAv = PRESET_AVATARS.find(av => av.id === user.profilePic) || PRESET_AVATARS[2];
                     return (
-                      <div className={`w-full h-full rounded-full flex items-center justify-center text-xl ${activeAv.bg}`}>
+                      <div className={`w-full h-full rounded-full flex items-center justify-center text-lg ${activeAv.bg}`}>
                         {activeAv.emoji}
                       </div>
                     );
@@ -2518,37 +2978,46 @@ export default function SamityScreen({
               </div>
 
               <div>
-                <h4 className="text-[13px] font-black tracking-tight leading-tight flex items-center gap-1.5 font-sans">
-                  {user.name || "মোঃ রহিম"}
-                </h4>
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  <span className="text-[9.5px] text-teal-100 font-bold block">
-                    সদস্য আইডি: {user.memberId || "BNB00005327"}
-                  </span>
-                  
-                  {/* Status badge: 'সক্রিয়' in vivid green */}
-                  <span className="text-[8.5px] bg-emerald-500/20 text-emerald-300 font-extrabold px-1.5 py-0.2 rounded-md uppercase border border-emerald-500/30 flex items-center gap-0.5 shadow-2xs">
+                {/* [1. পদবী] -> [2. নাম] -> [3. একটিভ] */}
+                <div className="flex items-center gap-1 flex-wrap">
+                  <span className="text-[8px] bg-emerald-500/20 text-emerald-300 font-extrabold px-1.5 py-0.2 rounded-full uppercase border border-emerald-500/30 flex items-center gap-0.5 shadow-2xs">
                     <span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse" />
-                    সক্রিয়
+                    একটিভ
+                  </span>
+
+                  <span className={`text-[8px] font-black px-1.5 py-0.2 rounded-md leading-none shadow-2xs border ${
+                    getMembershipCategory(effectiveUser).key === 'shareholder'
+                      ? 'bg-red-600 text-white border-red-400'
+                      : getMembershipCategory(effectiveUser).key === 'investor'
+                      ? 'bg-blue-600 text-white border-blue-400'
+                      : 'bg-teal-900/80 text-teal-200 border-teal-700'
+                  }`}>
+                    {getMembershipCategory(effectiveUser).key === 'shareholder' ? '👑 শেয়ার হোল্ডার' : getMembershipCategory(effectiveUser).key === 'investor' ? '💎 ইনভেস্টার' : '👤 সাধারণ সদস্য'}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1 mt-0.5">
+                  <span className="text-[9px] text-teal-100 font-bold block leading-none">
+                    সদস্য আইডি: <strong className="font-mono text-white">{user.memberId || "BNB00005327"}</strong>
                   </span>
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <div 
               onClick={() => {
                 syncLiveProfile();
                 fetchUserTransactions();
               }}
-              className="flex items-center gap-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/20 border border-white/10 rounded-full transition cursor-pointer select-none text-left shrink-0"
+              className="flex items-center gap-1 px-2 py-0.5 bg-white/10 hover:bg-white/20 border border-white/10 rounded-full transition cursor-pointer select-none text-left shrink-0"
               title="মেইন ব্যালেন্স রিফ্রেশ করতে ট্যাপ করুন"
             >
-              <span className="w-4 h-4 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[10px] font-sans font-black shrink-0">৳</span>
+              <span className="w-3.5 h-3.5 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[9px] font-sans font-black shrink-0">৳</span>
               <div className="flex flex-col leading-none">
-                <span className="text-[7.5px] uppercase tracking-wider text-teal-100 font-extrabold">মেইন ব্যালেন্স</span>
-                <span className="text-[11px] font-bold font-mono text-white mt-0.5">
+                <span className="text-[6.5px] uppercase tracking-wider text-teal-100 font-extrabold">মেইন ব্যালেন্স</span>
+                <span className="text-[10px] font-bold font-mono text-white">
                   ৳{(user.balance || 0).toLocaleString('bn-BD')}
                 </span>
               </div>
@@ -2559,11 +3028,10 @@ export default function SamityScreen({
                 fetchUserTransactions();
                 setShowSectionTxHistory(true);
               }}
-              className="p-2 bg-white/15 hover:bg-white/25 text-teal-100 rounded-xl flex items-center gap-1 cursor-pointer active:scale-95"
+              className="p-1.5 bg-white/15 hover:bg-white/25 text-teal-100 rounded-lg flex items-center gap-1 cursor-pointer active:scale-95"
               title="ইনভেস্টর লেনদেন খতিয়ান"
             >
-              <ClipboardList className="w-4 h-4 text-white" />
-              <span className="text-[10px] text-white font-extrabold hidden xs:inline">খতিয়ান</span>
+              <ClipboardList className="w-3.5 h-3.5 text-white" />
             </button>
 
             <button 
@@ -2573,16 +3041,16 @@ export default function SamityScreen({
                 setActiveSubView('main');
                 markAllSamityNoticesAsRead();
               }}
-              className={`p-2 rounded-xl relative cursor-pointer active:scale-95 transition-all flex items-center justify-center ${
+              className={`p-1.5 rounded-lg relative cursor-pointer active:scale-95 transition-all flex items-center justify-center ${
                 hasUnreadSamity
-                  ? 'bg-rose-500 text-white shadow-md animate-pulse ring-2 ring-rose-300'
+                  ? 'bg-rose-500 text-white shadow-md animate-pulse ring-1 ring-rose-300'
                   : 'bg-white/15 hover:bg-white/25 text-teal-100 hover:text-white'
               }`}
               title={hasUnreadSamity ? `${unreadSamityCount}টি অপঠিত নোটিশ` : 'নোটিশ বোর্ড (সকল পঠিত)'}
             >
-              <Bell className={`w-4 h-4 ${hasUnreadSamity ? 'text-white' : 'text-teal-100'}`} />
+              <Bell className={`w-3.5 h-3.5 ${hasUnreadSamity ? 'text-white' : 'text-teal-100'}`} />
               {hasUnreadSamity && (
-                <span className="absolute -top-1 -right-1 bg-amber-400 text-rose-950 font-black text-[9px] min-w-[18px] h-4 px-1 rounded-full flex items-center justify-center border-2 border-emerald-900 shadow-sm font-mono leading-none">
+                <span className="absolute -top-1 -right-1 bg-amber-400 text-rose-950 font-black text-[8px] min-w-[15px] h-3.5 px-0.5 rounded-full flex items-center justify-center border border-emerald-900 shadow-sm font-mono leading-none">
                   {unreadSamityCount > 9 ? '9+' : unreadSamityCount}
                 </span>
               )}
@@ -2597,15 +3065,15 @@ export default function SamityScreen({
                     setActiveSubView('admin');
                   }
                 }}
-                className={`p-2 rounded-xl flex items-center gap-1 cursor-pointer active:scale-95 transition-all ${
+                className={`p-1.5 rounded-lg flex items-center gap-1 cursor-pointer active:scale-95 transition-all ${
                   activeSubView === 'admin' 
                     ? 'bg-rose-500 text-white font-black' 
                     : 'bg-amber-500 hover:bg-amber-600 text-white font-extrabold shadow-md'
                 }`}
                 title="সমবায় অ্যাডমিন প্যানেল"
               >
-                <ShieldCheck className="w-4 h-4" />
-                <span className="text-[10px] hidden xs:inline">অ্যাডমিন</span>
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span className="text-[9px] hidden xs:inline">অ্যাডমিন</span>
               </button>
             )}
           </div>
@@ -2613,7 +3081,7 @@ export default function SamityScreen({
       </header>
 
       {/* Main Container */}
-      <div className="flex-1 w-full max-w-md mx-auto px-4 py-4 space-y-4 pb-6 overflow-y-auto">
+      <div className="flex-1 w-full max-w-md mx-auto px-2.5 py-2 space-y-2 pb-6 overflow-y-auto">
 
         {/* ================= BOTTOM TAB: SYSTEM NOTICES & ANNOUNCEMENTS ================= */}
         {bottomTab === 'messages' && (
@@ -2863,7 +3331,7 @@ export default function SamityScreen({
                 <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-100 rounded-2xl p-4.5 space-y-2.5">
                   <h4 className="font-extrabold text-[12px] text-teal-800">📈 আমার ঐতিহাসিক রিটার্ন পারফরম্যান্সঃ</h4>
                   <p className="text-[10.5px] text-slate-650 leading-relaxed font-bold">
-                    আপনার মোট সঞ্চয় এবং চলমান ডিপিএস ও লভ্যাংশের বণ্টন হার চমৎকারভাবে ১% সাপ্তাহিক গড়ের উপর সচল রয়েছে। নির্ধারিত সময়ের ১ মাসের মধ্যে ঋণের সব কিস্তি পরিশোধ করলে ক্রেডিট স্কোর স্বয়ংক্রিয় উন্নত হবে।
+                    আপনার মোট সঞ্চয় এবং চলমান ডিপিএস ও লভ্যাংশের বণ্টন হার চমৎকারভাবে 1% সাপ্তাহিক গড়ের উপর সচল রয়েছে। নির্ধারিত সময়ের 1 মাসের মধ্যে ঋণের সব কিস্তি পরিশোধ করলে ক্রেডিট স্কোর স্বয়ংক্রিয় উন্নত হবে।
                   </p>
                 </div>
               </div>
@@ -2886,7 +3354,13 @@ export default function SamityScreen({
             className="space-y-4 text-left"
           >
             <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-4 shadow-sm text-center">
-              <div className="w-16 h-16 rounded-full bg-teal-100 mx-auto border-2 border-teal-600 overflow-hidden shadow-xs flex items-center justify-center text-teal-700 text-lg font-black relative shrink-0">
+              <div className={`w-16 h-16 rounded-full mx-auto overflow-hidden shadow-xs flex items-center justify-center text-lg font-black relative shrink-0 border-2 transition-all ${
+                getMembershipCategory(effectiveUser).key === 'shareholder'
+                  ? 'border-red-500 ring-2 ring-red-600 bg-red-50 text-red-700'
+                  : getMembershipCategory(effectiveUser).key === 'investor'
+                  ? 'border-blue-500 ring-2 ring-blue-600 bg-blue-50 text-blue-700'
+                  : 'border-teal-600 bg-teal-100 text-teal-700'
+              }`}>
                 {user.profilePic ? (
                   user.profilePic.startsWith('http') || user.profilePic.startsWith('data:image/') ? (
                     <img src={user.profilePic} alt="Me" className="w-full h-full object-cover rounded-full" />
@@ -2911,10 +3385,28 @@ export default function SamityScreen({
                 )}
               </div>
 
-              <div className="space-y-1">
-                <h3 className="font-sans font-black text-slate-800 text-base">{user.name || "মোঃ রহিম"}</h3>
+              <div className="space-y-1.5 flex flex-col items-center">
+                {/* [1. পদবী] -> [2. নাম] -> [3. একটিভ] */}
+                <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                  <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border ${
+                    getMembershipCategory(effectiveUser).key === 'shareholder'
+                      ? 'bg-red-600 text-white border-red-400'
+                      : getMembershipCategory(effectiveUser).key === 'investor'
+                      ? 'bg-blue-600 text-white border-blue-400'
+                      : 'bg-slate-700 text-white border-slate-600'
+                  }`}>
+                    {getMembershipCategory(effectiveUser).key === 'shareholder' ? '👑 শেয়ার হোল্ডার' : getMembershipCategory(effectiveUser).key === 'investor' ? '💎 ইনভেস্টার' : '👤 সাধারণ সদস্য'}
+                  </span>
+
+                  <h3 className="font-sans font-black text-slate-800 text-base">{user.name || "মোঃ রহিম"}</h3>
+
+                  <span className="text-[9.5px] bg-emerald-100 text-emerald-800 font-extrabold border border-emerald-300 px-2 py-0.5 rounded-full uppercase flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    একটিভ
+                  </span>
+                </div>
+
                 <p className="text-xs text-slate-400 font-mono font-bold leading-none">সহযোগী আইডিঃ {user.memberId || "BNB00005327"}</p>
-                <span className="inline-block mt-1.5 text-[8.5px] bg-emerald-50 text-emerald-700 font-black border border-emerald-100 px-3 py-0.5 rounded-full uppercase">সমবায় সদস্য সচল</span>
               </div>
 
               <div className="border-t border-slate-100 pt-4 text-left space-y-2.5 text-xs font-sans">
@@ -2982,118 +3474,109 @@ export default function SamityScreen({
           <motion.div 
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            className="space-y-4"
+            className="space-y-2"
           >
-            {/* Ticker / Announcement (ঘোষণা) */}
-            <div className="bg-amber-500/10 border border-amber-300/30 rounded-2.5xl p-2.5 flex items-center gap-2 text-amber-900 shadow-4xs select-none">
-              <div className="text-[10px] font-extrabold bg-amber-500 text-white rounded-lg px-2 py-1 flex items-center gap-1 uppercase tracking-tight shrink-0 font-sans shadow-3xs">
-                <Volume2 className="w-3.5 h-3.5" />
+            {/* Ticker / Announcement (ঘোষণা) - Compact */}
+            <div className="bg-amber-500/10 border border-amber-300/30 rounded-xl py-1 px-2 flex items-center gap-1.5 text-amber-900 shadow-4xs select-none">
+              <div className="text-[9px] font-extrabold bg-amber-500 text-white rounded-md px-1.5 py-0.5 flex items-center gap-1 uppercase tracking-tight shrink-0 font-sans shadow-3xs">
+                <Volume2 className="w-3 h-3" />
                 <span>ঘোষণা</span>
               </div>
-              <div className="flex-grow overflow-hidden relative mr-1.5">
-                <marquee className="text-[12px] font-bold text-slate-800 leading-none py-0.5" behavior="scroll" direction="left" scrollamount="4">
+              <div className="flex-grow overflow-hidden relative mr-1">
+                <marquee className="text-[11px] font-bold text-slate-800 leading-none py-0.5" behavior="scroll" direction="left" scrollamount="4">
                   {appConfig?.samityTicker || "BNB ম্যানেজমেন্ট কোম্পানি ইনভেস্টর সাধারণ ফান্ডে স্বাগতম। আপনি এখান থেকে সঞ্চয় জমা দিতে পারেন, ঋণ আবেদন এবং মুনাফার শেয়ার তুলতে পারেন।"}
                 </marquee>
               </div>
             </div>
 
-
-
-
-            {/* 2. Red/Amber Compact Card: Auto-Savings Switch & Withdrawal Policy (লাল দাগ চিহ্নিত তথ্য ও সুইচের বক্স - আরও সংক্ষিপ্ত) */}
-            <div className="bg-gradient-to-r from-amber-50/90 via-orange-50/60 to-amber-50/90 border border-amber-200/90 rounded-2xl p-2.5 shadow-2xs space-y-1.5 w-full">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <div className="w-6 h-6 rounded-lg bg-amber-500/15 border border-amber-400/30 text-amber-700 flex items-center justify-center shrink-0">
-                    <ShieldCheck className="w-3.5 h-3.5 text-amber-700" />
-                  </div>
-                  <div className="min-w-0 flex items-center gap-1.5">
-                    <span className="text-[11px] font-black text-amber-950">অটো সঞ্চয় ডিপোজিটঃ</span>
-                    <span className={`text-[8.5px] font-black px-1.5 py-0.2 rounded-full border ${
-                      samityAutoSavingsActive
-                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                        : 'bg-rose-100 text-rose-800 border-rose-300'
-                    }`}>
-                      {samityAutoSavingsActive ? 'সচল (ON)' : 'বন্ধ (OFF)'}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Interactive Switch Toggle */}
+            {/* 2. Top 3 Integrated Functional Buttons: [👑 শেয়ার হোল্ডার (100% লাভ)] | [🔄 সঞ্চয় ও এক্সিট সুইচ] | [💎 ইনভেস্টার (50% লাভ)] */}
+            <div className="bg-white border border-amber-200/90 rounded-xl p-1 shadow-2xs w-full text-left">
+              {/* 3-Column Button Selector - Tapping each opens its full interactive modal */}
+              <div className="grid grid-cols-3 gap-1 p-0.5 bg-slate-100/90 rounded-lg border border-slate-200/80">
+                {/* Button 1: 👑 শেয়ার হোল্ডার */}
                 <button
                   type="button"
-                  onClick={handleToggleAutoSavingsSwitch}
-                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none shadow-3xs ${
-                    samityAutoSavingsActive ? 'bg-emerald-600' : 'bg-slate-300'
+                  onClick={() => setActiveTopModal('shareholder')}
+                  className={`py-1 px-1 rounded-lg transition-all flex flex-col items-center justify-center text-center cursor-pointer relative shadow-3xs active:scale-95 min-h-[44px] ${
+                    getMembershipCategory(effectiveUser).key === 'shareholder'
+                      ? 'bg-gradient-to-b from-rose-600 to-red-700 text-white ring-1 ring-rose-400/50 shadow-md scale-[1.01]'
+                      : 'bg-white hover:bg-rose-50/50 text-slate-800 border border-slate-200/70'
                   }`}
                 >
-                  <span
-                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                      samityAutoSavingsActive ? 'translate-x-4' : 'translate-x-0'
-                    }`}
-                  />
+                  <span className="text-xs">👑</span>
+                  <span className="text-[9.5px] sm:text-[10px] font-black leading-tight mt-0.5 block truncate w-full">
+                    শেয়ার হোল্ডার
+                  </span>
+                  <span className={`text-[7.5px] font-extrabold px-1 py-0.2 rounded-full mt-0.5 ${
+                    getMembershipCategory(effectiveUser).key === 'shareholder' ? 'bg-white/20 text-rose-100' : 'bg-rose-100 text-rose-700'
+                  }`}>
+                    100% পূর্ণ লাভ
+                  </span>
                 </button>
-              </div>
 
-              {/* Ultra-compact combined notice box */}
-              <div className="bg-white/90 border border-amber-200/80 rounded-xl p-1.5 text-[9.5px] font-bold space-y-1 text-amber-950 shadow-3xs">
-                <p className="leading-tight text-amber-900">
-                  {samityAutoSavingsActive ? (
-                    <>💡 <strong>সুইচ সচল (ON):</strong> আপনার মাসিক অটো সঞ্চয় চালু রয়েছে। নিয়মিত সমিতি অব্যাহত থাকবে।</>
-                  ) : (
-                    <>⚠️ <strong>সুইচ বন্ধ (OFF):</strong> অটো সঞ্চয় বন্ধ রয়েছে। ২৫-৩০শে ডিসেম্বর জমানো টাকা মেইন ব্যালেন্সে জমা হবে।</>
-                  )}
-                </p>
+                {/* Button 2: 🔄 সঞ্চয় ও সুইচ */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSwitchActionType(samityAutoSavingsActive ? 'turn_off' : 'turn_on');
+                    setActiveTopModal('exit_switch');
+                  }}
+                  className={`py-1 px-1 rounded-lg transition-all flex flex-col items-center justify-center text-center cursor-pointer relative shadow-3xs active:scale-95 min-h-[44px] ${
+                    samityAutoSavingsActive
+                      ? 'bg-white hover:bg-amber-50/50 text-slate-800 border border-amber-300'
+                      : 'bg-gradient-to-b from-amber-600 to-amber-700 text-white ring-1 ring-amber-400/50 shadow-md scale-[1.01]'
+                  }`}
+                >
+                  <span className="text-xs">🔄</span>
+                  <span className="text-[9.5px] sm:text-[10px] font-black leading-tight mt-0.5 block truncate w-full">
+                    সঞ্চয় ও সুইচ
+                  </span>
+                  <span className={`text-[7.5px] font-extrabold px-1 py-0.2 rounded-full mt-0.5 ${
+                    samityAutoSavingsActive ? 'bg-emerald-100 text-emerald-800' : 'bg-white/20 text-amber-100'
+                  }`}>
+                    {samityAutoSavingsActive ? 'সচল (ON)' : 'বন্ধ (OFF)'}
+                  </span>
+                </button>
 
-                {user.samityDeactivateStatus === 'pending' ? (
-                  <div className="pt-1 border-t border-amber-100 flex items-center justify-between gap-1 text-amber-900 font-extrabold text-[9px]">
-                    <span className="flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
-                      ⏳ বন্ধের আবেদন বিবেচনাধীন (Pending)
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setShowHelplineModal(true)}
-                      className="text-[8px] bg-amber-600 hover:bg-amber-700 text-white px-1.5 py-0.5 rounded font-black transition"
-                    >
-                      💬 হেল্পলাইন
-                    </button>
-                  </div>
-                ) : (
-                  <div className="pt-1 border-t border-amber-100 flex items-center justify-between gap-1">
-                    <span className="text-[9px] font-bold text-amber-950 truncate">
-                      {user?.canDisableAutoSavings || user?.allowAutoSavingsToggle || user?.samityDeactivateStatus === 'approved'
-                        ? '🔓 অফের অনুমতিঃ এডমিন অনুমোদিত (সুইচ অফ করতে পারবেন)'
-                        : '🔒 অফের অনুমতিঃ এডমিন অনুমতি সংরক্ষিত'}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setShowHelplineModal(true)}
-                      className="text-[8px] bg-rose-600 hover:bg-rose-700 text-white px-1.5 py-0.5 rounded font-black shadow-2xs shrink-0 transition flex items-center gap-0.5 cursor-pointer"
-                    >
-                      💬 হেল্পলাইন যোগাযোগ
-                    </button>
-                  </div>
-                )}
+                {/* Button 3: 💎 ইনভেস্টার */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTopModal('investor')}
+                  className={`py-1 px-1 rounded-lg transition-all flex flex-col items-center justify-center text-center cursor-pointer relative shadow-3xs active:scale-95 min-h-[44px] ${
+                    getMembershipCategory(effectiveUser).key === 'investor'
+                      ? 'bg-gradient-to-b from-sky-600 to-blue-700 text-white ring-1 ring-sky-400/50 shadow-md scale-[1.01]'
+                      : 'bg-white hover:bg-sky-50/50 text-slate-800 border border-slate-200/70'
+                  }`}
+                >
+                  <span className="text-xs">💎</span>
+                  <span className="text-[9.5px] sm:text-[10px] font-black leading-tight mt-0.5 block truncate w-full">
+                    ইনভেস্টার
+                  </span>
+                  <span className={`text-[7.5px] font-extrabold px-1 py-0.2 rounded-full mt-0.5 ${
+                    getMembershipCategory(effectiveUser).key === 'investor' ? 'bg-white/20 text-sky-100' : 'bg-sky-100 text-sky-700'
+                  }`}>
+                    50% লাভ শেয়ার
+                  </span>
+                </button>
               </div>
             </div>
 
-            {/* 3. Main Combined Box (একত্রিত সবুজ দাগের সম্পূর্ণ সেকশন - ফুল স্ক্রিন ও কম উচ্চতায়) */}
-            <div className="bg-white border border-slate-150 rounded-2xl p-2.5 sm:p-3 shadow-sm text-left relative overflow-hidden space-y-2 w-full">
-              <div className="absolute top-0 right-0 w-28 h-28 bg-emerald-500/5 rounded-full blur-2xl pointer-events-none" />
+            {/* 3. Main Combined Box (একত্রিত সম্পূর্ণ সেকশন - কম উচ্চতায় ও পরিপাটি) */}
+            <div className="bg-white border border-slate-150 rounded-xl p-2 shadow-2xs text-left relative overflow-hidden space-y-1.5 w-full">
+              <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-xl pointer-events-none" />
 
               {/* Virtual Samity Deposit Account Number Banner (Phone + 0) - Ultra Compact 1-Line */}
-              <div className="bg-gradient-to-r from-emerald-50 via-teal-50/70 to-emerald-50 border border-emerald-300/80 rounded-xl p-1.5 px-2.5 flex items-center justify-between shadow-2xs">
+              <div className="bg-gradient-to-r from-emerald-50 via-teal-50/70 to-emerald-50 border border-emerald-300/80 rounded-lg p-1 px-2 flex items-center justify-between shadow-2xs">
                 <div className="flex items-center gap-1.5 min-w-0">
-                  <Smartphone className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                  <Smartphone className="w-3 h-3 text-emerald-700 shrink-0" />
                   <div className="min-w-0 flex items-center gap-1 flex-wrap">
-                    <span className="text-[10px] font-black text-emerald-900 uppercase tracking-tight">
-                      সমিতি একাউন্ট নং (BNB অটো ফান্ডিং):
+                    <span className="text-[9px] font-black text-emerald-900 uppercase tracking-tight">
+                      সমিতি একাউন্ট নং:
                     </span>
-                    <span className="text-xs font-black font-mono text-emerald-950 tracking-wider">
+                    <span className="text-[11px] font-black font-mono text-emerald-950 tracking-wider">
                       {user.phone ? `${user.phone}0` : '017000000000'}
                     </span>
-                    <span className="text-[7.5px] bg-emerald-600 text-white px-1 py-0.1 rounded font-mono font-bold">
+                    <span className="text-[7px] bg-emerald-600 text-white px-1 py-0.2 rounded font-mono font-bold">
                       অটো জমা
                     </span>
                   </div>
@@ -3106,43 +3589,42 @@ export default function SamityScreen({
                     setCopySuccess('কপি হয়েছে!');
                     setTimeout(() => setCopySuccess(''), 2500);
                   }}
-                  className="px-2 py-0.5 bg-emerald-700 hover:bg-emerald-800 active:scale-95 text-white font-extrabold text-[10px] rounded-lg flex items-center gap-1 transition shadow-xs cursor-pointer shrink-0"
+                  className="px-1.5 py-0.5 bg-emerald-700 hover:bg-emerald-800 active:scale-95 text-white font-extrabold text-[9px] rounded flex items-center gap-0.5 transition shadow-xs cursor-pointer shrink-0"
                 >
                   <Copy className="w-2.5 h-2.5" />
                   <span>{copySuccess || 'কপি'}</span>
                 </button>
               </div>
 
-              {/* Multi-Year Samity Payment Tracker Matrix (৫০ সাল পর্যন্ত সঞ্চয় কিস্তি ট্র্যাকার) */}
-              <div className="bg-gradient-to-br from-slate-50 via-emerald-50/20 to-teal-50/30 border border-emerald-200/80 rounded-xl text-left p-2 space-y-2 shadow-xs">
-                {/* Header (Clickable to open 2050 Calendar) - Compact */}
+              {/* Multi-Year Samity Payment Tracker Matrix (50 সাল পর্যন্ত সঞ্চয় কিস্তি ট্র্যাকার) - Ultra Compact */}
+              <div className="bg-gradient-to-br from-slate-50 via-emerald-50/20 to-teal-50/30 border border-emerald-200/80 rounded-lg text-left p-1.5 space-y-1 shadow-2xs">
+                {/* Header (Clickable to open 2050 Calendar) - Ultra Compact */}
                 <div 
                   onClick={() => setShow2050CalendarModal(true)}
-                  className="flex items-center justify-between border-b border-emerald-150/80 pb-1 cursor-pointer group hover:bg-emerald-100/40 p-1 rounded-lg transition"
-                  title="৫০ সাল পর্যন্ত সম্পূর্ণ ক্যালেন্ডার দেখতে টিপ দিন"
+                  className="flex items-center justify-between border-b border-emerald-150/80 pb-0.5 cursor-pointer group hover:bg-emerald-100/40 p-0.5 rounded transition"
+                  title="50 সাল পর্যন্ত সম্পূর্ণ ক্যালেন্ডার দেখতে টিপ দিন"
                 >
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <Calendar className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                  <div className="flex items-center gap-1 min-w-0">
+                    <Calendar className="w-3 h-3 text-emerald-700 shrink-0" />
                     <div className="min-w-0">
                       <div className="flex items-center gap-1 flex-wrap">
-                        <h3 className="text-[10.5px] font-black text-emerald-950 uppercase tracking-tight">
-                          ৫০ সালের সঞ্চয় কিস্তি ট্র্যাকার
+                        <h3 className="text-[9.5px] font-black text-emerald-950 uppercase tracking-tight">
+                          50 সালের সঞ্চয় কিস্তি ট্র্যাকার
                         </h3>
-                        <span className="text-[8px] bg-amber-500 text-slate-950 px-1.5 py-0.2 rounded-full font-bold shadow-3xs group-hover:bg-amber-400 transition">
-                          ৫০ সালের ক্যালেন্ডার ↗
+                        <span className="text-[7.5px] bg-amber-500 text-slate-950 px-1 py-0.2 rounded-full font-bold shadow-3xs group-hover:bg-amber-400 transition">
+                          50 সালের ক্যালেন্ডার ↗
                         </span>
                       </div>
-                      <p className="text-[8px] text-slate-500 font-bold truncate">টিপ দিলে ২০৫০ সাল পর্যন্ত সম্পূর্ণ ক্যালেন্ডার ও লক্ষ্যমাত্রা খুলবে</p>
                     </div>
                   </div>
-                  <span className="text-[9px] font-black bg-emerald-600 text-white px-1.5 py-0.5 rounded-full font-mono shadow-3xs shrink-0">
-                    {SAMITY_MONTHS.filter((m, idx) => checkIsMonthPaid(m.id, trackerSelectedYear, idx)).length} / ১২ মাস ({trackerSelectedYear})
+                  <span className="text-[8.5px] font-black bg-emerald-600 text-white px-1.5 py-0.2 rounded-full font-mono shadow-3xs shrink-0">
+                    {SAMITY_MONTHS.filter((m, idx) => checkIsMonthPaid(m.id, trackerSelectedYear, idx)).length} / 12 মাস ({trackerSelectedYear})
                   </span>
                 </div>
 
-                {/* Year Navigation Bar (২০২৬ - ২০৫০) */}
-                <div className="flex items-center justify-between gap-1.5 bg-emerald-100/40 p-1.5 rounded-xl border border-emerald-200/60">
-                  <div className="flex items-center gap-1 overflow-x-auto py-0.5 scrollbar-none max-w-[calc(100%-85px)]">
+                {/* Year Navigation Bar (2026 - 2050) - Sleek & Compact */}
+                <div className="flex items-center justify-between gap-1 bg-emerald-100/40 p-1 rounded-lg border border-emerald-200/60">
+                  <div className="flex items-center gap-0.5 overflow-x-auto py-0.5 scrollbar-none max-w-[calc(100%-75px)]">
                     {SAMITY_YEARS.map(yr => {
                       const isCurrent = yr === new Date().getFullYear();
                       const isSelected = yr === trackerSelectedYear;
@@ -3153,9 +3635,9 @@ export default function SamityScreen({
                           key={yr}
                           type="button"
                           onClick={() => setTrackerSelectedYear(yr)}
-                          className={`px-2 py-0.5 rounded-lg text-[10px] font-black font-mono transition shrink-0 cursor-pointer ${
+                          className={`px-1.5 py-0.5 rounded text-[9px] font-black font-mono transition shrink-0 cursor-pointer ${
                             isSelected
-                              ? 'bg-emerald-700 text-white ring-2 ring-emerald-500 shadow-3xs'
+                              ? 'bg-emerald-700 text-white ring-1 ring-emerald-500 shadow-3xs'
                               : yrPaid === 12
                               ? 'bg-emerald-200/90 text-emerald-950 border border-emerald-300'
                               : 'bg-white border border-slate-200 text-slate-700 hover:border-emerald-300'
@@ -3171,7 +3653,7 @@ export default function SamityScreen({
                   <select
                     value={trackerSelectedYear}
                     onChange={(e) => setTrackerSelectedYear(Number(e.target.value))}
-                    className="text-[10px] font-black font-mono bg-white border border-emerald-300 text-emerald-950 rounded-lg px-1.5 py-0.5 shrink-0 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                    className="text-[9px] font-black font-mono bg-white border border-emerald-300 text-emerald-950 rounded px-1 py-0.5 shrink-0 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
                   >
                     {SAMITY_YEARS.map(yr => (
                       <option key={yr} value={yr}>বছর: {yr}</option>
@@ -3180,17 +3662,17 @@ export default function SamityScreen({
                 </div>
 
                 {/* Selected Year Title Banner */}
-                <div className="flex items-center justify-between text-[10px] font-bold text-slate-700 px-0.5">
-                  <span>📅 <strong>{trackerSelectedYear} সালের</strong> সঞ্চয় কিস্তি তালিকা ({trackerSelectedYear === new Date().getFullYear() ? 'চলতি বছর' : '২০৫০ লক্ষ্যমাত্রা'})</span>
-                  <span className="text-[9px] text-emerald-800 font-mono font-black bg-emerald-100/80 px-1.5 py-0.2 rounded border border-emerald-200">
-                    মাসিক: ৳{(user.monthlySavingsTarget || 1000).toLocaleString('bn-BD')}
+                <div className="flex items-center justify-between text-[9px] font-bold text-slate-700 px-0.5">
+                  <span>📅 <strong>{trackerSelectedYear} সালের</strong> সঞ্চয় কিস্তি তালিকা ({trackerSelectedYear === new Date().getFullYear() ? 'চলতি বছর' : '2050 লক্ষ্য'})</span>
+                  <span className="text-[8.5px] text-emerald-800 font-mono font-black bg-emerald-100/80 px-1 py-0.2 rounded border border-emerald-200">
+                    মাসিক: ৳{targetMonthlyRate.toLocaleString('bn-BD')}
                   </span>
                 </div>
 
-                {/* 12-Month Payment Matrix Grid */}
-                <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5">
+                {/* 12-Month Payment Matrix Grid - Tight Height & Crisp */}
+                <div className="grid grid-cols-4 sm:grid-cols-6 gap-1">
                   {SAMITY_MONTHS.map((m, idx) => {
-                    const targetMonthly = user.monthlySavingsTarget || 1000;
+                    const targetMonthly = targetMonthlyRate;
                     const isPaid = checkIsMonthPaid(m.id, trackerSelectedYear, idx);
 
                     return (
@@ -3207,67 +3689,177 @@ export default function SamityScreen({
                             });
                           }
                         }}
-                        className={`p-1.5 rounded-xl border text-center transition cursor-pointer flex flex-col items-center justify-between min-h-[52px] ${
+                        className={`p-1 rounded-lg border text-center transition cursor-pointer flex flex-col items-center justify-between min-h-[38px] ${
                           isPaid
                             ? 'bg-emerald-500/10 border-emerald-300 text-emerald-950 font-black shadow-3xs'
                             : 'bg-rose-50/60 border-rose-200 hover:border-rose-400 text-slate-800 font-bold hover:shadow-2xs'
                         }`}
                       >
-                        <span className="text-[10px] font-extrabold truncate">{m.name}</span>
+                        <span className="text-[9px] font-extrabold truncate leading-tight">{m.name}</span>
                         {isPaid ? (
-                          <span className="inline-flex items-center gap-0.5 text-[8.5px] bg-emerald-600 text-white px-1.5 py-0.2 rounded font-mono font-bold mt-1 shadow-3xs">
-                            <CheckCircle2 className="w-2.5 h-2.5" /> পরিশোধিত
+                          <span className="inline-flex items-center gap-0.5 text-[7.5px] bg-emerald-600 text-white px-1 py-0.2 rounded font-mono font-bold mt-0.5 shadow-3xs">
+                            <CheckCircle2 className="w-2 h-2" /> পরিশোধিত
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-0.5 text-[8.5px] bg-rose-600 hover:bg-rose-700 text-white px-1.5 py-0.2 rounded font-mono font-bold mt-1 shadow-3xs">
-                            <PlusCircle className="w-2.5 h-2.5" /> বকেয়া (জমা)
+                          <span className="inline-flex items-center gap-0.5 text-[7.5px] bg-rose-600 hover:bg-rose-700 text-white px-1 py-0.2 rounded font-mono font-bold mt-0.5 shadow-3xs">
+                            <PlusCircle className="w-2 h-2" /> বকেয়া
                           </span>
                         )}
                       </button>
                     );
                   })}
                 </div>
+
+                {/* Balance Installment Capacity & One-Click Settlement Bar */}
+                {(() => {
+                  const memberMainBal = getEffectiveBalance(effectiveUser);
+                  const canAfford = memberMainBal >= targetMonthlyRate;
+                  const now = new Date();
+                  const curMonthIdx = now.getMonth(); // 8 = September
+                  const curDay = now.getDate();
+                  const curMonthObj = SAMITY_MONTHS[curMonthIdx] || SAMITY_MONTHS[0];
+                  const isCurMonthPaid = checkIsMonthPaid(curMonthObj.id, trackerSelectedYear, curMonthIdx);
+                  
+                  // Past overdue months strictly prior to current month
+                  const pastUnpaidCount = SAMITY_MONTHS
+                    .filter((m, idx) => idx < curMonthIdx && !checkIsMonthPaid(m.id, trackerSelectedYear, idx))
+                    .length;
+
+                  const isSavingsSwitchOff = effectiveUser.samityAutoSavingsActive === false || 
+                    effectiveUser.samityDeactivateStatus === 'self_opted_out' || 
+                    samityAutoSavingsActive === false;
+
+                  if (isSavingsSwitchOff) {
+                    return (
+                      <div className="bg-gradient-to-r from-amber-950 via-slate-900 to-rose-950 border border-amber-500/50 rounded-xl p-2.5 sm:p-3 shadow-md space-y-1 text-white">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5 text-[10.5px] font-black text-amber-300">
+                            <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse inline-block" />
+                            <span>⏸️ আপনার সমবায় সঞ্চয় সুইচ বর্তমানে বন্ধ (OFF) রয়েছে</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setActiveTopModal('exit_switch')}
+                            className="px-2.5 py-0.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[9px] font-black rounded-lg transition cursor-pointer"
+                          >
+                            সুইচ পরিবর্তন ⚙️
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-amber-100 font-semibold leading-relaxed">
+                          🛡️ আপনার সঞ্চয় অফ করা আছে। আপনার মেইন ওয়ালেট ব্যালেন্স থেকে আর কোনো টাকা স্বয়ংক্রিয়ভাবে কাটা হবে না। আগামী <strong className="text-amber-300 underline decoration-amber-400 font-black">25শে ডিসেম্বর</strong> আপনার জমাকৃত মোট সঞ্চয় (৳{userSavings.toLocaleString('bn-BD')}) কোনো প্রকার কর্তন ছাড়াই আপনার মেইন একাউন্টে সম্পূর্ণ ফেরত প্রদান করা হবে।
+                        </p>
+                      </div>
+                    );
+                  }
+
+                  const isWithinGracePeriod = curDay <= 9;
+                  const hasOverdue = pastUnpaidCount > 0 || (!isWithinGracePeriod && !isCurMonthPaid);
+
+                  return (
+                    <div className="bg-gradient-to-r from-teal-950 via-emerald-950 to-slate-900 border border-emerald-500/30 rounded-xl p-2.5 shadow-md flex flex-wrap items-center justify-between gap-2 text-white">
+                      <div className="space-y-0.5 max-w-[70%]">
+                        <div className="flex items-center gap-1.5 text-[10px] font-black text-emerald-300">
+                          <Zap className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                          <span>কিস্তির হিসাব ও নিয়মাবলী (মেইন ব্যালেন্স)</span>
+                        </div>
+                        <p className="text-[10px] text-slate-300 font-semibold">
+                          মেইন ব্যালেন্স: <strong className="text-emerald-400 font-mono">৳{memberMainBal.toLocaleString('bn-BD')}</strong> | কিস্তি: <strong className="text-amber-300 font-mono">৳{targetMonthlyRate.toLocaleString('bn-BD')}/মাস</strong>
+                        </p>
+                        {isCurMonthPaid ? (
+                          <p className="text-[9.5px] text-emerald-300 font-bold">
+                            ✅ চলতি ({curMonthObj.name}) মাসের কিস্তি পরিশোধিত। পরবর্তী মাসের (অক্টোবর) টাকা কাটা হবে না।
+                          </p>
+                        ) : isWithinGracePeriod ? (
+                          <p className="text-[9.5px] text-amber-200 font-bold">
+                            ⏳ চলতি ({curMonthObj.name}) মাসের কিস্তির শেষ সময় ৯ই {curMonthObj.name}। ৯ তারিখ পর্যন্ত কোনো অটো-কাটিং নেই।
+                          </p>
+                        ) : (
+                          <p className="text-[9.5px] text-rose-300 font-bold">
+                            ⚠️ চলতি ({curMonthObj.name}) মাসের কিস্তি বকেয়া। ৯ তারিখের পর অটো-কাটিং কার্যকর।
+                          </p>
+                        )}
+                      </div>
+
+                      {canAfford && hasOverdue && (
+                        <button
+                          type="button"
+                          disabled={bulkPayLoading}
+                          onClick={handlePayAllAffordableMonths}
+                          className="px-3 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-[11px] rounded-xl shadow-lg transition cursor-pointer flex items-center gap-1.5 shrink-0 active:scale-95"
+                        >
+                          {bulkPayLoading ? (
+                            <div className="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                          ) : (
+                            <>
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>১টি বকেয়া কিস্তি জমা দিন ⚡</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+
+                      {canAfford && !isCurMonthPaid && isWithinGracePeriod && pastUnpaidCount === 0 && (
+                        <button
+                          type="button"
+                          disabled={bulkPayLoading}
+                          onClick={() => {
+                            setSelectedPayMonth({
+                              id: curMonthObj.id,
+                              name: curMonthObj.name,
+                              monthNum: curMonthObj.monthNum,
+                              year: trackerSelectedYear
+                            });
+                          }}
+                          className="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-emerald-400 hover:from-amber-400 hover:to-emerald-300 text-slate-950 font-black text-[11px] rounded-xl shadow-lg transition cursor-pointer flex items-center gap-1.5 shrink-0 active:scale-95"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>{curMonthObj.name} মাসের কিস্তি দিন</span>
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Side-by-side Row: Left = Samity Balance ("আমার মোট টাকা"), Right = Deposit Progress ("জমার অগ্রগতি") */}
-              <div className="grid grid-cols-2 gap-2 sm:gap-3">
+              <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
                 {/* Left Box: আমার মোট টাকা */}
-                <div className="bg-gradient-to-br from-emerald-50/70 to-teal-50/40 border border-emerald-150 rounded-2xl p-2.5 flex flex-col justify-between">
+                <div className="bg-gradient-to-br from-emerald-50/70 to-teal-50/40 border border-emerald-150 rounded-xl p-2 flex flex-col justify-between">
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-black text-emerald-900 font-sans tracking-tight truncate">আমার মোট টাকা</span>
+                    <span className="text-[9.5px] font-black text-emerald-900 font-sans tracking-tight truncate">আমার মোট টাকা</span>
                     <button 
                       type="button"
                       onClick={() => setShowBalance(!showBalance)}
-                      className="p-1 bg-white/80 hover:bg-white border border-emerald-200/60 rounded-lg transition text-emerald-700 cursor-pointer"
+                      className="p-0.5 bg-white/80 hover:bg-white border border-emerald-200/60 rounded transition text-emerald-700 cursor-pointer"
                     >
-                      {showBalance ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                      {showBalance ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
                     </button>
                   </div>
 
-                  <div className="mt-1">
-                    <h2 className="text-lg sm:text-xl font-black font-sans text-teal-900 tracking-tight flex items-baseline">
+                  <div className="mt-0.5">
+                    <h2 className="text-base sm:text-lg font-black font-sans text-teal-900 tracking-tight flex items-baseline leading-tight">
                       {renderBalanceValue(totalCoopBalance)}
                     </h2>
-                    <span className="text-[8px] font-extrabold text-emerald-700 block mt-0.5">সমিতি ব্যালেন্স</span>
+                    <span className="text-[7.5px] font-extrabold text-emerald-700 block mt-0.5">সমিতি ব্যালেন্স</span>
                   </div>
                 </div>
 
                 {/* Right Box: জমার অগ্রগতি */}
-                <div className="bg-gradient-to-br from-slate-50 to-teal-50/30 border border-slate-200/80 rounded-2xl p-2.5 flex flex-col justify-between">
+                <div className="bg-gradient-to-br from-slate-50 to-teal-50/30 border border-slate-200/80 rounded-xl p-2 flex flex-col justify-between">
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-black text-slate-800 font-sans truncate">জমার অগ্রগতি</span>
-                    <span className="text-[9px] font-black font-sans text-teal-800 bg-teal-100/80 border border-teal-200/80 px-1.5 py-0.2 rounded-md shrink-0">
+                    <span className="text-[9.5px] font-black text-slate-800 font-sans truncate">জমার অগ্রগতি</span>
+                    <span className="text-[8.5px] font-black font-sans text-teal-800 bg-teal-100/80 border border-teal-200/80 px-1 py-0.2 rounded shrink-0">
                       {progressPercent.toLocaleString('bn-BD')}%
                     </span>
                   </div>
 
-                  <div className="my-1">
-                    <div className="w-full h-2 bg-slate-200/90 rounded-full overflow-hidden border border-slate-200/60">
+                  <div className="my-0.5">
+                    <div className="w-full h-1.5 bg-slate-200/90 rounded-full overflow-hidden border border-slate-200/60">
                       <div className="h-full bg-gradient-to-r from-teal-500 to-emerald-600 rounded-full" style={{ width: `${progressPercent}%` }} />
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between text-[8px] text-slate-500 font-extrabold font-mono leading-none">
+                  <div className="flex items-center justify-between text-[7.5px] text-slate-500 font-extrabold font-mono leading-none">
                     <span className="truncate">লক্ষ্য: ৳{targetGoal.toLocaleString('bn-BD')}</span>
                     <span className="text-emerald-700 shrink-0">{remainingTarget > 0 ? `৳${remainingTarget.toLocaleString('bn-BD')} বাকি` : "অর্জিত!"}</span>
                   </div>
@@ -3275,233 +3867,204 @@ export default function SamityScreen({
               </div>
 
               {/* Bottom 4 Stat Cards: জমা, লাভ, সঞ্চয়, এই মাসের জমা */}
-              <div className="grid grid-cols-4 gap-1 sm:gap-2 pt-2.5 border-t border-slate-100 text-xs">
+              <div className="grid grid-cols-4 gap-1 pt-1.5 border-t border-slate-100 text-xs">
                 {/* 1. জমা */}
                 <div 
                   onClick={() => setActiveSubView('savings_dps')}
-                  className="space-y-1 cursor-pointer hover:bg-slate-50/80 rounded-xl p-1 transition flex flex-col items-center text-center min-w-0"
+                  className="space-y-0.5 cursor-pointer hover:bg-slate-50/80 rounded-lg p-0.5 transition flex flex-col items-center text-center min-w-0"
                 >
                   <div className="flex flex-col items-center gap-0.5">
-                    <span className="w-6 h-6 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0 border border-emerald-100">
-                      <PiggyBank className="w-3.5 h-3.5 text-emerald-600" />
+                    <span className="w-5 h-5 rounded-md bg-emerald-50 flex items-center justify-center shrink-0 border border-emerald-100">
+                      <PiggyBank className="w-3 h-3 text-emerald-600" />
                     </span>
-                    <span className="text-[9.5px] text-slate-500 font-extrabold leading-none truncate">জমা</span>
+                    <span className="text-[8.5px] text-slate-500 font-extrabold leading-none truncate">জমা</span>
                   </div>
-                  <p className="font-sans font-black text-slate-800 text-[10px] sm:text-xs leading-none truncate mt-0.5">{renderBalanceValue(lastDepositAmount)}</p>
-                  <span className="text-[7.5px] text-emerald-600 font-bold block leading-none truncate">সর্বশেষ জমা</span>
+                  <p className="font-sans font-black text-slate-800 text-[9.5px] leading-none truncate mt-0.5">{renderBalanceValue(userSavings)}</p>
+                  <span className="text-[7px] text-emerald-600 font-bold block leading-none truncate">মোট সঞ্চয়</span>
                 </div>
 
                 {/* 2. লাভ */}
                 <div 
                   onClick={() => setActiveSubView('profits')}
-                  className="space-y-1 cursor-pointer hover:bg-slate-50/80 rounded-xl p-1 transition flex flex-col items-center text-center min-w-0 border-l border-slate-150/70"
+                  className="space-y-0.5 cursor-pointer hover:bg-slate-50/80 rounded-lg p-0.5 transition flex flex-col items-center text-center min-w-0 border-l border-slate-150/70"
                 >
                   <div className="flex flex-col items-center gap-0.5">
-                    <span className="w-6 h-6 rounded-lg bg-indigo-50 flex items-center justify-center shrink-0 border border-indigo-100">
-                      <LineChart className="w-3.5 h-3.5 text-indigo-600" />
+                    <span className="w-5 h-5 rounded-md bg-indigo-50 flex items-center justify-center shrink-0 border border-indigo-100">
+                      <LineChart className="w-3 h-3 text-indigo-600" />
                     </span>
-                    <span className="text-[9.5px] text-slate-500 font-extrabold leading-none truncate">লাভ</span>
+                    <span className="text-[8.5px] text-slate-500 font-extrabold leading-none truncate">লাভ</span>
                   </div>
-                  <p className="font-sans font-black text-slate-800 text-[10px] sm:text-xs leading-none truncate mt-0.5">{renderBalanceValue(userProfits)}</p>
-                  <span className="text-[7.5px] text-indigo-600 font-bold block leading-none truncate">লভ্যাংশ</span>
+                  <p className="font-sans font-black text-slate-800 text-[9.5px] leading-none truncate mt-0.5">{renderBalanceValue(userProfits)}</p>
+                  <span className="text-[7px] text-indigo-600 font-bold block leading-none truncate">লভ্যাংশ</span>
                 </div>
 
                 {/* 3. সঞ্চয় */}
                 <div 
                   onClick={() => setActiveSubView('custom_savings')}
-                  className="space-y-1 cursor-pointer hover:bg-slate-50/80 rounded-xl p-1 transition flex flex-col items-center text-center min-w-0 border-l border-slate-150/70"
+                  className="space-y-0.5 cursor-pointer hover:bg-slate-50/80 rounded-lg p-0.5 transition flex flex-col items-center text-center min-w-0 border-l border-slate-150/70"
                 >
                   <div className="flex flex-col items-center gap-0.5">
-                    <span className="w-6 h-6 rounded-lg bg-amber-50 flex items-center justify-center shrink-0 border border-amber-100">
-                      <Award className="w-3.5 h-3.5 text-amber-600" />
+                    <span className="w-5 h-5 rounded-md bg-amber-50 flex items-center justify-center shrink-0 border border-amber-100">
+                      <Award className="w-3 h-3 text-amber-600" />
                     </span>
-                    <span className="text-[9.5px] text-slate-500 font-extrabold leading-none truncate">সঞ্চয়</span>
+                    <span className="text-[8.5px] text-slate-500 font-extrabold leading-none truncate">সঞ্চয়</span>
                   </div>
-                  <p className="font-sans font-black text-slate-800 text-[10px] sm:text-xs leading-none truncate mt-0.5">{renderBalanceValue(userDps)}</p>
-                  <span className="text-[7.5px] text-amber-600 font-bold block leading-none truncate">ইচ্ছেমত</span>
+                  <p className="font-sans font-black text-slate-800 text-[9.5px] leading-none truncate mt-0.5">{renderBalanceValue(userDps)}</p>
+                  <span className="text-[7px] text-amber-600 font-bold block leading-none truncate">ইচ্ছেমত</span>
                 </div>
 
                 {/* 4. এই মাসের জমা */}
                 <div 
                   onClick={() => setActiveSubView('new_deposit')}
-                  className="space-y-1 cursor-pointer hover:bg-slate-50/80 rounded-xl p-1 transition flex flex-col items-center text-center min-w-0 border-l border-slate-150/70"
+                  className="space-y-0.5 cursor-pointer hover:bg-slate-50/80 rounded-lg p-0.5 transition flex flex-col items-center text-center min-w-0 border-l border-slate-150/70"
                 >
                   <div className="flex flex-col items-center gap-0.5">
-                    <span className="w-6 h-6 rounded-lg bg-red-50 flex items-center justify-center shrink-0 border border-red-100">
-                      <Calendar className="w-3.5 h-3.5 text-red-600" />
+                    <span className={`w-5 h-5 rounded-md flex items-center justify-center shrink-0 border ${
+                      (effectiveUser.samityAutoSavingsActive === false || effectiveUser.samityDeactivateStatus === 'self_opted_out' || !samityAutoSavingsActive)
+                        ? 'bg-amber-50 border-amber-200 text-amber-600'
+                        : 'bg-red-50 border-red-100 text-red-600'
+                    }`}>
+                      <Calendar className="w-3 h-3" />
                     </span>
-                    <span className="text-[9.5px] text-slate-500 font-extrabold leading-none truncate">এই মাসের জমা</span>
+                    <span className="text-[8.5px] text-slate-500 font-extrabold leading-none truncate">
+                      {(effectiveUser.samityAutoSavingsActive === false || effectiveUser.samityDeactivateStatus === 'self_opted_out' || !samityAutoSavingsActive) ? 'সঞ্চয় স্ট্যাটাস' : 'এই মাসের জমা'}
+                    </span>
                   </div>
-                  <p className="font-sans font-black text-slate-800 text-[10px] sm:text-xs leading-none truncate mt-0.5">{renderBalanceValue(user.monthlySavingsTarget || 500)}</p>
-                  <span className="text-[7.5px] text-rose-600 font-bold block leading-none truncate">৯ তারিখের মধ্যে</span>
+                  <p className="font-sans font-black text-slate-800 text-[9.5px] leading-none truncate mt-0.5">
+                    {(effectiveUser.samityAutoSavingsActive === false || effectiveUser.samityDeactivateStatus === 'self_opted_out' || !samityAutoSavingsActive) ? '⏸️ অফ আছে' : renderBalanceValue(user.monthlySavingsTarget || 500)}
+                  </p>
+                  <span className={`text-[7px] font-bold block leading-none truncate ${
+                    (effectiveUser.samityAutoSavingsActive === false || effectiveUser.samityDeactivateStatus === 'self_opted_out' || !samityAutoSavingsActive) ? 'text-amber-700 font-black' : 'text-rose-600'
+                  }`}>
+                    {(effectiveUser.samityAutoSavingsActive === false || effectiveUser.samityDeactivateStatus === 'self_opted_out' || !samityAutoSavingsActive) ? 'টাকা কাটা হবে না' : '9 তারিখের মধ্যে'}
+                  </span>
                 </div>
               </div>
             </div>
 
-            {/* 6. Fast Actions (৬. ক্ষুদ্র অ্যাকশন) - Square clickable icons for quick views */}
-            <div className="bg-white border border-slate-150 p-4 rounded-3xl text-left shadow-2xs space-y-3">
-              <h4 className="text-[10px] font-black text-slate-400 tracking-wider uppercase">ক্ষুদ্র অ্যাকশন</h4>
+            {/* 6. Fast Actions (6. ক্ষুদ্র অ্যাকশন) - Sleek & Compact Icons */}
+            <div className="bg-white border border-slate-150 p-2.5 rounded-2xl text-left shadow-2xs space-y-1.5">
+              <h4 className="text-[9px] font-black text-slate-400 tracking-wider uppercase">ক্ষুদ্র অ্যাকশন</h4>
               
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-4 gap-1.5">
                 
                 {/* টাকা জমা */}
                 <button
                   onClick={() => setActiveSubView('new_deposit')}
-                  className="flex flex-col items-center gap-1.5 transition active:scale-90 group cursor-pointer"
+                  className="flex flex-col items-center gap-1 transition active:scale-90 group cursor-pointer"
                 >
-                  <div className="w-11 h-11 rounded-full bg-emerald-500 text-white flex items-center justify-center font-black text-md hover:opacity-95 shadow-sm">
-                    <Plus className="w-5 h-5 stroke-[3]" />
+                  <div className="w-9 h-9 rounded-full bg-emerald-500 text-white flex items-center justify-center font-black text-md hover:opacity-95 shadow-2xs">
+                    <Plus className="w-4 h-4 stroke-[3]" />
                   </div>
-                  <span className="text-[10.5px] font-black text-slate-700 font-sans">টাকা জমা</span>
+                  <span className="text-[9.5px] font-black text-slate-700 font-sans">টাকা জমা</span>
                 </button>
 
                 {/* টাকা উত্তোলন */}
                 <button
                   onClick={() => setActiveSubView('withdraw_savings')}
-                  className="flex flex-col items-center gap-1.5 transition active:scale-90 group cursor-pointer"
+                  className="flex flex-col items-center gap-1 transition active:scale-90 group cursor-pointer"
                 >
-                  <div className="w-11 h-11 rounded-full bg-blue-500 text-white flex items-center justify-center font-black text-md hover:opacity-95 shadow-sm">
-                    <ArrowDown className="w-5 h-5 stroke-[2.5]" />
+                  <div className="w-9 h-9 rounded-full bg-blue-500 text-white flex items-center justify-center font-black text-md hover:opacity-95 shadow-2xs">
+                    <ArrowDown className="w-4 h-4 stroke-[2.5]" />
                   </div>
-                  <span className="text-[10.5px] font-black text-slate-700 font-sans">টাকা উত্তোলন</span>
+                  <span className="text-[9.5px] font-black text-slate-700 font-sans">টাকা উত্তোলন</span>
                 </button>
 
-                {/* লেনদেন */}
+                {/* আমাদের ইনভেস্ট */}
                 <button
-                  onClick={() => {
-                    fetchUserTransactions();
-                    setCustomAlert({
-                      message: "সমিতির সব লেনদেন দেখতে নিচে 'সাম্প্রতিক কার্যক্রম' স্ক্রোল করুন অথবা 'রিপোর্ট' বাটন ট্যাপ করুন।",
-                      title: "লেনদেন দেখার নির্দেশিকা"
-                    });
-                  }}
-                  className="flex flex-col items-center gap-1.5 transition active:scale-90 group cursor-pointer"
+                  onClick={() => setActiveSubView('our_investments')}
+                  className="flex flex-col items-center gap-1 transition active:scale-90 group cursor-pointer"
                 >
-                  <div className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center font-black text-md hover:opacity-95 shadow-sm">
-                    <FileText className="w-[18px] h-[18px]" />
+                  <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-amber-500 via-orange-500 to-amber-400 text-white flex items-center justify-center font-black text-md hover:opacity-95 shadow-2xs relative">
+                    <TrendingUp className="w-4 h-4 stroke-[2.5]" />
+                    <span className="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500 border border-white"></span>
+                    </span>
                   </div>
-                  <span className="text-[10.5px] font-black text-slate-700 font-sans">লেনদেন</span>
+                  <span className="text-[9px] font-black text-amber-950 font-sans leading-tight">আমাদের ইনভেস্ট</span>
                 </button>
 
-                {/* সদস্য তালিকা */}
-                <button
-                  onClick={() => setActiveSubView('member_registry')}
-                  className="flex flex-col items-center gap-1.5 transition active:scale-90 group cursor-pointer"
-                >
-                  <div className="w-11 h-11 rounded-full bg-indigo-600 text-white flex items-center justify-center font-black text-md hover:opacity-95 shadow-sm">
-                    <Users className="w-[18px] h-[18px]" />
-                  </div>
-                  <span className="text-[10.5px] font-black text-slate-700 font-sans">সদস্য তালিকা</span>
-                </button>
-
-              </div>
-            </div>
-
-            {/* Special Investor Services Section */}
-            <div className="bg-white border border-slate-150 p-4 rounded-3xl text-left shadow-2xs space-y-3" id="special-investor-services">
-              <h4 className="text-[10px] font-black text-slate-400 tracking-wider uppercase">ইনভেস্টর সেবা ও নীতিমালা</h4>
-              
-              <div className="grid grid-cols-4 gap-1 sm:gap-2">
                 {/* মাসিক বিনিয়োগ ও পলিসি */}
                 <button
                   onClick={() => setActiveSubView('monthly_investment_policy')}
-                  className="flex flex-col items-center text-center p-1.5 sm:p-2 rounded-2xl bg-teal-50/50 hover:bg-teal-50 border border-teal-100/45 transition active:scale-95 cursor-pointer"
+                  className="flex flex-col items-center gap-1 transition active:scale-90 group cursor-pointer"
                   id="btn-monthly-policy"
                 >
-                  <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-teal-600 text-white flex items-center justify-center shadow-xs mb-1">
-                    <PiggyBank className="w-4 h-4 sm:w-5 sm:h-5" />
+                  <div className="w-9 h-9 rounded-full bg-teal-600 text-white flex items-center justify-center font-black text-md hover:opacity-95 shadow-2xs">
+                    <PiggyBank className="w-4 h-4" />
                   </div>
-                  <span className="text-[9px] sm:text-[10px] font-black text-teal-900 font-sans leading-tight">মাসিক বিনিয়োগ<br/>& পলিসি</span>
+                  <span className="text-[9px] font-black text-slate-700 font-sans text-center leading-tight">বিনিয়োগ ও পলিসি</span>
                 </button>
 
-                {/* রেফারেল নেটওয়ার্ক */}
-                <button
-                  onClick={() => setActiveSubView('referral_network')}
-                  className="flex flex-col items-center text-center p-1.5 sm:p-2 rounded-2xl bg-indigo-50/50 hover:bg-indigo-50 border border-indigo-100/45 transition active:scale-95 cursor-pointer"
-                  id="btn-referral-network"
-                >
-                  <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-xs mb-1">
-                    <Users className="w-4 h-4 sm:w-5 sm:h-5" />
-                  </div>
-                  <span className="text-[9px] sm:text-[10px] font-black text-indigo-900 font-sans leading-tight">রেফারেল<br/>নেটওয়ার্ক</span>
-                </button>
-
-                {/* শেয়ার বিক্রয় ও হস্তান্তর */}
-                <button
-                  onClick={() => setActiveSubView('share_transfer')}
-                  className="flex flex-col items-center text-center p-1.5 sm:p-2 rounded-2xl bg-rose-50/50 hover:bg-rose-50 border border-rose-100/45 transition active:scale-95 cursor-pointer"
-                  id="btn-share-transfer"
-                >
-                  <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-rose-600 text-white flex items-center justify-center shadow-xs mb-1">
-                    <Award className="w-4 h-4 sm:w-5 sm:h-5" />
-                  </div>
-                  <span className="text-[9px] sm:text-[10px] font-black text-rose-900 font-sans leading-tight">শেয়ার বিক্রয়<br/>ও হস্তান্তর</span>
-                </button>
-
-                {/* অন্য সদস্যের একাউন্ট */}
-                <button
-                  onClick={() => setActiveSubView('register_other_member')}
-                  className="flex flex-col items-center text-center p-1.5 sm:p-2 rounded-2xl bg-emerald-50/50 hover:bg-emerald-50 border border-emerald-100/45 transition active:scale-95 cursor-pointer"
-                  id="btn-register-other-member"
-                >
-                  <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-xs mb-1">
-                    <UserPlus className="w-4 h-4 sm:w-5 sm:h-5" />
-                  </div>
-                  <span className="text-[9px] sm:text-[10px] font-black text-emerald-900 font-sans leading-tight">অন্য সদস্যের<br/>একাউন্ট করুন</span>
-                </button>
               </div>
             </div>
 
-            {/* 8. Samity Summary (৮. সমিতি সারাংশ) - Horizontal 3-column Samity replica cards */}
-            <div className="bg-white border border-slate-150 rounded-2xl p-3 text-left shadow-2xs space-y-2.5 w-full">
-              <h4 className="text-[10px] font-black text-emerald-800 tracking-wider uppercase leading-none flex items-center gap-1">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+            {/* 8. Samity Summary (8. সমিতি সারাংশ) - Horizontal 3-column Samity replica cards */}
+            <div className="bg-white border border-slate-150 rounded-xl p-2 text-left shadow-2xs space-y-1.5 w-full">
+              <h4 className="text-[9px] font-black text-emerald-800 tracking-wider uppercase leading-none flex items-center gap-1">
+                <ShieldCheck className="w-3 h-3 text-emerald-600" />
                 সমবায় সমিতি সারাংশ
               </h4>
               
-              <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="grid grid-cols-3 gap-1.5 text-center">
                 
-                {/* ১. সমিতি সদস্য (ইনভেস্টার) */}
-                <div className="bg-emerald-50/60 p-2 rounded-xl border border-emerald-100 flex flex-col items-center justify-center">
-                  <span className="block text-[8px] text-emerald-800 font-extrabold mb-0.5 uppercase truncate w-full">সমিতি সদস্য</span>
-                  <div className="flex items-center justify-center gap-1">
-                    <Users className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                    <strong className="text-[11px] font-black text-slate-900 truncate">{Math.round(activeMembersNum).toLocaleString('bn-BD')} জন</strong>
+                {/* 1. সমিতি সদস্য (ইনভেস্টার) */}
+                <div className="bg-emerald-50/60 p-1.5 rounded-lg border border-emerald-100 flex flex-col items-center justify-center">
+                  <span className="block text-[7.5px] text-emerald-800 font-extrabold mb-0.5 uppercase truncate w-full">সমিতি সদস্য</span>
+                  <div className="flex items-center justify-center gap-0.5">
+                    <Users className="w-3 h-3 text-emerald-600 shrink-0" />
+                    <strong className="text-[10px] font-black text-slate-900 truncate">{Math.round(activeMembersNum).toLocaleString('bn-BD')} জন</strong>
                   </div>
-                  <span className="text-[7.5px] text-emerald-700 font-bold block mt-0.5 truncate">মাসিক ইনভেস্টার</span>
+                  <span className="text-[7px] text-emerald-700 font-bold block mt-0.5 truncate">মাসিক ইনভেস্টার</span>
                 </div>
 
-                {/* ২. সমিতি মোট জমা */}
-                <div className="bg-teal-50/60 p-2 rounded-xl border border-teal-100 flex flex-col items-center justify-center">
-                  <span className="block text-[8px] text-teal-800 font-extrabold mb-0.5 uppercase truncate w-full">সমিতি মোট জমা</span>
-                  <div className="flex items-center justify-center gap-1">
-                    <PiggyBank className="w-3.5 h-3.5 text-teal-600 shrink-0" />
-                    <strong className="text-[10.5px] font-black text-slate-900 truncate">৳ {totalCompanyDeposits.toLocaleString('bn-BD')}</strong>
+                {/* 2. সমিতি মোট জমা */}
+                <div className="bg-teal-50/60 p-1.5 rounded-lg border border-teal-100 flex flex-col items-center justify-center">
+                  <span className="block text-[7.5px] text-teal-800 font-extrabold mb-0.5 uppercase truncate w-full">সমিতি মোট জমা</span>
+                  <div className="flex items-center justify-center gap-0.5">
+                    <PiggyBank className="w-3 h-3 text-teal-600 shrink-0" />
+                    <strong className="text-[9.5px] font-black text-slate-900 truncate">৳ {totalCompanyDeposits.toLocaleString('bn-BD')}</strong>
                   </div>
-                  <span className="text-[7.5px] text-teal-700 font-bold block mt-0.5 truncate">সমবায় আমানত</span>
+                  <span className="text-[7px] text-teal-700 font-bold block mt-0.5 truncate">সমবায় আমানত</span>
                 </div>
 
-                {/* ৩. সমিতি মোট লাভ */}
-                <div className="bg-indigo-50/60 p-2 rounded-xl border border-indigo-100 flex flex-col items-center justify-center">
-                  <span className="block text-[8px] text-indigo-800 font-extrabold mb-0.5 uppercase truncate w-full">সমিতি মোট লাভ</span>
-                  <div className="flex items-center justify-center gap-1">
-                    <LineChart className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                    <strong className="text-[10.5px] font-black text-slate-900 truncate">৳ {totalCompanyProfits.toLocaleString('bn-BD')}</strong>
+                {/* 3. সমিতি মোট লাভ */}
+                <div className="bg-indigo-50/60 p-1.5 rounded-lg border border-indigo-100 flex flex-col items-center justify-center">
+                  <span className="block text-[7.5px] text-indigo-800 font-extrabold mb-0.5 uppercase truncate w-full">সমিতি মোট লাভ</span>
+                  <div className="flex items-center justify-center gap-0.5">
+                    <LineChart className="w-3 h-3 text-indigo-600 shrink-0" />
+                    <strong className="text-[9.5px] font-black text-slate-900 truncate">৳ {totalCompanyProfits.toLocaleString('bn-BD')}</strong>
                   </div>
-                  <span className="text-[7.5px] text-indigo-700 font-bold block mt-0.5 truncate">সদস্যদের লভ্যাংশ</span>
+                  <span className="text-[7px] text-indigo-700 font-bold block mt-0.5 truncate">সদস্যদের লভ্যাংশ</span>
                 </div>
 
               </div>
             </div>
 
             {/* Standard Warning Notice for trust assets */}
-            <div className="bg-rose-50 border border-rose-100 p-3 rounded-2xl text-[10.5px] text-rose-800 font-sans leading-relaxed flex items-start gap-2 text-left">
-              <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+            <div className="bg-rose-50 border border-rose-100 p-2 rounded-xl text-[9.5px] text-rose-800 font-sans leading-relaxed flex items-start gap-1.5 text-left">
+              <AlertTriangle className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
               <p className="font-bold">
                 ⚠️ অ্যাডমিন প্যানেলের অনুমতি ব্যতীত সমিতির টাকা ও ব্যাংক অ্যাকাউন্ট হতে টাকা সরাসরি স্থানান্তর করা সম্ভব নয়। সকল উত্তোলন পেন্ডিং থাকবে।
               </p>
             </div>
 
+          </motion.div>
+        )}
+
+        {/* ================= SUB VIEW: BNB OUR INVESTMENTS (আমাদের ইনভেস্ট) ================= */}
+        {bottomTab === 'home' && activeSubView === 'our_investments' && (
+          <motion.div 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="space-y-3 font-sans"
+          >
+            <SamityInvestmentsView
+              user={effectiveUser}
+              onBack={() => setActiveSubView('main')}
+              isAdmin={user.role === 'admin' || user.role === 'sub_admin'}
+            />
           </motion.div>
         )}
 
@@ -3530,7 +4093,7 @@ export default function SamityScreen({
                     {appConfig?.samityPolicyConfig?.policyTitle || 'মাসিক বিনিয়োগ ও নীতিমালা'}
                   </h3>
                   <p className="text-[9.5px] text-slate-400 mt-0.5">
-                    {appConfig?.samityPolicyConfig?.policySubTitle || '১ম থেকে ২৫শে অক্টোবর পেমেন্ট সিস্টেম ও বিলম্ব চার্জসমূহ'}
+                    {appConfig?.samityPolicyConfig?.policySubTitle || '1ম থেকে 25শে অক্টোবর পেমেন্ট সিস্টেম ও বিলম্ব চার্জসমূহ'}
                   </p>
                 </div>
               </div>
@@ -3593,13 +4156,13 @@ export default function SamityScreen({
               </div>
               <p className="text-[10px] text-slate-500 font-bold mt-1.5 leading-normal">
                 {user.samitySchemeActive !== false 
-                  ? (appConfig?.samityPolicyConfig?.schemeStatusNote || 'আপনার একাউন্ট থেকে প্রতি মাসের ১ থেকে ৯ তারিখের মধ্যে স্বয়ংক্রিয়ভাবে মেইন ব্যালেন্স থেকে কিস্তি অটো-ডেবিট করা হবে।')
+                  ? (appConfig?.samityPolicyConfig?.schemeStatusNote || 'আপনার একাউন্ট থেকে প্রতি মাসের 1 থেকে 9 তারিখের মধ্যে স্বয়ংক্রিয়ভাবে মেইন ব্যালেন্স থেকে কিস্তি অটো-ডেবিট করা হবে।')
                   : 'আপনার স্কিমটি বর্তমানে বন্ধ রয়েছে। বকেয়া কিস্তিসমূহ পরিশোধপূর্বক সিকিউরিটি পিন দিয়ে পুনরায় চালু করতে পারবেন।'}
               </p>
               {user.samitySchemeActive === false && (
                 <div className="mt-2.5 p-3 bg-amber-50 border border-amber-200 rounded-2xl text-amber-900 text-[10.5px] font-bold leading-relaxed">
                   <p className="text-slate-700">
-                    ২৫শে ডিসেম্বরের পূর্বে আপনার সঞ্চিত টাকা উত্তোলন করতে পারবেন না। আপনার জমাকৃত <strong className="text-rose-600 font-black">৳ {userSavings.toLocaleString('bn-BD')}</strong> টাকা ডিসেম্বরের ২৫ তারিখে আপনার মেইন ব্যালেন্সে স্বয়ংক্রিয়ভাবে যোগ হয়ে যাবে।
+                    25শে ডিসেম্বরের পূর্বে আপনার সঞ্চিত টাকা উত্তোলন করতে পারবেন না। আপনার জমাকৃত <strong className="text-rose-600 font-black">৳ {userSavings.toLocaleString('bn-BD')}</strong> টাকা ডিসেম্বরের 25 তারিখে আপনার মেইন ব্যালেন্সে স্বয়ংক্রিয়ভাবে যোগ হয়ে যাবে।
                   </p>
                 </div>
               )}
@@ -3609,7 +4172,7 @@ export default function SamityScreen({
             <div className="bg-white border border-slate-150 p-4.5 rounded-3xl space-y-3.5 shadow-3xs text-left">
               <div className="flex justify-between items-center">
                 <span className="text-[10px] font-extrabold text-teal-600 uppercase tracking-widest block">
-                  {appConfig?.samityPolicyConfig?.fixedAmountTitle || '১. নির্ধারিত মাসিক বিনিয়োগের পরিমাণ'}
+                  {appConfig?.samityPolicyConfig?.fixedAmountTitle || '1. নির্ধারিত মাসিক বিনিয়োগের পরিমাণ'}
                 </span>
                 <span className="text-[9.5px] bg-slate-100 border border-slate-200 text-slate-500 font-bold px-2 py-0.5 rounded-md flex items-center gap-1 uppercase">
                   🔒 Locked
@@ -3618,7 +4181,7 @@ export default function SamityScreen({
               <div className="p-3 bg-slate-50 border border-slate-100 rounded-2xl flex items-center justify-between">
                 <div>
                   <span className="text-[10px] text-slate-400 block font-bold uppercase">নির্ধারিত মাসিক কিস্তি</span>
-                  <span className="font-sans text-lg font-black text-slate-800">৳ {(user.monthlySavingsTarget || 1000).toLocaleString('bn-BD')} <span className="text-xs text-slate-500 font-normal">BDT</span></span>
+                  <span className="font-sans text-lg font-black text-slate-800">৳ {targetMonthlyRate.toLocaleString('bn-BD')} <span className="text-xs text-slate-500 font-normal">BDT</span></span>
                 </div>
                 <div className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center">
                   <CheckCircle className="w-5 h-5 text-teal-600" />
@@ -3632,33 +4195,51 @@ export default function SamityScreen({
             {/* 2. Penalty Schedule */}
             <div className="bg-white border border-slate-150 p-4.5 rounded-3xl space-y-3.5 shadow-3xs">
               <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block">
-                {appConfig?.samityPolicyConfig?.penaltyTitle || '২. বিলম্ব পেমেন্ট ও জরিমানা পলিসি'}
+                {appConfig?.samityPolicyConfig?.penaltyTitle || '2. বিলম্ব পেমেন্ট ও জরিমানা পলিসি'}
               </span>
 
-              {appConfig?.samityPolicyConfig?.pausePenaltyUntil15th && (
-                <div className="p-3 bg-amber-500/10 border border-amber-400/60 rounded-2xl text-amber-900 text-xs font-bold flex items-start gap-2 shadow-2xs">
-                  <span className="text-base leading-none">📢</span>
-                  <div>
-                    <span className="text-[11px] font-black text-amber-800 uppercase block">
-                      বিশেষ সুযোগঃ বিলম্ব জরিমানা স্থগিত (১৫ই পর্যন্ত ০ জরিমানা)
-                    </span>
-                    <p className="text-[11.5px] font-semibold text-slate-700 mt-0.5 leading-relaxed">
-                      {appConfig?.samityPolicyConfig?.penaltyExemptionNote || `অ্যাপ সম্পূর্ণ প্রস্তুত না হওয়া পর্যন্ত এই মাসের জরিমানা ৯ তারিখের পরিবর্তে ${appConfig?.samityPolicyConfig?.penaltyExemptionUntilDay || 15} তারিখ পর্যন্ত স্থগিত করা হয়েছে।`}
-                    </p>
+              {/* Current Month Fine Exemption Banner */}
+              {(() => {
+                const now = new Date();
+                const curYear = now.getFullYear();
+                const curMonthNum = String(now.getMonth() + 1).padStart(2, '0');
+                const curMonthKey = `${curYear}-${curMonthNum}`;
+                const curMonthCfg = appConfig?.samityPolicyConfig?.exemptedMonthsConfig?.[curMonthKey];
+                const isExempt = curMonthCfg !== undefined 
+                  ? curMonthCfg.isExempted 
+                  : Boolean(appConfig?.samityPolicyConfig?.exemptedMonths?.[curMonthKey] || appConfig?.samityPolicyConfig?.pausePenaltyUntil15th);
+                
+                const exemptDay = curMonthCfg?.exemptUntilDay || appConfig?.samityPolicyConfig?.penaltyExemptionUntilDay || 31;
+                const monthNamesBn = ['জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'];
+                const curMonthName = monthNamesBn[now.getMonth()];
+
+                if (!isExempt) return null;
+
+                return (
+                  <div className="p-3 bg-amber-500/10 border border-amber-400/60 rounded-2xl text-amber-900 text-xs font-bold flex items-start gap-2 shadow-2xs">
+                    <span className="text-base leading-none">📢</span>
+                    <div>
+                      <span className="text-[11px] font-black text-amber-800 uppercase block">
+                        বিশেষ সুযোগঃ {curMonthName} মাসে বিলম্ব জরিমানা স্থগিত ({exemptDay === 31 ? 'পুরো মাস' : `${exemptDay}ই পর্যন্ত`} ৳0 জরিমানা)
+                      </span>
+                      <p className="text-[11.5px] font-semibold text-slate-700 mt-0.5 leading-relaxed">
+                        {curMonthCfg?.note || appConfig?.samityPolicyConfig?.penaltyExemptionNote || `${curMonthName} মাসের বিশেষ সুবিধার জন্য জরিমানা 9 তারিখের পরিবর্তে ${exemptDay === 31 ? 'পুরো মাস' : `${exemptDay} তারিখ পর্যন্ত`} স্থগিত করা হয়েছে।`}
+                      </p>
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               <div className="space-y-2 text-xs">
                 {(appConfig?.samityPolicyConfig?.penaltyTiers && appConfig.samityPolicyConfig.penaltyTiers.length > 0
                   ? appConfig.samityPolicyConfig.penaltyTiers
                   : [
-                      { id: '1', rangeLabel: '১ থেকে ৯ তারিখঃ', fineText: 'কোনো জরিমানা নেই (০ BDT)', bgClass: 'bg-emerald-50/40 border-emerald-100 text-emerald-800' },
-                      { id: '2', rangeLabel: '১০ থেকে ১৯ তারিখঃ', fineText: '৳ ১০ জরিমানা', bgClass: 'bg-amber-50/40 border-amber-100 text-amber-800' },
-                      { id: '3', rangeLabel: '২০ থেকে ২৯ তারিখঃ', fineText: '৳ ২০ জরিমানা', bgClass: 'bg-orange-50/40 border-orange-100 text-orange-800' },
-                      { id: '4', rangeLabel: '৩০ থেকে ৩৯ তারিখঃ', fineText: '৳ ৩০ জরিমানা', bgClass: 'bg-rose-50/40 border-rose-100 text-rose-800' },
-                      { id: '5', rangeLabel: '৪০তম দিনঃ', fineText: '৳ ৮০ জরিমানা', bgClass: 'bg-red-50/40 border-red-150 text-red-800' },
-                      { id: '6', rangeLabel: '৪০তম দিনের পরঃ', fineText: '৳ ১০ প্রতিদিন জরিমানা', bgClass: 'bg-slate-50 border-slate-150 text-slate-700' }
+                      { id: '1', rangeLabel: '1 থেকে 9 তারিখঃ', fineText: 'কোনো জরিমানা নেই (0 BDT)', bgClass: 'bg-emerald-50/40 border-emerald-100 text-emerald-800' },
+                      { id: '2', rangeLabel: '10 থেকে 19 তারিখঃ', fineText: '৳ 10 জরিমানা', bgClass: 'bg-amber-50/40 border-amber-100 text-amber-800' },
+                      { id: '3', rangeLabel: '20 থেকে 29 তারিখঃ', fineText: '৳ 20 জরিমানা', bgClass: 'bg-orange-50/40 border-orange-100 text-orange-800' },
+                      { id: '4', rangeLabel: '30 থেকে 39 তারিখঃ', fineText: '৳ 30 জরিমানা', bgClass: 'bg-rose-50/40 border-rose-100 text-rose-800' },
+                      { id: '5', rangeLabel: '40তম দিনঃ', fineText: '৳ 80 জরিমানা', bgClass: 'bg-red-50/40 border-red-150 text-red-800' },
+                      { id: '6', rangeLabel: '40তম দিনের পরঃ', fineText: '৳ 10 প্রতিদিন জরিমানা', bgClass: 'bg-slate-50 border-slate-150 text-slate-700' }
                     ]
                 ).map((tier, idx) => (
                   <div key={tier.id || idx} className={`flex justify-between items-center p-2.5 rounded-xl border ${tier.bgClass || 'bg-slate-50 border-slate-200 text-slate-800'}`}>
@@ -3676,15 +4257,15 @@ export default function SamityScreen({
             {/* Custom Rules List */}
             <div className="bg-white border border-slate-150 p-4.5 rounded-3xl space-y-2.5 shadow-3xs">
               <span className="text-[10px] font-extrabold text-purple-600 uppercase tracking-widest block">
-                ৩. বিশেষ ইনভেস্টার শর্তাবলী
+                3. বিশেষ ইনভেস্টার শর্তাবলী
               </span>
               <div className="space-y-2">
                 {(appConfig?.samityPolicyConfig?.customRules && appConfig.samityPolicyConfig.customRules.length > 0
                   ? appConfig.samityPolicyConfig.customRules
                   : [
-                      "২৫শে ডিসেম্বরের পূর্বে আপনার সঞ্চিত টাকা উত্তোলন করতে পারবেন না। আপনার জমাকৃত টাকা ডিসেম্বরের ২৫-৩০ তারিখের মধ্যে স্বয়ংক্রিয়ভাবে মেইন ব্যালেন্সে জমা হবে।",
-                      "প্রতি মাসের ১ থেকে ৯ তারিখের মধ্যে স্বয়ংক্রিয়ভাবে অটো-ডেবিট কিস্তি জমা নেওয়া হয়।",
-                      "১০ তারিখ থেকে বিলম্বে কিস্তি জমায় জরিমানা পলিসি প্রযোজ্য হবে।",
+                      "25শে ডিসেম্বরের পূর্বে আপনার সঞ্চিত টাকা উত্তোলন করতে পারবেন না। আপনার জমাকৃত টাকা ডিসেম্বরের 25-30 তারিখের মধ্যে স্বয়ংক্রিয়ভাবে মেইন ব্যালেন্সে জমা হবে।",
+                      "প্রতি মাসের 1 থেকে 9 তারিখের মধ্যে স্বয়ংক্রিয়ভাবে অটো-ডেবিট কিস্তি জমা নেওয়া হয়।",
+                      "10 তারিখ থেকে বিলম্বে কিস্তি জমায় জরিমানা পলিসি প্রযোজ্য হবে।",
                       "বিশেষ প্রয়োজনে অটো সঞ্চয় বন্ধ করতে এডমিন অনুমতির জন্য হেল্পলাইনে যোগাযোগ করুন।"
                     ]
                 ).map((ruleItem, rIdx) => (
@@ -3724,9 +4305,9 @@ export default function SamityScreen({
                       const penaltyAmt = getPenaltyAmount(day);
                       if (penaltyAmt === 0) {
                         if (appConfig?.samityPolicyConfig?.pausePenaltyUntil15th && day > 9) {
-                          tag = ` (${day}ই পর্যন্ত জরিমানা স্থগিত - ৳০)`;
+                          tag = ` (${day}ই পর্যন্ত জরিমানা স্থগিত - ৳0)`;
                         } else {
-                          tag = ' (জরিমানা নেই - ৳০)';
+                          tag = ' (জরিমানা নেই - ৳0)';
                         }
                       } else {
                         tag = ` (৳${penaltyAmt} বিলম্ব জরিমানা)`;
@@ -3744,7 +4325,7 @@ export default function SamityScreen({
                 <div className="bg-slate-850/80 p-3.5 rounded-2xl border border-slate-800 space-y-2 text-[11.5px] font-sans font-semibold">
                   <div className="flex justify-between">
                     <span className="text-slate-400">নির্ধারিত মাসিক কিস্তিঃ</span>
-                    <span className="font-bold">৳ {(user.monthlySavingsTarget || 1000).toLocaleString('bn-BD')}</span>
+                    <span className="font-bold">৳ {targetMonthlyRate.toLocaleString('bn-BD')}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-slate-400">বিলম্ব জরিমানা চার্জঃ</span>
@@ -3756,7 +4337,7 @@ export default function SamityScreen({
                   <div className="flex justify-between border-t border-slate-800 pt-2 text-xs font-black">
                     <span className="text-teal-400">মোট প্রদেয় কিস্তিঃ</span>
                     <span className="text-emerald-400">
-                      ৳ {((user.monthlySavingsTarget || 1000) + getPenaltyAmount(simulatedDay)).toLocaleString('bn-BD')}
+                      ৳ {(targetMonthlyRate + getPenaltyAmount(simulatedDay)).toLocaleString('bn-BD')}
                     </span>
                   </div>
                 </div>
@@ -3768,7 +4349,7 @@ export default function SamityScreen({
                 {/* Process Auto Debit Simulation */}
                 {user.lastPaidMonth === '2026-06' ? (
                   <div className="bg-emerald-950/50 border border-emerald-900 text-emerald-400 text-xs p-3 rounded-xl text-center font-bold">
-                    ✓ এই সিমুলেশনে জুন ২০২৬ মাসের ডিপিএস অলরেডি পেইড দেখাচ্ছে!
+                    ✓ এই সিমুলেশনে জুন 2026 মাসের ডিপিএস অলরেডি পেইড দেখাচ্ছে!
                   </div>
                 ) : (
                   <button
@@ -3896,7 +4477,7 @@ export default function SamityScreen({
               {/* Enter Referrer Code if not set */}
               {!user.referredBy ? (
                 <div className="bg-white border border-slate-150 p-4.5 rounded-3xl space-y-3 shadow-3xs">
-                  <span className="text-[10px] font-extrabold text-indigo-600 uppercase tracking-widest block">১. রেফারার কোড যোগ করুন</span>
+                  <span className="text-[10px] font-extrabold text-indigo-600 uppercase tracking-widest block">1. রেফারার কোড যোগ করুন</span>
                   <p className="text-xs text-slate-500 leading-normal">
                     আপনাকে যদি অন্য কোনো সক্রিয় সদস্য রেফার করে থাকেন, তবে তার মেম্বার আইডি বা মোবাইল নম্বর দিয়ে সাবমিট করুন।
                   </p>
@@ -4025,14 +4606,14 @@ export default function SamityScreen({
                   <span className="text-[10.5px] block text-rose-200 mt-1.5 font-bold uppercase font-sans">আমার মোট শেয়ার সংখ্যা</span>
                   <h2 className="text-3xl font-black font-sans mt-0.5 text-white tracking-tight">{myShares} টি শেয়ার</h2>
                   <p className="text-[10px] text-rose-250 mt-1 leading-normal">
-                    ১,০০০ টাকা সঞ্চয়ের বিপরীতে ১টি শেয়ার ধরা হয়েছে। আপনার মালিকানাধীন শেয়ার আপনি অন্য যেকোনো নিবন্ধিত মেম্বারের কাছে বিক্রি বা ট্রান্সফার করতে পারেন।
+                    1,000 টাকা সঞ্চয়ের বিপরীতে 1টি শেয়ার ধরা হয়েছে। আপনার মালিকানাধীন শেয়ার আপনি অন্য যেকোনো নিবন্ধিত মেম্বারের কাছে বিক্রি বা ট্রান্সফার করতে পারেন।
                   </p>
                 </div>
               </div>
 
               {/* 2. Submit Transfer request */}
               <div className="bg-white border border-slate-150 p-4.5 rounded-3xl space-y-4 shadow-3xs">
-                <span className="text-[10px] font-extrabold text-rose-600 uppercase tracking-widest block">১. নতুন শেয়ার হস্তান্তর আবেদন</span>
+                <span className="text-[10px] font-extrabold text-rose-600 uppercase tracking-widest block">1. নতুন শেয়ার হস্তান্তর আবেদন</span>
                 
                 <form onSubmit={handleShareTransferSubmit} className="space-y-3 text-xs">
                   {/* Recipient User ID */}
@@ -4080,7 +4661,7 @@ export default function SamityScreen({
                         value={sharePriceInput}
                         onChange={(e) => setSharePriceInput(e.target.value)}
                         className="block w-full py-2.5 px-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-850 text-xs font-bold focus:outline-none"
-                        placeholder="যেমনঃ ৫০০"
+                        placeholder="যেমনঃ 500"
                       />
                     </div>
                   </div>
@@ -4111,7 +4692,7 @@ export default function SamityScreen({
 
               {/* 3. Share transfer request list */}
               <div className="bg-white border border-slate-150 p-4 rounded-3xl space-y-3 shadow-3xs">
-                <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block border-b border-slate-100 pb-1.5">২. হস্তান্তর ইতিহাস ও অনুরোধসমূহ</span>
+                <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block border-b border-slate-100 pb-1.5">2. হস্তান্তর ইতিহাস ও অনুরোধসমূহ</span>
                 
                 {loadingShareTransfers ? (
                   <div className="py-5 text-center text-xs text-slate-450 font-bold">লোড হচ্ছে...</div>
@@ -4229,7 +4810,7 @@ export default function SamityScreen({
                       এডমিন অনুমোদন ও পিন সেটআপ প্রক্রিয়া:
                     </p>
                     <p className="text-[11px] leading-relaxed text-emerald-850">
-                      এডমিন আবেদনটি যাচাই করে অনুমোদন (Approve) দিলে এই সদস্য তাঁর মোবাইল নম্বর দিয়ে অ্যাপে প্রবেশ করে প্রথমবার নিজের ৪ ডিজিটের সিকিউরিটি পিন সেট করে অ্যাকাউন্টে প্রবেশ করতে পারবেন।
+                      এডমিন আবেদনটি যাচাই করে অনুমোদন (Approve) দিলে এই সদস্য তাঁর মোবাইল নম্বর দিয়ে অ্যাপে প্রবেশ করে প্রথমবার নিজের 4 ডিজিটের সিকিউরিটি পিন সেট করে অ্যাকাউন্টে প্রবেশ করতে পারবেন।
                     </p>
                   </div>
 
@@ -4251,7 +4832,7 @@ export default function SamityScreen({
                       গোপনীয়তা ও সিকিউরিটি পিন সংক্রান্ত নির্দেশনা:
                     </p>
                     <p className="text-[11px] leading-relaxed text-amber-900/90 font-medium">
-                      সদস্যের নিরাপত্তার স্বার্থে আপনি পিন কোড সেট করতে পারবেন না। নতুন সদস্য প্রথমবার নিজের মোবাইল নম্বর দিয়ে অ্যাপসে প্রবেশ করার সময় নিজের পছন্দের ৪ ডিজিটের পিন কোড সেট করে নিবেন।
+                      সদস্যের নিরাপত্তার স্বার্থে আপনি পিন কোড সেট করতে পারবেন না। নতুন সদস্য প্রথমবার নিজের মোবাইল নম্বর দিয়ে অ্যাপসে প্রবেশ করার সময় নিজের পছন্দের 4 ডিজিটের পিন কোড সেট করে নিবেন।
                     </p>
                   </div>
 
@@ -4262,10 +4843,10 @@ export default function SamityScreen({
                       </div>
                     )}
 
-                    {/* ১. নাম */}
+                    {/* 1. নাম */}
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
-                        ১. নতুন সদস্যের নাম (বাংলা বা ইংরেজি) *
+                        1. নতুন সদস্যের নাম (বাংলা বা ইংরেজি) *
                       </label>
                       <input
                         type="text"
@@ -4277,10 +4858,10 @@ export default function SamityScreen({
                       />
                     </div>
 
-                    {/* ২. মোবাইল নম্বর */}
+                    {/* 2. মোবাইল নম্বর */}
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
-                        ২. নতুন সদস্যের মোবাইল নম্বর *
+                        2. নতুন সদস্যের মোবাইল নম্বর *
                       </label>
                       <input
                         type="tel"
@@ -4293,10 +4874,10 @@ export default function SamityScreen({
                       <p className="text-[10px] text-slate-400 mt-1">এই নম্বর দিয়ে পরবর্তীতে সদস্য অ্যাপে প্রবেশ করবেন।</p>
                     </div>
 
-                    {/* ৩. পিতার নাম & মাতার নাম */}
+                    {/* 3. পিতার নাম & মাতার নাম */}
                     <div className="grid grid-cols-2 gap-2.5">
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">৩. পিতার নাম</label>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">3. পিতার নাম</label>
                         <input
                           type="text"
                           value={regFatherName}
@@ -4306,7 +4887,7 @@ export default function SamityScreen({
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">৪. মাতার নাম</label>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">4. মাতার নাম</label>
                         <input
                           type="text"
                           value={regMotherName}
@@ -4317,10 +4898,10 @@ export default function SamityScreen({
                       </div>
                     </div>
 
-                    {/* ৫. NID & জন্ম তারিখ */}
+                    {/* 5. NID & জন্ম তারিখ */}
                     <div className="grid grid-cols-2 gap-2.5">
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">৫. NID / পাসপোর্ট নম্বর *</label>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">5. NID / পাসপোর্ট নম্বর *</label>
                         <input
                           type="text"
                           required
@@ -4331,7 +4912,7 @@ export default function SamityScreen({
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">৬. জন্ম তারিখ</label>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">6. জন্ম তারিখ</label>
                         <input
                           type="date"
                           value={regMemberDob}
@@ -4341,9 +4922,9 @@ export default function SamityScreen({
                       </div>
                     </div>
 
-                    {/* ৭. ঠিকানা */}
+                    {/* 7. ঠিকানা */}
                     <div className="space-y-2 border-t border-slate-100 pt-3">
-                      <p className="text-xs font-extrabold text-slate-800">৭. সদস্যের ঠিকানা বিবরণী</p>
+                      <p className="text-xs font-extrabold text-slate-800">7. সদস্যের ঠিকানা বিবরণী</p>
                       
                       <div className="grid grid-cols-2 gap-2.5">
                         <div>
@@ -4392,9 +4973,9 @@ export default function SamityScreen({
                       </div>
                     </div>
 
-                    {/* ৮. নমিনির তথ্য */}
+                    {/* 8. নমিনির তথ্য */}
                     <div className="space-y-2 border-t border-slate-100 pt-3">
-                      <p className="text-xs font-extrabold text-slate-800">৮. নমিনির বিবরণী</p>
+                      <p className="text-xs font-extrabold text-slate-800">8. নমিনির বিবরণী</p>
                       
                       <div>
                         <label className="block text-[10.5px] font-semibold text-slate-600 mb-1">নমিনির নাম *</label>
@@ -4433,10 +5014,10 @@ export default function SamityScreen({
                       </div>
                     </div>
 
-                    {/* ৯. কাঙ্ক্ষিত মাসিক সঞ্চয় স্কিম */}
+                    {/* 9. কাঙ্ক্ষিত মাসিক সঞ্চয় স্কিম */}
                     <div className="border-t border-slate-100 pt-3 space-y-2">
                       <label className="block text-xs font-bold text-slate-800">
-                        ৯. কাঙ্ক্ষিত মাসিক সঞ্চয় স্কিম নির্ধারণ করুন *
+                        9. কাঙ্ক্ষিত মাসিক সঞ্চয় স্কিম নির্ধারণ করুন *
                       </label>
 
                       <div className="grid grid-cols-3 gap-2">
@@ -4481,7 +5062,7 @@ export default function SamityScreen({
                       )}
                     </div>
 
-                    {/* ১০. সম্মতি */}
+                    {/* 10. সম্মতি */}
                     <div className="pt-2">
                       <label className="flex items-start gap-2.5 cursor-pointer">
                         <input
@@ -4570,27 +5151,27 @@ export default function SamityScreen({
 
               <div className="space-y-3 font-sans text-xs font-bold leading-relaxed">
                 <div className="flex justify-between items-center py-0.5">
-                  <span className="text-slate-500">১. সঞ্চয় তহবিলের স্থিতিঃ</span>
+                  <span className="text-slate-500">1. সঞ্চয় তহবিলের স্থিতিঃ</span>
                   <span className="font-sans font-black text-slate-850">৳ {userSavings.toLocaleString('bn-BD')}</span>
                 </div>
 
                 <div className="flex justify-between items-center py-0.5">
-                  <span className="text-slate-500">২. ডিপিএস অ্যাকাউন্ট সংখ্যাঃ</span>
-                  <span className="font-sans font-black text-teal-700 bg-teal-50 px-2.5 py-1 rounded-full border border-teal-100 text-[10px]">১টি সক্রিয় ডিপিএস</span>
+                  <span className="text-slate-500">2. ডিপিএস অ্যাকাউন্ট সংখ্যাঃ</span>
+                  <span className="font-sans font-black text-teal-700 bg-teal-50 px-2.5 py-1 rounded-full border border-teal-100 text-[10px]">1টি সক্রিয় ডিপিএস</span>
                 </div>
 
                 <div className="flex justify-between items-center py-0.5">
-                  <span className="text-slate-500">৩. মাসিক ডিপিএস কিস্তিঃ</span>
-                  <span className="font-mono text-slate-800">৳ ৫০০ / মাসিক</span>
+                  <span className="text-slate-500">3. মাসিক ডিপিএস কিস্তিঃ</span>
+                  <span className="font-mono text-slate-800">৳ 500 / মাসিক</span>
                 </div>
 
                 <div className="flex justify-between items-center py-0.5">
-                  <span className="text-slate-500">৪. মোট পরিশোধিত ডিপিএস কিস্তিঃ</span>
+                  <span className="text-slate-500">4. মোট পরিশোধিত ডিপিএস কিস্তিঃ</span>
                   <span className="font-mono text-slate-800">৳ {userDps.toLocaleString('bn-BD')} ({Math.floor(userDps / 500)}টি কিস্তি পরিশোধিত)</span>
                 </div>
 
                 <p className="text-[10px] text-slate-400 bg-slate-50 p-2.5 border border-slate-150 leading-normal pt-2 border-t rounded-xl italic font-normal">
-                  *আপনার কোনো ডিপিএস কিস্তি বকেয়া নেই। ডিপিএস ম্যাচিউরিটি হলে ১০০% হালাল মুনাফা সহ মূল সঞ্চয় ওয়ালেটে একযোগে জমা হয়ে যাবে।
+                  *আপনার কোনো ডিপিএস কিস্তি বকেয়া নেই। ডিপিএস ম্যাচিউরিটি হলে 100% হালাল মুনাফা সহ মূল সঞ্চয় ওয়ালেটে একযোগে জমা হয়ে যাবে।
                 </p>
               </div>
             </div>
@@ -4714,7 +5295,7 @@ export default function SamityScreen({
                   </div>
 
                   <div>
-                    <label className="block text-[9.5px] text-slate-400 font-extrabold uppercase mb-1">৪ ডিজিটের সিকিউরিটি পিন:</label>
+                    <label className="block text-[9.5px] text-slate-400 font-extrabold uppercase mb-1">4 ডিজিটের সিকিউরিটি পিন:</label>
                     <input
                       type="password"
                       maxLength={4}
@@ -4807,11 +5388,11 @@ export default function SamityScreen({
               <div className="space-y-4">
                 <div className="flex justify-between items-baseline">
                   <span className="text-xs text-slate-500 font-bold">চলতি বকেয়া ঋণের পরিমাণঃ</span>
-                  <span className="text-xl font-black font-sans text-rose-600">৳ {user.dueLoan > 0 ? user.dueLoan.toLocaleString('bn-BD') : "০"} BDT</span>
+                  <span className="text-xl font-black font-sans text-rose-600">৳ {user.dueLoan > 0 ? user.dueLoan.toLocaleString('bn-BD') : "0"} BDT</span>
                 </div>
 
                 <div className="bg-amber-50 border border-amber-100 rounded-xl p-3 text-[10.5px] text-amber-850 leading-relaxed font-sans font-bold shadow-4xs">
-                  ⚠️ <strong>ঋণ নিয়মনীতিঃ</strong> সমবায় বিধি অনুযায়ী প্রতিটি লোন কিস্তি প্রতি মাসের ১০ তারিখের মধ্যে ওয়ালেট ব্যালেন্স থেকে পরিশোধ করা বাধ্যতামুলক।
+                  ⚠️ <strong>ঋণ নিয়মনীতিঃ</strong> সমবায় বিধি অনুযায়ী প্রতিটি লোন কিস্তি প্রতি মাসের 10 তারিখের মধ্যে ওয়ালেট ব্যালেন্স থেকে পরিশোধ করা বাধ্যতামুলক।
                 </div>
               </div>
             </div>
@@ -4833,7 +5414,7 @@ export default function SamityScreen({
                     required
                     value={loanApplyAmount}
                     onChange={(e) => setLoanApplyAmount(e.target.value)}
-                    placeholder="৳ কত টাকা সর্বোচ্চ ৫০,০০০ BDT"
+                    placeholder="৳ কত টাকা সর্বোচ্চ 50,000 BDT"
                     className="w-full bg-slate-50 border border-slate-200 p-2.5 rounded-xl text-xs text-slate-800 focus:outline-none focus:bg-white focus:border-teal-500 font-bold"
                   />
                 </div>
@@ -4851,14 +5432,14 @@ export default function SamityScreen({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] text-slate-500 font-extrabold uppercase mb-1">৪ ডিজিটের সিকিউরিটি পিন কোড</label>
+                  <label className="block text-[10px] text-slate-500 font-extrabold uppercase mb-1">4 ডিজিটের সিকিউরিটি পিন কোড</label>
                   <input
                     type="password"
                     maxLength={4}
                     required
                     value={loanApplyPin}
                     onChange={(e) => setLoanApplyPin(e.target.value)}
-                    placeholder="•••• আপনার ৪ ডিজিটের একাউন্ট পিন"
+                    placeholder="•••• আপনার 4 ডিজিটের একাউন্ট পিন"
                     className="w-full bg-slate-50 border border-slate-200 p-2.5 rounded-xl text-xs text-slate-800 text-center tracking-widest focus:outline-none focus:bg-white focus:border-teal-500"
                   />
                 </div>
@@ -4905,7 +5486,7 @@ export default function SamityScreen({
                 </div>
 
                 <div className="text-[11px] text-slate-650 leading-relaxed font-sans font-bold space-y-2">
-                  <p>🌿 <strong>লাভ বণ্টন পরিবীক্ষণঃ</strong> কো-অপারেটিভ তহবিলের সমস্ত অর্থ সরাসরি আমাদের ক্ষুদ্র শিল্প ব্যবসায় নিয়োজিত থাকে এবং অর্জিত লভ্যাংশ প্রতি ১০০ টাকায় ১% হারে বণ্টন হয়।</p>
+                  <p>🌿 <strong>লাভ বণ্টন পরিবীক্ষণঃ</strong> কো-অপারেটিভ তহবিলের সমস্ত অর্থ সরাসরি আমাদের ক্ষুদ্র শিল্প ব্যবসায় নিয়োজিত থাকে এবং অর্জিত লভ্যাংশ প্রতি 100 টাকায় 1% হারে বণ্টন হয়।</p>
                 </div>
               </div>
             </div>
@@ -5019,14 +5600,14 @@ export default function SamityScreen({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] text-slate-500 font-extrabold uppercase mb-1">৪ ডিজিটের সিকিউরিটি পিন</label>
+                  <label className="block text-[10px] text-slate-500 font-extrabold uppercase mb-1">4 ডিজিটের সিকিউরিটি পিন</label>
                   <input
                     type="password"
                     maxLength={4}
                     required
                     value={withdrawPin}
                     onChange={(e) => setWithdrawPin(e.target.value)}
-                    placeholder="•••• আপনার ৪ ডিজিটের অ্যাকাউন্ট পিন"
+                    placeholder="•••• আপনার 4 ডিজিটের অ্যাকাউন্ট পিন"
                     className="w-full bg-slate-50 border border-slate-200 p-2.5 rounded-xl text-xs text-slate-800 text-center tracking-widest focus:outline-none focus:bg-white focus:border-rose-500"
                   />
                 </div>
@@ -5069,7 +5650,7 @@ export default function SamityScreen({
               {/* Jamadan Sector Info Label */}
               <div className="bg-gradient-to-r from-emerald-50/60 to-teal-50/60 border border-emerald-100 p-3 rounded-xl flex justify-between items-center text-xs font-bold text-teal-800">
                 <span>জমাদানের খাতঃ</span>
-                <span className="bg-emerald-600 text-white px-2.5 py-0.5 rounded-md text-[10px] font-black">১. সাধারণ সঞ্চয়</span>
+                <span className="bg-emerald-600 text-white px-2.5 py-0.5 rounded-md text-[10px] font-black">1. সাধারণ সঞ্চয়</span>
               </div>
 
               <form onSubmit={handleCoopDepositSubmit} className="space-y-3.5 pt-1.5">
@@ -5095,14 +5676,14 @@ export default function SamityScreen({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] text-slate-500 font-extrabold uppercase mb-1">৪ ডিজিটের সিকিউরিটি পিন</label>
+                  <label className="block text-[10px] text-slate-500 font-extrabold uppercase mb-1">4 ডিজিটের সিকিউরিটি পিন</label>
                   <input
                     type="password"
                     maxLength={4}
                     required
                     value={depositPin}
                     onChange={(e) => setDepositPin(e.target.value)}
-                    placeholder="•••• আপনার ৪ ডিজিটের অ্যাকাউন্ট পিন"
+                    placeholder="•••• আপনার 4 ডিজিটের অ্যাকাউন্ট পিন"
                     className="w-full bg-slate-50 border border-slate-200 p-2.5 rounded-xl text-xs text-slate-800 text-center tracking-widest focus:outline-none focus:bg-white focus:border-teal-500"
                   />
                 </div>
@@ -5238,8 +5819,12 @@ export default function SamityScreen({
                     return filteredTxs.map((tx, idx) => {
                       const isCredit = ['coop_savings_deposit', 'deposit'].includes(tx.type) && !tx.description?.includes('উত্তোলন');
                       return (
-                        <div key={`${tx.id}-${idx}`} className="p-3 bg-white border border-slate-150 rounded-2xl shadow-3xs flex justify-between items-start gap-3">
-                          <div className="space-y-1">
+                        <div 
+                          key={`${tx.id}-${idx}`} 
+                          onClick={() => openReceiptForTx(tx)}
+                          className="p-3 bg-white border border-slate-150 hover:border-emerald-300 hover:bg-emerald-50/30 rounded-2xl shadow-3xs flex justify-between items-start gap-3 cursor-pointer transition active:scale-[0.99]"
+                        >
+                          <div className="space-y-1 text-left">
                             <span className="text-xs font-black text-slate-800 block">{tx.typeLabel || 'সমবায় সঞ্চয়'}</span>
                             <span className="text-[10px] text-slate-400 block font-medium">
                               {new Date(tx.createdAt).toLocaleDateString('bn-BD')} {new Date(tx.createdAt).toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit' })}
@@ -5324,16 +5909,16 @@ export default function SamityScreen({
                   </div>
                   <div className="flex justify-between items-center text-slate-700 dark:text-slate-300 font-bold">
                     <span>সঞ্চয় কিস্তি পরিমাণ:</span>
-                    <span className="font-black text-emerald-700 font-mono">৳{(user.monthlySavingsTarget || 1000).toLocaleString('bn-BD')}</span>
+                    <span className="font-black text-emerald-700 font-mono">৳{targetMonthlyRate.toLocaleString('bn-BD')}</span>
                   </div>
                   <div className="flex justify-between items-center text-slate-700 dark:text-slate-300 font-bold border-t border-emerald-200/60 pt-1.5">
                     <span>আপনার মেইন ব্যালেন্স:</span>
-                    <span className="font-black font-mono text-teal-900 dark:text-teal-300">৳{(user.balance || 0).toLocaleString('bn-BD')}</span>
+                    <span className="font-black font-mono text-teal-900 dark:text-teal-300">৳{getEffectiveBalance(effectiveUser).toLocaleString('bn-BD')}</span>
                   </div>
                 </div>
 
                 <p className="text-[10.5px] text-slate-500 dark:text-slate-400 font-semibold leading-relaxed">
-                  💡 আপনি মেইন ব্যালেন্স থেকে <strong className="text-emerald-700">{selectedPayMonth.name}</strong> মাসের কিস্তি ৳{(user.monthlySavingsTarget || 1000).toLocaleString('bn-BD')} টাকা জমা দিতে নিশ্চিত করুন। জমা সম্পন্ন হলে তা সরাসরি সমবায় সঞ্চয় আমানতে যোগ হবে।
+                  💡 আপনি মেইন ব্যালেন্স থেকে <strong className="text-emerald-700">{selectedPayMonth.name}</strong> মাসের কিস্তি ৳{targetMonthlyRate.toLocaleString('bn-BD')} টাকা জমা দিতে নিশ্চিত করুন। জমা সম্পন্ন হলে তা সরাসরি সমবায় সঞ্চয় আমানতে যোগ হবে।
                 </p>
 
                 <div className="flex gap-2 pt-1">
@@ -5362,7 +5947,7 @@ export default function SamityScreen({
           )}
         </AnimatePresence>
 
-        {/* 50-Year Multi-Year Calendar & Target Modal (২০২৪ - ২০৫০) */}
+        {/* 50-Year Multi-Year Calendar & Target Modal (2024 - 2050) */}
         <AnimatePresence>
           {show2050CalendarModal && (
             <div className="fixed inset-0 z-[9995] flex items-center justify-center p-3 sm:p-4">
@@ -5388,8 +5973,8 @@ export default function SamityScreen({
                     </div>
                     <div>
                       <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-tight flex items-center gap-1.5">
-                        ৫০ সালের রূপকল্প ও সঞ্চয় কিস্তি ক্যালেন্ডার
-                        <span className="text-[9px] bg-emerald-600 text-white px-2 py-0.5 rounded-full font-mono font-bold">২০২৬ - ২০৫০</span>
+                        50 সালের রূপকল্প ও সঞ্চয় কিস্তি ক্যালেন্ডার
+                        <span className="text-[9px] bg-emerald-600 text-white px-2 py-0.5 rounded-full font-mono font-bold">2026 - 2050</span>
                       </h3>
                       <p className="text-[10px] text-slate-500 font-bold">
                         দীর্ঘমেয়াদী সমবায় সমিতি সঞ্চয় লক্ষ্যমাত্রা ও খতিয়ান
@@ -5408,15 +5993,15 @@ export default function SamityScreen({
                 <div className="bg-gradient-to-r from-emerald-900 via-teal-900 to-slate-900 text-white p-3.5 rounded-2xl shadow-sm space-y-2 shrink-0">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-700/60 pb-2">
                     <div>
-                      <span className="text-[9px] font-extrabold text-emerald-300 uppercase tracking-wider block">৫০ সালের দীর্ঘমেয়াদী সঞ্চয় লক্ষ্যমাত্রা</span>
+                      <span className="text-[9px] font-extrabold text-emerald-300 uppercase tracking-wider block">50 সালের দীর্ঘমেয়াদী সঞ্চয় লক্ষ্যমাত্রা</span>
                       <h4 className="text-base font-black font-mono text-amber-300">
-                        ৳{(300 * (user.monthlySavingsTarget || 1000)).toLocaleString('bn-BD')} টাকা
+                        ৳{(300 * targetMonthlyRate).toLocaleString('bn-BD')} টাকা
                       </h4>
                     </div>
                     <div className="text-right">
                       <span className="text-[9px] font-extrabold text-emerald-200 block">মোট সঞ্চিত জমা (আমানত)</span>
                       <h4 className="text-sm font-black font-mono text-emerald-400">
-                        ৳{(user.savings || 0).toLocaleString('bn-BD')}
+                        ৳{userSavings.toLocaleString('bn-BD')}
                       </h4>
                     </div>
                   </div>
@@ -5424,15 +6009,15 @@ export default function SamityScreen({
                   {/* Overall 2050 Progress Bar */}
                   <div className="space-y-1">
                     <div className="flex justify-between text-[10px] font-bold">
-                      <span className="text-emerald-200">মোট কিস্তি পরিশোধ (২০২৬-২০৫০):</span>
+                      <span className="text-emerald-200">মোট কিস্তি পরিশোধ (2026-2050):</span>
                       <span className="text-amber-300 font-mono">
-                        {Math.floor((user.savings || 0) / (user.monthlySavingsTarget || 1000))} / ৩০০ মাস ({((Math.floor((user.savings || 0) / (user.monthlySavingsTarget || 1000)) / 300) * 100).toFixed(1)}%)
+                        {Math.floor(userSavings / targetMonthlyRate)} / 300 মাস ({((Math.floor(userSavings / targetMonthlyRate) / 300) * 100).toFixed(1)}%)
                       </span>
                     </div>
                     <div className="w-full h-2.5 bg-emerald-950/80 rounded-full overflow-hidden border border-emerald-700/50 p-0.5">
                       <div 
                         className="h-full bg-gradient-to-r from-amber-400 via-emerald-400 to-teal-300 rounded-full transition-all duration-500" 
-                        style={{ width: `${Math.min(100, (Math.floor((user.savings || 0) / (user.monthlySavingsTarget || 1000)) / 300) * 100)}%` }} 
+                        style={{ width: `${Math.min(100, (Math.floor(userSavings / targetMonthlyRate) / 300) * 100)}%` }} 
                       />
                     </div>
                   </div>
@@ -5476,7 +6061,7 @@ export default function SamityScreen({
                                 ? 'bg-amber-500 text-slate-950'
                                 : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
                             }`}>
-                              {yrPaidCount} / ১২ মাস পরিশোধিত
+                              {yrPaidCount} / 12 মাস পরিশোধিত
                             </span>
                           </div>
 
@@ -5692,13 +6277,13 @@ export default function SamityScreen({
                   <p className="text-xs text-slate-500 font-bold leading-normal">
                     {samityPinPrompt === 'close' && 'আপনার মাসিক বিনিয়োগ স্কিমটি সাময়িকভাবে বন্ধ করতে সিকিউরিটি পিন প্রবেশ করুন। এটি বন্ধ করলে মাসিক অটো-ডেবিট বন্ধ হবে।'}
                     {samityPinPrompt === 'active' && 'আপনার মাসিক বিনিয়োগ স্কিমটি পুনরায় সচল করতে সিকিউরিটি পিন প্রবেশ করুন।'}
-                    {samityPinPrompt === 'pay_reactivate' && `আপনার বকেয়া ${user.dueMonths || 1} মাসের কিস্তি (৳${((user.monthlySavingsTarget || 1000) * (user.dueMonths || 1)).toLocaleString('bn-BD')} BDT) পরিশোধ করে স্কিম সচল করতে সিকিউরিটি পিন প্রবেশ করুন।`}
+                    {samityPinPrompt === 'pay_reactivate' && `আপনার বকেয়া ${user.dueMonths || 1} মাসের কিস্তি (৳${((user.monthlySavingsTarget || 500) * (user.dueMonths || 1)).toLocaleString('bn-BD')} BDT) পরিশোধ করে স্কিম সচল করতে সিকিউরিটি পিন প্রবেশ করুন।`}
                   </p>
                 </div>
 
                 <div className="space-y-3 pt-1">
                   <div>
-                    <label className="block text-[10.5px] text-slate-500 font-extrabold mb-1 uppercase tracking-wider">৪ ডিজিটের পিন কোড</label>
+                    <label className="block text-[10.5px] text-slate-500 font-extrabold mb-1 uppercase tracking-wider">4 ডিজিটের পিন কোড</label>
                     <input
                       type="password"
                       maxLength={4}
@@ -5747,6 +6332,8 @@ export default function SamityScreen({
               </motion.div>
             </div>
           )}
+        </AnimatePresence>
+
         {/* Helpline WhatsApp Modal */}
         <AnimatePresence>
           {showHelplineModal && (
@@ -5828,119 +6415,554 @@ export default function SamityScreen({
                 </div>
 
                 <p className="text-[10px] text-slate-400 text-center font-semibold">
-                  সাপ্তাহিক ৭ দিন সকাল ৯:০০ টা থেকে রাত ১০:০০ টা পর্যন্ত সাপোর্ট খোলা থাকবে।
+                  সাপ্তাহিক 7 দিন সকাল 9:00 টা থেকে রাত 10:00 টা পর্যন্ত সাপোর্ট খোলা থাকবে।
                 </p>
               </motion.div>
             </div>
           )}
         </AnimatePresence>
 
-        {/* Deactivation Application Modal */}
+        {/* ================= MODAL 1: SHAREHOLDER MODAL ================= */}
         <AnimatePresence>
-          {showDeactivateModal && (
+          {activeTopModal === 'shareholder' && (
             <div className="fixed inset-0 z-[10005] flex items-center justify-center p-4">
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                onClick={() => setShowDeactivateModal(false)}
+                onClick={() => setActiveTopModal('none')}
                 className="absolute inset-0 bg-slate-950/70 backdrop-blur-xs"
               />
               <motion.div
-                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                initial={{ opacity: 0, scale: 0.92, y: 15 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                className="relative bg-white border border-slate-200 w-full max-w-sm rounded-3xl p-5 shadow-2xl space-y-4 text-left z-10 overflow-hidden"
+                exit={{ opacity: 0, scale: 0.92, y: 15 }}
+                className="relative bg-white border border-rose-200 w-full max-w-sm rounded-3xl p-5 shadow-2xl space-y-4 text-left z-10 overflow-hidden max-h-[90vh] overflow-y-auto"
               >
-                <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-rose-500 via-amber-500 to-rose-600" />
+                <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-rose-500 via-red-600 to-amber-500" />
 
                 <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
                   <div className="flex items-center gap-2">
-                    <div className="w-9 h-9 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center font-black">
-                      <ShieldAlert className="w-5 h-5" />
+                    <div className="w-9 h-9 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center text-lg font-black">
+                      👑
                     </div>
                     <div>
-                      <h3 className="text-sm font-black text-slate-900">সঞ্চয় বন্ধের লিখিত আবেদন</h3>
-                      <p className="text-[10px] text-slate-500 font-bold">এডমিন অনুমোদনের জন্য জমা দিন</p>
+                      <h3 className="text-sm font-black text-slate-900">
+                        {getMembershipCategory(effectiveUser).key === 'shareholder'
+                          ? 'আপনার শেয়ার হোল্ডার একাউন্ট'
+                          : 'শেয়ার হোল্ডার সদস্য হওয়ার শর্তাবলী'}
+                      </h3>
+                      <p className="text-[10px] text-rose-600 font-bold">100% পূর্ণ বাণিজ্যিক মুনাফা ও ভোটাধিকার</p>
                     </div>
                   </div>
                   <button
                     type="button"
-                    onClick={() => setShowDeactivateModal(false)}
+                    onClick={() => setActiveTopModal('none')}
                     className="w-7 h-7 rounded-full bg-slate-100 text-slate-400 hover:text-slate-600 flex items-center justify-center text-xs font-bold cursor-pointer"
                   >
                     ✕
                   </button>
                 </div>
 
-                <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl text-[10px] text-amber-900 font-semibold leading-relaxed space-y-1">
-                  <p>
-                    📌 <strong>সমিতি পলিসি নিয়মাবলী:</strong> অটো সঞ্চয় সুইচ বন্ধ করতে হলে এডমিন প্যানেলে লিখিত আবেদন করতে হবে।
-                  </p>
-                  <p>
-                    ✅ এডমিন অনুমোদন দিলে আগামী <strong>২৫শে ডিসেম্বর</strong> আপনার জমানো সঞ্চয়ের মোট (৳{(user.savings || 0).toLocaleString('bn-BD')}) টাকা মেইন ব্যালেন্সে স্বয়ংক্রিয়ভাবে রিফান্ড হয়ে যাবে।
-                  </p>
-                </div>
+                {getMembershipCategory(effectiveUser).key === 'shareholder' ? (
+                  // ALREADY A SHAREHOLDER
+                  <div className="space-y-3">
+                    <div className="bg-gradient-to-r from-rose-50 to-red-50 border border-rose-200 p-3 rounded-2xl space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-extrabold text-rose-900">পদবী স্থিতি</span>
+                        <span className="px-2 py-0.5 bg-rose-600 text-white text-[9.5px] font-black rounded-lg">👑 একটিভ শেয়ার হোল্ডার</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-center pt-1">
+                        <div className="bg-white p-2 rounded-xl border border-rose-200/80 shadow-3xs">
+                          <span className="text-[9px] font-bold text-slate-500 block">মোট শেয়ার মূলধন</span>
+                          <span className="text-xs font-black text-rose-700">৳{userSavings.toLocaleString('bn-BD')}</span>
+                        </div>
+                        <div className="bg-white p-2 rounded-xl border border-rose-200/80 shadow-3xs">
+                          <span className="text-[9px] font-bold text-slate-500 block">মুনাফা প্রাপ্যতা</span>
+                          <span className="text-xs font-black text-emerald-700">100% সম্পূর্ণ লাভ</span>
+                        </div>
+                      </div>
+                    </div>
 
-                <form onSubmit={handleSubmitDeactivateRequest} className="space-y-3">
-                  <div>
-                    <label className="block text-[10.5px] font-black text-slate-700 mb-1">
-                      সঞ্চয় বন্ধ বা লিভ নেওয়ার কারণ লিখুন *
-                    </label>
-                    <textarea
-                      rows={3}
-                      required
-                      value={deactivateReason}
-                      onChange={(e) => setDeactivateReason(e.target.value)}
-                      placeholder="যেমন: জরুরি প্রয়োজনে সঞ্চয় বন্ধ করতে চাচ্ছি..."
-                      className="w-full text-xs font-bold p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500 focus:bg-white text-slate-900"
-                    />
-                  </div>
+                    <div className="bg-slate-50 border border-slate-200 p-3 rounded-2xl space-y-2 text-[11px] text-slate-700">
+                      <h4 className="font-black text-slate-900 flex items-center gap-1.5">
+                        <span>✨</span> আপনার সক্রিয় সুবিধাসমূহঃ
+                      </h4>
+                      <ul className="space-y-1.5 list-disc list-inside font-bold text-slate-650">
+                        <li>সমিতির ব্যবসার শতভাগ (100%) বাণিজ্যিক মুনাফা ও ডিভিডেন্ড বণ্টন।</li>
+                        <li>বাৎসরিক সাধারণ সভা (AGM) ও সিদ্ধান্ত গ্রহণে পূর্ণ ভোটাধিকার।</li>
+                        <li>বড় প্রজেক্ট বা জমি ক্রয়ে সরাসরি অংশীদারিত্বের অধিকার।</li>
+                        <li>বাৎসরিক অডিট রিপোর্ট ও শেয়ার সার্টিফিকেট প্রাপ্তি।</li>
+                      </ul>
+                    </div>
 
-                  <div>
-                    <label className="block text-[10.5px] font-black text-slate-700 mb-1">
-                      আপনার ৪ ডিজিটের সিকিউরিটি পিন কোড *
-                    </label>
-                    <input
-                      type="password"
-                      maxLength={4}
-                      pattern="\d*"
-                      required
-                      value={deactivatePin}
-                      onChange={(e) => setDeactivatePin(e.target.value.replace(/\D/g, ''))}
-                      placeholder="••••"
-                      className="w-full text-center tracking-[0.5em] font-mono py-2.5 px-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500 text-base font-black text-slate-900"
-                    />
-                  </div>
-
-                  <div className="flex gap-2 pt-1">
                     <button
                       type="button"
-                      onClick={() => setShowDeactivateModal(false)}
-                      className="w-1/3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs rounded-xl transition cursor-pointer"
+                      onClick={() => setActiveTopModal('none')}
+                      className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs rounded-xl transition shadow-md shadow-rose-600/20 cursor-pointer"
                     >
-                      বাতিল
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={deactivateSubmitting || deactivatePin.length < 4 || !deactivateReason.trim()}
-                      className="w-2/3 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs rounded-xl transition shadow-md shadow-rose-600/20 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-1"
-                    >
-                      {deactivateSubmitting ? (
-                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      ) : (
-                        'আবেদন জমা দিন 📝'
-                      )}
+                      ঠিক আছে, বুঝেছি 👍
                     </button>
                   </div>
-                </form>
+                ) : (
+                  // UPGRADE TO SHAREHOLDER FORM WITH STRICT RULES & 50k-5L CAPITAL CONDITION
+                  <form onSubmit={handleUpgradeToShareholder} className="space-y-3">
+                    <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl text-[10px] text-amber-900 font-semibold leading-relaxed space-y-1">
+                      <p className="font-black text-rose-700">
+                        📌 একটি আইডি দিয়ে কেবল একটি একাউন্ট/ক্যাটাগরি পরিচালনা করা যায়।
+                      </p>
+                      <p>
+                        শেয়ার হোল্ডার হতে হলে নিচের শর্তাবলী বাধ্যতামূলকভাবে মেনে সম্মতি প্রদান করতে হবে।
+                      </p>
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200 p-3 rounded-2xl space-y-2 text-[10.5px] text-slate-700">
+                      <h4 className="font-black text-slate-900 flex items-center gap-1.5 text-xs">
+                        <span>📋</span> শেয়ার হোল্ডার হওয়ার 5টি বাধ্যতামূলক নিয়মঃ
+                      </h4>
+                      <ol className="space-y-2 list-decimal list-inside font-bold text-slate-700 leading-snug">
+                        <li>
+                          <strong className="text-rose-700">বড় প্রজেক্ট ও জমি ক্রয়ে মূলধন যোগান:</strong> যেকোনো বড় প্রজেক্ট বা জমি ক্রয়কালে সর্বনিম্ন <strong>৳50,000 (পঞ্চাশ হাজার)</strong> থেকে <strong>৳5,00,000 (পাঁচ লাখ)</strong> টাকা পর্যন্ত মূলধন দেওয়ার আর্থিক সক্ষমতা ও প্রতিশ্রুতি থাকতে হবে।
+                        </li>
+                        <li>
+                          <strong className="text-emerald-700">100% পূর্ণ মুনাফা:</strong> শেয়ার অনুযায়ী সমিতির মোট ব্যবসার শতভাগ (100%) বাণিজ্যিক মুনাফা ও ডিভিডেন্ড পাবেন।
+                        </li>
+                        <li>
+                          <strong className="text-indigo-700">পূর্ণ ভোটাধিকার:</strong> বার্ষিক সাধারণ সভা (AGM) ও সিদ্ধান্ত গ্রহণে আপনার পূর্ণ ভোটাধিকার থাকবে।
+                        </li>
+                        <li>
+                          <strong className="text-amber-800">নিয়মিত মাসিক সঞ্চয়:</strong> প্রতি মাসে নিয়মিত 1,000 থেকে 5,000 টাকা সঞ্চয় কিস্তি বজায় রাখতে হবে।
+                        </li>
+                        <li>
+                          <strong className="text-slate-800">একক ক্যাটাগরি নীতি:</strong> শেয়ার হোল্ডার নির্বাচিত হলে ইনভেস্টার একাউন্ট বাতিল হয়ে শেয়ার হোল্ডার একাউন্ট সক্রিয় হবে।
+                        </li>
+                      </ol>
+                    </div>
+
+                    {/* Agreement Checkbox */}
+                    <label className="flex items-start gap-2 p-2.5 bg-rose-50/70 border border-rose-200 rounded-xl cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={shareholderAgree}
+                        onChange={(e) => setShareholderAgree(e.target.checked)}
+                        className="mt-0.5 w-4 h-4 rounded text-rose-600 focus:ring-rose-500 border-slate-300 shrink-0 cursor-pointer"
+                      />
+                      <span className="text-[10px] font-black text-rose-950 leading-tight">
+                        আমি সকল শর্তাবলী, বড় প্রজেক্ট/জমি ক্রয়ে 50 হাজার থেকে 5 লাখ টাকা মূলধন দেওয়ার আর্থিক দায় ও নিয়মে সম্পূর্ণ একমত এবং সম্মতি প্রদান করছি।
+                      </span>
+                    </label>
+
+                    {/* PIN input */}
+                    <div>
+                      <label className="block text-[10.5px] font-black text-slate-700 mb-1">
+                        আপনার 4 ডিজিটের সিকিউরিটি পিন কোড *
+                      </label>
+                      <input
+                        type="password"
+                        maxLength={4}
+                        pattern="\d*"
+                        required
+                        value={shareholderUpgradePin}
+                        onChange={(e) => setShareholderUpgradePin(e.target.value.replace(/\D/g, ''))}
+                        placeholder="••••"
+                        className="w-full text-center tracking-[0.5em] font-mono py-2.5 px-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500 text-base font-black text-slate-900"
+                      />
+                    </div>
+
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setActiveTopModal('none')}
+                        className="w-1/3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs rounded-xl transition cursor-pointer"
+                      >
+                        বাতিল
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={shareholderUpgrading || !shareholderAgree || shareholderUpgradePin.length < 4}
+                        className="w-2/3 py-2.5 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-700 hover:to-red-700 text-white font-black text-xs rounded-xl transition shadow-md shadow-rose-600/20 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-1"
+                      >
+                        {shareholderUpgrading ? (
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          '👑 শেয়ার হোল্ডার নিশ্চিত করুন'
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                )}
               </motion.div>
             </div>
           )}
         </AnimatePresence>
+
+        {/* ================= MODAL 2: INVESTOR MODAL ================= */}
+        <AnimatePresence>
+          {activeTopModal === 'investor' && (
+            <div className="fixed inset-0 z-[10005] flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setActiveTopModal('none')}
+                className="absolute inset-0 bg-slate-950/70 backdrop-blur-xs"
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.92, y: 15 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.92, y: 15 }}
+                className="relative bg-white border border-sky-200 w-full max-w-sm rounded-3xl p-5 shadow-2xl space-y-4 text-left z-10 overflow-hidden max-h-[90vh] overflow-y-auto"
+              >
+                <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-sky-500 via-blue-600 to-indigo-500" />
+
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <div className="w-9 h-9 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center text-lg font-black">
+                      💎
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-black text-slate-900">
+                        {getMembershipCategory(effectiveUser).key === 'investor'
+                          ? 'আপনার ইনভেস্টার একাউন্ট'
+                          : getMembershipCategory(effectiveUser).key === 'shareholder'
+                          ? 'ইনভেস্টার একাউন্ট বিধিনিষেধ'
+                          : 'ইনভেস্টার সদস্য হওয়ার আবেদন'}
+                      </h3>
+                      <p className="text-[10px] text-sky-600 font-bold">50% বাণিজ্যিক মুনাফা শেয়ার</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTopModal('none')}
+                    className="w-7 h-7 rounded-full bg-slate-100 text-slate-400 hover:text-slate-600 flex items-center justify-center text-xs font-bold cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {getMembershipCategory(effectiveUser).key === 'shareholder' ? (
+                  // RESTRICTION FOR SHAREHOLDER (ALREADY HOLD HIGHEST CATEGORY)
+                  <div className="space-y-3">
+                    <div className="bg-amber-50 border border-amber-200 p-3 rounded-2xl text-[11px] text-amber-950 font-bold leading-relaxed space-y-2">
+                      <p className="text-rose-700 font-black flex items-center gap-1 text-xs">
+                        <span>🚫</span> আপনি ইতিমধ্যে একজন শেয়ার হোল্ডার!
+                      </p>
+                      <p>
+                        একটি আইডি দিয়ে শুধুমাত্র একটি ক্যাটাগরি চালানো যায়। যেহেতু আপনি সর্বোচ্চ সুবিধা ও 100% পূর্ণ লভ্যাংশের <strong>👑 শেয়ার হোল্ডার</strong> পদে রয়েছেন, তাই আপনার ইনভেস্টার হওয়ার প্রয়োজন নেই বা ইনভেস্টার একাউন্ট প্রযোজ্য নয়।
+                      </p>
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl text-[10.5px] text-slate-600 font-medium">
+                      💡 আপনি বর্তমানে সমিতির সর্বোচ্চ পদবীতে আছেন এবং ব্যবসার 100% ফুল প্রফিট অংশীদারিত্ব উপভোগ করছেন।
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setActiveTopModal('none')}
+                      className="w-full py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-extrabold text-xs rounded-xl transition cursor-pointer"
+                    >
+                      ঠিক আছে, বুঝেছি 👍
+                    </button>
+                  </div>
+                ) : getMembershipCategory(effectiveUser).key === 'investor' ? (
+                  // ALREADY AN INVESTOR
+                  <div className="space-y-3">
+                    <div className="bg-gradient-to-r from-sky-50 to-blue-50 border border-sky-200 p-3 rounded-2xl space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-extrabold text-sky-900">পদবী স্থিতি</span>
+                        <span className="px-2 py-0.5 bg-sky-600 text-white text-[9.5px] font-black rounded-lg">💎 একটিভ ইনভেস্টার</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-center pt-1">
+                        <div className="bg-white p-2 rounded-xl border border-sky-200/80 shadow-3xs">
+                          <span className="text-[9px] font-bold text-slate-500 block">মোট ইনভেস্ট সঞ্চয়</span>
+                          <span className="text-xs font-black text-sky-700">৳{userSavings.toLocaleString('bn-BD')}</span>
+                        </div>
+                        <div className="bg-white p-2 rounded-xl border border-sky-200/80 shadow-3xs">
+                          <span className="text-[9px] font-bold text-slate-500 block">মুনাফা অংশীদারিত্ব</span>
+                          <span className="text-xs font-black text-blue-700">50% লভ্যাংশ অংশ</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200 p-3 rounded-2xl space-y-2 text-[11px] text-slate-700">
+                      <h4 className="font-black text-slate-900 flex items-center gap-1.5">
+                        <span>✨</span> ইনভেস্টার সুবিধাসমূহঃ
+                      </h4>
+                      <ul className="space-y-1.5 list-disc list-inside font-bold text-slate-650">
+                        <li>সমিতির বাণিজ্যিক অর্জিত মুনাফার 50% নিয়মিত অংশীদারিত্ব।</li>
+                        <li>বড় কোনো প্রকল্প বা জমি ক্রয়ে ভারী মূলধন দেওয়ার কোনো চাপ নেই।</li>
+                        <li>স্বয়ংক্রিয় ও সহজ সঞ্চয় নিয়ন্ত্রণ সুবিধা।</li>
+                      </ul>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setActiveTopModal('none')}
+                      className="w-full py-2.5 bg-sky-600 hover:bg-sky-700 text-white font-extrabold text-xs rounded-xl transition shadow-md shadow-sky-600/20 cursor-pointer"
+                    >
+                      ঠিক আছে, বুঝেছি 👍
+                    </button>
+                  </div>
+                ) : (
+                  // REGULAR USER UPGRADING TO INVESTOR
+                  <form onSubmit={handleUpgradeToInvestor} className="space-y-3">
+                    <div className="bg-sky-50 border border-sky-200 p-2.5 rounded-xl text-[10px] text-sky-950 font-semibold leading-relaxed space-y-1">
+                      <p className="font-black text-sky-800">
+                        💎 ইনভেস্টার একাউন্ট সুবিধা ও নিয়মাবলীঃ
+                      </p>
+                      <p>
+                        ইনভেস্টার হিসেবে আপনি সমিতির মোট বাণিজ্যিক মুনাফার 50% অংশ পাবেন। কোনো বড় প্রজেক্টে বাধ্যতামূলক ফান্ড দেওয়ার চাপ থাকবে না।
+                      </p>
+                    </div>
+
+                    <label className="flex items-start gap-2 p-2.5 bg-sky-50/70 border border-sky-200 rounded-xl cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={investorAgree}
+                        onChange={(e) => setInvestorAgree(e.target.checked)}
+                        className="mt-0.5 w-4 h-4 rounded text-sky-600 focus:ring-sky-500 border-slate-300 shrink-0 cursor-pointer"
+                      />
+                      <span className="text-[10px] font-black text-sky-950 leading-tight">
+                        আমি ইনভেস্টার হিসেবে মাসিক সঞ্চয় এবং 50% বাণিজ্যিক মুনাফা বণ্টনের নীতিতে সম্মতি প্রদান করছি।
+                      </span>
+                    </label>
+
+                    <div>
+                      <label className="block text-[10.5px] font-black text-slate-700 mb-1">
+                        আপনার 4 ডিজিটের সিকিউরিটি পিন কোড *
+                      </label>
+                      <input
+                        type="password"
+                        maxLength={4}
+                        pattern="\d*"
+                        required
+                        value={investorUpgradePin}
+                        onChange={(e) => setInvestorUpgradePin(e.target.value.replace(/\D/g, ''))}
+                        placeholder="••••"
+                        className="w-full text-center tracking-[0.5em] font-mono py-2.5 px-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500 text-base font-black text-slate-900"
+                      />
+                    </div>
+
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setActiveTopModal('none')}
+                        className="w-1/3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs rounded-xl transition cursor-pointer"
+                      >
+                        বাতিল
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={investorUpgrading || !investorAgree || investorUpgradePin.length < 4}
+                        className="w-2/3 py-2.5 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-700 hover:to-blue-700 text-white font-black text-xs rounded-xl transition shadow-md shadow-sky-600/20 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-1"
+                      >
+                        {investorUpgrading ? (
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          '💎 ইনভেস্টার নিশ্চিত করুন'
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* ================= MODAL 3: EXIT / AUTO-SAVINGS SWITCH MODAL ================= */}
+        <AnimatePresence>
+          {activeTopModal === 'exit_switch' && (
+            <div className="fixed inset-0 z-[10005] flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setActiveTopModal('none')}
+                className="absolute inset-0 bg-slate-950/70 backdrop-blur-xs"
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.92, y: 15 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.92, y: 15 }}
+                className="relative bg-white border border-amber-200 w-full max-w-sm rounded-3xl p-5 shadow-2xl space-y-4 text-left z-10 overflow-hidden max-h-[90vh] overflow-y-auto"
+              >
+                <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500" />
+
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <div className="w-9 h-9 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center text-lg font-black">
+                      🔄
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-black text-slate-900">সমিতি সঞ্চয় নিয়ন্ত্রণ ও সুইচ</h3>
+                      <p className="text-[10px] text-amber-700 font-bold">এডমিনের অনুমতি ছাড়াই তাৎক্ষণিক নিয়ন্ত্রণ</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTopModal('none')}
+                    className="w-7 h-7 rounded-full bg-slate-100 text-slate-400 hover:text-slate-600 flex items-center justify-center text-xs font-bold cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Current Status Card */}
+                <div className="bg-slate-50 border border-slate-200 p-3 rounded-2xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-extrabold text-slate-700">বর্তমান সুইচ অবস্থা:</span>
+                    <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black border ${
+                      samityAutoSavingsActive
+                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                        : 'bg-rose-100 text-rose-800 border-rose-300'
+                    }`}>
+                      {samityAutoSavingsActive ? '🟢 সচল (ON)' : '🔴 বন্ধ (OFF)'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between pt-1 border-t border-slate-200/60 text-[11px]">
+                    <span className="font-bold text-slate-500">মোট সঞ্চিত আমানত:</span>
+                    <strong className="font-mono text-xs font-black text-slate-900">৳{userSavings.toLocaleString('bn-BD')}</strong>
+                  </div>
+                </div>
+
+                {/* Policy Banner */}
+                <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl text-[10px] text-amber-950 font-bold leading-relaxed space-y-1.5">
+                  <p>
+                    📢 <strong>25শে ডিসেম্বর স্বয়ংক্রিয় অর্থ ফেরত নীতিঃ</strong> যদি আপনি সমিতিতে আর কিস্তি বা সঞ্চয় দিতে না চান বা লিভ নিতে চান, তবে নিজে নিজেই সুইচটি বন্ধ (OFF) করতে পারবেন—<strong>কোনো এডমিন অনুমোদনের প্রয়োজন নেই।</strong>
+                  </p>
+                  <p className="text-rose-800 font-black">
+                    🔔 সুইচ অফ করলেই এডমিন প্যানেলে স্বয়ংক্রিয় নোটিফিকেশন চলে যাবে এবং আগামী <strong>25শে ডিসেম্বর</strong> আপনার জমাকৃত সম্পূর্ণ <strong>৳{userSavings.toLocaleString('bn-BD')}</strong> টাকা কোনো কর্তন ছাড়াই আপনার মেইন ব্যালেন্সে স্বয়ংক্রিয়ভাবে ফেরত প্রদান করা হবে।
+                  </p>
+                </div>
+
+                {samityAutoSavingsActive ? (
+                  // FORM TO TURN SWITCH OFF
+                  <form onSubmit={handleToggleAutoSavingsOff} className="space-y-3">
+                    <div>
+                      <label className="block text-[10.5px] font-black text-slate-700 mb-1">
+                        সঞ্চয় বন্ধ বা লিভ নেওয়ার কারণ লিখুন *
+                      </label>
+                      <textarea
+                        rows={3}
+                        required
+                        value={switchOffReason}
+                        onChange={(e) => setSwitchOffReason(e.target.value)}
+                        placeholder="যেমন: ব্যক্তিগত প্রয়োজনে সাময়িকভাবে কিস্তি বন্ধ রাখতে চাচ্ছি..."
+                        className="w-full text-xs font-bold p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500 focus:bg-white text-slate-900"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10.5px] font-black text-slate-700 mb-1">
+                        আপনার 4 ডিজিটের সিকিউরিটি পিন কোড *
+                      </label>
+                      <input
+                        type="password"
+                        maxLength={4}
+                        pattern="\d*"
+                        required
+                        value={switchSecurityPin}
+                        onChange={(e) => setSwitchSecurityPin(e.target.value.replace(/\D/g, ''))}
+                        placeholder="••••"
+                        className="w-full text-center tracking-[0.5em] font-mono py-2.5 px-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500 text-base font-black text-slate-900"
+                      />
+                    </div>
+
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setActiveTopModal('none')}
+                        className="w-1/3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs rounded-xl transition cursor-pointer"
+                      >
+                        বাতিল
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={switchSubmitting || switchSecurityPin.length < 4 || !switchOffReason.trim()}
+                        className="w-2/3 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs rounded-xl transition shadow-md shadow-rose-600/20 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-1"
+                      >
+                        {switchSubmitting ? (
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          '⏸️ সুইচ অফ (বন্ধ) করুন'
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  // FORM TO TURN SWITCH BACK ON
+                  <form onSubmit={handleToggleAutoSavingsOn} className="space-y-3">
+                    <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl text-[10.5px] text-emerald-950 font-bold leading-relaxed">
+                      💡 <strong>পুনরায় সচলকরণ:</strong> সুইচ অন করলে আপনার মাসিক সঞ্চয় আবার নিয়মিত সচল হবে এবং লভ্যাংশের অংশ সক্রিয় থাকবে।
+                    </div>
+
+                    <div>
+                      <label className="block text-[10.5px] font-black text-slate-700 mb-1">
+                        সঞ্চয় পুনরায় সচল (ON) করার কারণ লিখুন *
+                      </label>
+                      <textarea
+                        rows={3}
+                        required
+                        value={switchOnReason}
+                        onChange={(e) => setSwitchOnReason(e.target.value)}
+                        placeholder="যেমন: সাময়িক সমস্যা সমাধান হয়েছে, পুনরায় নিয়মিত সঞ্চয় কিস্তি চালু করতে চাচ্ছি..."
+                        className="w-full text-xs font-bold p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white text-slate-900"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10.5px] font-black text-slate-700 mb-1">
+                        আপনার 4 ডিজিটের সিকিউরিটি পিন কোড *
+                      </label>
+                      <input
+                        type="password"
+                        maxLength={4}
+                        pattern="\d*"
+                        required
+                        value={switchSecurityPin}
+                        onChange={(e) => setSwitchSecurityPin(e.target.value.replace(/\D/g, ''))}
+                        placeholder="••••"
+                        className="w-full text-center tracking-[0.5em] font-mono py-2.5 px-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-base font-black text-slate-900"
+                      />
+                    </div>
+
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setActiveTopModal('none')}
+                        className="w-1/3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs rounded-xl transition cursor-pointer"
+                      >
+                        বাতিল
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={switchSubmitting || switchSecurityPin.length < 4 || !switchOnReason.trim()}
+                        className="w-2/3 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl transition shadow-md shadow-emerald-600/20 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-1"
+                      >
+                        {switchSubmitting ? (
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          '🔄 সুইচ অন (সচল) করুন'
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </motion.div>
+            </div>
+          )}
         </AnimatePresence>
 
       </div>
+
+      {/* Full-Screen BNB Payment Receipt Modal */}
+      <BnbPaymentReceiptModal
+        isOpen={isReceiptOpen}
+        onClose={() => setIsReceiptOpen(false)}
+        data={receiptModalData}
+        appLogo={appConfig?.logoUrl || "/bnb_logo.png"}
+      />
 
     </div>
   );

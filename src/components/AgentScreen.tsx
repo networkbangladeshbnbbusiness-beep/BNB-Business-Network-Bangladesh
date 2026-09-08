@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import UnifiedBackButton from './UnifiedBackButton';
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -57,6 +58,7 @@ import {
   getOnlinePresenceStatus,
   toBanglaDigits
 } from '../lib/locationService';
+import { useBackHandler } from '../lib/navigationManager';
 
 interface AgentScreenProps {
   user: {
@@ -173,6 +175,18 @@ export default function AgentScreen({ user, onBack, appConfig }: AgentScreenProp
   const [loadingApps, setLoadingApps] = useState<boolean>(false);
   const [userApplications, setUserApplications] = useState<any[]>([]);
   const [showApplyForm, setShowApplyForm] = useState<boolean>(false);
+
+  // Agent internal back handler
+  useBackHandler(() => {
+    if (reportingAgent) { setReportingAgent(null); return true; }
+    if (showFilterDropdown) { setShowFilterDropdown(false); return true; }
+    if (showApplyForm) { setShowApplyForm(false); return true; }
+    if (activeTab !== 'map') {
+      setActiveTab('map');
+      return true;
+    }
+    return false;
+  }, true, 25);
   const [successMessage, setSuccessMessage] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -195,7 +209,7 @@ export default function AgentScreen({ user, onBack, appConfig }: AgentScreenProp
     bn: {
       title: 'BNB এজেন্ট ম্যাপ',
       subtitle: 'বিশ্বজুড়ে আমাদের অনুমোদিত এজেন্ট নেটওয়ার্ক',
-      onlineBadge: '২৪/৭ লাইভ',
+      onlineBadge: '24/7 লাইভ',
       locateBtn: 'লোকেশন সনাক্ত করুন 📍',
       locateBtnActive: 'লোকেশন আপডেট করুন',
       locating: 'খোঁজা হচ্ছে...',
@@ -210,7 +224,7 @@ export default function AgentScreen({ user, onBack, appConfig }: AgentScreenProp
       allCountries: 'সব দেশ',
       allCities: 'সব শহর',
       onlineFilter: '🟢 অনলাইন',
-      nearbyFilter: '📍 নিকটস্থ (< ৫০ কি.মি.)',
+      nearbyFilter: '📍 নিকটস্থ (< 50 কি.মি.)',
       verifiedFilter: '☑️ ভেরিফাইড',
       activeAgentsCount: 'জন সক্রিয় এজেন্ট',
       agentCardStatusActive: 'Active',
@@ -314,7 +328,7 @@ export default function AgentScreen({ user, onBack, appConfig }: AgentScreenProp
 
   // Helpers for Bangla numbers and Geodistance calculations
   const toBanglaDigits = (numStr: string | number) => {
-    const banglaDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
+    const banglaDigits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
     return numStr.toString().replace(/[0-9]/g, (digit) => banglaDigits[parseInt(digit)]);
   };
 
@@ -1434,7 +1448,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
         }
       }
       
-      setSuccessMessage('আপনার এজেন্ট হওয়ার আবেদনটি সফলভাবে বাংলাদেশ কো-অপারেティブ কেন্দ্রীয় সার্ভারে দাখিল করা হয়েছে! আমাদের টিম ৩ কর্মদিবসের মধ্যে যোগাযোগ করবে।');
+      setSuccessMessage('আপনার এজেন্ট হওয়ার আবেদনটি সফলভাবে বাংলাদেশ কো-অপারেティブ কেন্দ্রীয় সার্ভারে দাখিল করা হয়েছে! আমাদের টিম 3 কর্মদিবসের মধ্যে যোগাযোগ করবে।');
       
       // Clear fields
       setDistrict('');
@@ -1791,13 +1805,20 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
       {/* ================= HEADER SECTION ================= */}
       <header className="sticky top-0 bg-white/95 backdrop-blur-md border-b border-slate-100 px-4 py-3 z-30 shadow-3xs flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <button 
-            type="button"
-            onClick={onBack}
-            className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition cursor-pointer"
-          >
-            <ChevronLeft className="w-5 h-5 font-bold" />
-          </button>
+          <UnifiedBackButton
+            onClick={() => {
+              if (reportingAgent) { setReportingAgent(null); return; }
+              if (showFilterDropdown) { setShowFilterDropdown(false); return; }
+              if (showApplyForm) { setShowApplyForm(false); return; }
+              if (activeTab !== 'map') {
+                setActiveTab('map');
+                return;
+              }
+              onBack();
+            }}
+            variant="dark"
+            title="পিছনে যান"
+          />
           <div>
             <h1 className="text-sm font-black text-slate-900 leading-tight">{t.title}</h1>
             <p className="text-[9px] font-extrabold text-[#0D9488] tracking-wide">{t.subtitle}</p>
@@ -2022,7 +2043,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                     <p className="text-[10px] text-amber-300 font-bold mt-0.5 flex items-center gap-1">
                       <span>⏱️ যেতে আনুমানিক সময়:</span>
                       <span className="bg-amber-400/20 text-amber-200 px-1.5 py-0.5 rounded font-black">
-                        {processedAgents[0].estTime || '১০ মিনিট'} ({processedAgents[0].travelType || 'ড্রাইভ'})
+                        {processedAgents[0].estTime || '10 মিনিট'} ({processedAgents[0].travelType || 'ড্রাইভ'})
                       </span>
                     </p>
                   </div>
@@ -2108,7 +2129,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                     <div className="space-y-3.5">
                       {/* 1. Name */}
                       <div>
-                        <label className="block text-[9.5px] font-black text-slate-750 uppercase tracking-wider mb-1">১. আবেদনকারীর পূর্ণ নাম</label>
+                        <label className="block text-[9.5px] font-black text-slate-750 uppercase tracking-wider mb-1">1. আবেদনকারীর পূর্ণ নাম</label>
                         <input
                           type="text"
                           required
@@ -2122,7 +2143,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                       <div className="grid grid-cols-2 gap-3">
                         {/* 2. Mobile Number */}
                         <div>
-                          <label className="block text-[9.5px] font-black text-slate-755 uppercase tracking-wider mb-1">২. সচল মোবাইল নম্বর</label>
+                          <label className="block text-[9.5px] font-black text-slate-755 uppercase tracking-wider mb-1">2. সচল মোবাইল নম্বর</label>
                           <input
                             type="tel"
                             required
@@ -2135,7 +2156,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
 
                         {/* 3. WhatsApp Number */}
                         <div>
-                          <label className="block text-[9.5px] font-black text-slate-755 uppercase tracking-wider mb-1">৩. হোয়াটসঅ্যাপ নম্বর</label>
+                          <label className="block text-[9.5px] font-black text-slate-755 uppercase tracking-wider mb-1">3. হোয়াটসঅ্যাপ নম্বর</label>
                           <input
                             type="tel"
                             value={whatsNumber}
@@ -2214,7 +2235,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                               }
                               const result = await geocodeTextOrLink(shopMapLink);
                               if (result) {
-                                alert(`সফলভাবে ম্যাপ লিংক থেকে ঠিকানা চিহ্নিত হয়েছে!\n\nজেলা: ${result.district}\nথানা/এলাকা: ${result.area}\n\nআপনার ফর্মের ৪ ও ৫ নম্বর ঘরে অটো তথ্য বসে গেছে!`);
+                                alert(`সফলভাবে ম্যাপ লিংক থেকে ঠিকানা চিহ্নিত হয়েছে!\n\nজেলা: ${result.district}\nথানা/এলাকা: ${result.area}\n\nআপনার ফর্মের 4 ও 5 নম্বর ঘরে অটো তথ্য বসে গেছে!`);
                               } else {
                                 alert('দোকানের গুগল ম্যাপ লিংক নিবন্ধিত হয়েছে! আপনার ঠিকানা স্বয়ংক্রিয়ভাবে ফর্মের সাথে সংযুক্ত হয়েছে।');
                               }
@@ -2230,7 +2251,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                         {/* 4. District */}
                         <div>
                           <div className="flex items-center justify-between mb-1">
-                            <label className="block text-[9.5px] font-black text-slate-750 uppercase tracking-wider">৪. নিজ জেলা / ডিভিশন</label>
+                            <label className="block text-[9.5px] font-black text-slate-750 uppercase tracking-wider">4. নিজ জেলা / ডিভিশন</label>
                             <span className="text-[8px] font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
                               🔒 অটো জিপিএস / লিংক
                             </span>
@@ -2251,7 +2272,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                         {/* 5. Local Area / Thana */}
                         <div>
                           <div className="flex items-center justify-between mb-1">
-                            <label className="block text-[9.5px] font-black text-slate-755 uppercase tracking-wider">৫. থানা / স্থানীয় এলাকা</label>
+                            <label className="block text-[9.5px] font-black text-slate-755 uppercase tracking-wider">5. থানা / স্থানীয় এলাকা</label>
                             <span className="text-[8px] font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
                               🔒 অটো জিপিএস / লিংক
                             </span>
@@ -2272,22 +2293,22 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
 
                       {/* 7. Experience */}
                       <div>
-                        <label className="block text-[9.5px] font-black text-slate-750 uppercase tracking-wider mb-1">৭. পূর্ববর্তী কাজের অভিজ্ঞতা</label>
+                        <label className="block text-[9.5px] font-black text-slate-750 uppercase tracking-wider mb-1">7. পূর্ববর্তী কাজের অভিজ্ঞতা</label>
                         <select
                           value={experience}
                           onChange={(e) => setExperience(e.target.value)}
                           className="block w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-[#0D9488] focus:bg-white focus:outline-none text-slate-800 font-bold"
                         >
                           <option value="নেই">কোনো অভিজ্ঞতা নেই</option>
-                          <option value="১ বছর">১ বছর বা তার কম</option>
-                          <option value="৩+ বছর">১ থেকে ৩ বছর পর্যন্ত</option>
-                          <option value="৫+ বছর">৫ বছরের বা তার বেশি অভিজ্ঞতা আছে</option>
+                          <option value="1 বছর">1 বছর বা তার কম</option>
+                          <option value="3+ বছর">1 থেকে 3 বছর পর্যন্ত</option>
+                          <option value="5+ বছর">5 বছরের বা তার বেশি অভিজ্ঞতা আছে</option>
                         </select>
                       </div>
 
                       {/* 8. Motivation */}
                       <div>
-                        <label className="block text-[9.5px] font-black text-slate-750 uppercase tracking-wider mb-1">৮. কেন আপনি আমাদের এজেন্ট হতে চান?</label>
+                        <label className="block text-[9.5px] font-black text-slate-750 uppercase tracking-wider mb-1">8. কেন আপনি আমাদের এজেন্ট হতে চান?</label>
                         <textarea
                           rows={3}
                           value={motivation}
@@ -2625,7 +2646,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                 <div className="w-7 h-7 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mx-auto mb-1">
                   <ShieldCheck className="w-4 h-4" />
                 </div>
-                <h4 className="text-xs font-black text-slate-800 leading-none">১০০%</h4>
+                <h4 className="text-xs font-black text-slate-800 leading-none">100%</h4>
                 <p className="text-[7.5px] text-slate-400 font-extrabold leading-none truncate block">ভেরিফাইড</p>
                 <p className="text-[7.5px] text-slate-400 font-extrabold leading-none truncate block">নিরাপদ লেনদেন</p>
               </div>

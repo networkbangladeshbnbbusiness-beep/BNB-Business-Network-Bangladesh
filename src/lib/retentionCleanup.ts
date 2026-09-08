@@ -10,7 +10,8 @@ export interface RetentionCleanupResult {
 }
 
 export const HISTORY_COLLECTIONS = [
-  { name: 'transactions', label: 'লেনদেন ইতিহাস (Transactions)' },
+  // NOTE: 'transactions' collection is STRICTLY and PERMANENTLY EXCLUDED from retention cleanup.
+  // Financial transaction ledgers are permanent audit logs and must never be deleted under any circumstances.
   { name: 'user_notifications', label: 'নোটিফিকেশন খাতা (Notifications)' },
   { name: 'notices', label: 'নোটিশ ও হিস্ট্রি (Notices)' },
   { name: 'corporate_feedbacks', label: 'ফিডব্যাক ও রিপোর্টস (Feedbacks)' },
@@ -56,6 +57,10 @@ export async function executeHistoryRetentionCleanup(
   const details: Record<string, number> = {};
 
   for (const item of HISTORY_COLLECTIONS) {
+    if (item.name === 'transactions') {
+      // Hard security barrier: Transactions are immutable lifetime financial ledger records and MUST NEVER be deleted!
+      continue;
+    }
     let deletedInCol = 0;
     try {
       const snap = await getDocs(collection(db, item.name));

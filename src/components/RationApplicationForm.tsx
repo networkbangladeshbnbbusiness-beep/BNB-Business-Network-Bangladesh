@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Image as ImageIcon, ShieldAlert, Check, Sparkles, Award } from 'lucide-react';
 import { db } from '../lib/firebase';
+import UnifiedBackButton from './UnifiedBackButton';
 import { collection, addDoc, doc, updateDoc } from 'firebase/firestore';
 
 export default function RationApplicationForm({ liveUser, onClose }: any) {
@@ -30,7 +31,7 @@ export default function RationApplicationForm({ liveUser, onClose }: any) {
       fee: 100,
       badge: 'সাধারণ মেম্বার',
       desc: 'সকল সাধারণ সদস্যরা আবেদন করতে পারবেন। বছরে একবার ফি প্রদান করতে হয়।',
-      benefit: '১ সেট মানসম্মত সাবসিডি রেশন সুবিধা।',
+      benefit: '1 সেট মানসম্মত সাবসিডি রেশন সুবিধা।',
       bgClass: 'from-slate-50 to-slate-200 border-slate-300 text-slate-800',
       activeBorderClass: 'ring-4 ring-slate-400 border-slate-500'
     },
@@ -40,7 +41,7 @@ export default function RationApplicationForm({ liveUser, onClose }: any) {
       fee: 150,
       badge: 'ডাবল রেশন সুবিধা',
       desc: 'নিবন্ধিত সাধারণ ও বিশেষ সদস্যরা আবেদন করতে পারেন। ডাবল রেশন কোটা পাবেন।',
-      benefit: 'ডাবল কোটায় ২ সেট সাবসিডি রেশন সামগ্রী সংগ্রহের সুযোগ।',
+      benefit: 'ডাবল কোটায় 2 সেট সাবসিডি রেশন সামগ্রী সংগ্রহের সুযোগ।',
       bgClass: 'from-amber-50 to-yellow-100/60 border-amber-300 text-amber-900',
       activeBorderClass: 'ring-4 ring-amber-400 border-amber-600'
     },
@@ -60,7 +61,7 @@ export default function RationApplicationForm({ liveUser, onClose }: any) {
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > 1.5 * 1024 * 1024) {
-        alert("অনুগ্রহ করে ১.৫ মেগাবাইটের কম সাইজের ছবি নির্বাচন করুন।");
+        alert("অনুগ্রহ করে 1.5 মেগাবাইটের কম সাইজের ছবি নির্বাচন করুন।");
         return;
       }
       const reader = new FileReader();
@@ -177,13 +178,13 @@ export default function RationApplicationForm({ liveUser, onClose }: any) {
   return (
     <div className="bg-slate-900/60 backdrop-blur-md min-h-screen p-4 text-slate-800 font-sans flex flex-col items-center justify-center relative select-none">
       {onClose && (
-        <button
-          type="button"
-          onClick={onClose}
-          className="absolute top-4 left-4 p-2.5 bg-white hover:bg-slate-50 text-slate-700 rounded-full shadow-lg border border-slate-200 cursor-pointer transition z-50"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <div className="absolute top-4 left-4 z-50">
+          <UnifiedBackButton
+            onClick={onClose}
+            variant="light"
+            title="পিছনে যান"
+          />
+        </div>
       )}
       <div className="max-w-xl w-full bg-white rounded-3xl border border-slate-200 p-6 md:p-8 shadow-2xl space-y-6 text-left my-8 overflow-y-auto max-h-[90vh]">
         
@@ -206,7 +207,7 @@ export default function RationApplicationForm({ liveUser, onClose }: any) {
 
         {/* THREE DISTINCT CARD CATEGORIES SELECTION BOXES */}
         <div className="space-y-3">
-          <label className="block text-xs font-black text-slate-700">১. আপনার ডিজিটাল রেশন কার্ডের ক্যাটাগরি বেছে নিন *</label>
+          <label className="block text-xs font-black text-slate-700">1. আপনার ডিজিটাল রেশন কার্ডের ক্যাটাগরি বেছে নিন *</label>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
             {cardCategories.map((category, idx) => {
               const isSelected = cardType === category.id;

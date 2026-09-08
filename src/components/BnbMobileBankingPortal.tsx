@@ -1,25 +1,35 @@
 import React, { useState, useEffect } from 'react';
 import { X, PlusCircle, Globe, Banknote, Send, ArrowRight, Home, FileText, ChevronLeft, CreditCard, CheckCircle2, AlertCircle, Copy, Search, HelpCircle, Eye, EyeOff, ChevronDown, Lightbulb, Flame, Droplet, Wifi, Tv, Smartphone, UploadCloud, Trash2, Image, Camera, ChevronRight, RotateCcw, Briefcase, Bookmark, Info } from 'lucide-react';
-import { User, Transaction, AppConfig, SavedBnbCard } from '../types';
+import { User, Transaction, AppConfig, SavedBnbCard, normalizePaidMonthsArray, getEffectiveBalance } from '../types';
 import { db } from '../lib/firebase';
 import { collection, addDoc, query, where, getDocs, getDoc, orderBy, limit, doc, updateDoc, onSnapshot, setDoc, deleteDoc, runTransaction } from 'firebase/firestore';
 import BnbAutoSalaryPay from './BnbAutoSalaryPay';
 import { BnbPaymentReceiptModal, PaymentReceiptData } from './BnbPaymentReceiptModal';
+import { useBackHandler } from '../lib/navigationManager';
+import UnifiedBackButton from './UnifiedBackButton';
 
 interface BnbMobileBankingPortalProps {
   user: User;
   onClose: () => void;
   syncLiveProfile: () => void;
   appConfig?: AppConfig;
+  initialTab?: 'dashboard' | 'add_money' | 'auto_add_money' | 'bnb_to_bnb' | 'send_money' | 'bill_pay' | 'khatiyan' | 'salary';
 }
 
 export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({ 
   user, 
   onClose, 
   syncLiveProfile,
-  appConfig 
+  appConfig,
+  initialTab
 }) => {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'add_money' | 'bnb_to_bnb' | 'send_money' | 'bill_pay' | 'khatiyan' | 'salary'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'add_money' | 'auto_add_money' | 'bnb_to_bnb' | 'send_money' | 'bill_pay' | 'khatiyan' | 'salary'>(initialTab || 'dashboard');
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
   const [loading, setLoading] = useState(false);
   const [txList, setTxList] = useState<Transaction[]>([]);
   const [successMsg, setSuccessMsg] = useState('');
@@ -49,37 +59,19 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
     setIsReceiptOpen(true);
   };
 
-  const pushedTabRef = React.useRef<string>('dashboard');
-
-  useEffect(() => {
+// Portal internal back handler
+  useBackHandler(() => {
+    if (isReceiptOpen) { setIsReceiptOpen(false); return true; }
+    if (showSaveCardModal) { setShowSaveCardModal(false); return true; }
+    if (showMonthPopup) { setShowMonthPopup(false); return true; }
     if (activeTab !== 'dashboard') {
-      if (pushedTabRef.current !== activeTab) {
-        pushedTabRef.current = activeTab;
-        window.history.pushState({ dashboardModal: 'bank', portalTab: activeTab }, '');
-      }
-    } else {
-      pushedTabRef.current = 'dashboard';
+      setActiveTab('dashboard');
+      return true;
     }
-  }, [activeTab]);
+    return false;
+  }, true, 25);
 
-  useEffect(() => {
-    const handlePopState = (event: PopStateEvent) => {
-      const state = event.state;
-      if (state && state.dashboardModal === 'bank') {
-        const targetTab = state.portalTab || 'dashboard';
-        if (activeTab !== targetTab) {
-          pushedTabRef.current = targetTab;
-          setActiveTab(targetTab);
-        }
-      }
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => {
-      window.removeEventListener('popstate', handlePopState);
-    };
-  }, [activeTab]);
-
-  // Mobile Financial Services (MFS) dynamic numbers helpers
+// Mobile Financial Services (MFS) dynamic numbers helpers
   const getOperatorNumber = (operator: string) => {
     if (operator === 'bkash') {
       if (appConfig?.mfsBkashActive === false) return '';
@@ -101,14 +93,14 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
   };
 
   const toEnglishDigits = (str: string) => {
-    const banglaDigits: Record<string, string> = { '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4', '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9' };
-    return str.replace(/[০-৯]/g, (w) => banglaDigits[w] || w);
+    const banglaDigits: Record<string, string> = { '0': '0', '1': '1', '2': '2', '3': '3', '4': '4', '5': '5', '6': '6', '7': '7', '8': '8', '9': '9' };
+    return str.replace(/[0-9]/g, (w) => banglaDigits[w] || w);
   };
 
   const toBanglaDigits = (str: string) => {
     const englishToBangla: Record<string, string> = {
-      '0': '০', '1': '১', '2': '২', '3': '৩', '4': '৪',
-      '5': '৫', '6': '৬', '7': '৭', '8': '৮', '9': '৯'
+      '0': '0', '1': '1', '2': '2', '3': '3', '4': '4',
+      '5': '5', '6': '6', '7': '7', '8': '8', '9': '9'
     };
     return str.replace(/[0-9]/g, (w) => englishToBangla[w] || w);
   };
@@ -116,10 +108,9 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
   const formattedDisplayNum = (num: string) => {
     const eng = toEnglishDigits(num).replace(/[^\d]/g, '');
     if (eng.length === 11) {
-      const formatted = `${eng.slice(0, 5)}-${eng.slice(5)}`;
-      return toBanglaDigits(formatted);
+      return `${eng.slice(0, 5)}-${eng.slice(5)}`;
     }
-    return toBanglaDigits(num);
+    return eng || num;
   };
 
   const cleanNumberForCopy = (numStr: string) => {
@@ -127,7 +118,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
     return engNum.replace(/[^\d]/g, '');
   };
 
-  // Remittance Rates Live Sync
+// Remittance Rates Live Sync
   const [remittanceRates, setRemittanceRates] = useState<any[]>([]);
   const [isMoreRatesOpen, setIsMoreRatesOpen] = useState(false);
   const [ratesSearchQuery, setRatesSearchQuery] = useState('');
@@ -136,12 +127,12 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
     const q = query(collection(db, 'remittance_rates'), orderBy('order', 'asc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       if (snapshot.empty) {
-        // Seed default rates on-the-fly
+// Seed default rates on-the-fly
         const defaults = [
-          { id: 'sa', flag: '🇸🇦', name: 'সৌদি রিয়াল (SAR)', value: 30, multiplier: '১ রিয়াল', order: 1 },
-          { id: 'ae', flag: '🇦🇪', name: 'দুবাই দিরহাম (AED)', value: 30, multiplier: '১ দিরহাম', order: 2 },
-          { id: 'kw', flag: '🇰🇼', name: 'কুয়েতি দিনার (KWD)', value: 360, multiplier: '১ দিনার', order: 3 },
-          { id: 'bh', flag: '🇧🇭', name: 'বাহরাইন দিনার (BHD)', value: 294, multiplier: '১ দিনার', order: 4 }
+          { id: 'sa', flag: '🇸🇦', name: 'সৌদি রিয়াল (SAR)', value: 30, multiplier: '1 রিয়াল', order: 1 },
+          { id: 'ae', flag: '🇦🇪', name: 'দুবাই দিরহাম (AED)', value: 30, multiplier: '1 দিরহাম', order: 2 },
+          { id: 'kw', flag: '🇰🇼', name: 'কুয়েতি দিনার (KWD)', value: 360, multiplier: '1 দিনার', order: 3 },
+          { id: 'bh', flag: '🇧🇭', name: 'বাহরাইন দিনার (BHD)', value: 294, multiplier: '1 দিনার', order: 4 }
         ];
         defaults.forEach(async (d) => {
           await setDoc(doc(db, 'remittance_rates', d.id), d);
@@ -159,7 +150,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
     return () => unsubscribe();
   }, []);
 
-  // Real-time notifications for live card request alert
+// Real-time notifications for live card request alert
   const [portalNotifications, setPortalNotifications] = useState<any[]>([]);
 
   useEffect(() => {
@@ -179,9 +170,9 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
     return () => unsubscribe();
   }, [user]);
 
-  // 1. Add Money States
+// 1. Add Money States
   const [addMoneyOperator, setAddMoneyOperator] = useState<'bkash' | 'nagad' | 'rocket' | 'upay' | null>(null);
-  const [addMoneyChannel, setAddMoneyChannel] = useState<'local_mobile' | 'bank_deposit' | 'foreign_bank'>('local_mobile');
+  const [addMoneyChannel, setAddMoneyChannel] = useState<'local_mobile' | 'bank_deposit' | 'foreign_bank' | 'online_payment'>('local_mobile');
   const [selectedBankId, setSelectedBankId] = useState<string | null>(null);
   const [depositAmount, setDepositAmount] = useState('');
   const [cashback, setCashback] = useState(0);
@@ -236,7 +227,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
     };
     initializeCard();
   }, [user, syncLiveProfile]);
-  // 1.5 BNB to BNB States
+// 1.5 BNB to BNB States
   const [bnbSubTab, setBnbSubTab] = useState<'send' | 'card_add'>('send');
   const [bnbSendReceiver, setBnbSendReceiver] = useState('');
   const [bnbSendAmount, setBnbSendAmount] = useState('');
@@ -260,33 +251,33 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
   const [cardAddPin, setCardAddPin] = useState('');
   const [cardAddAmount, setCardAddAmount] = useState('');
 
-  // Card Add Money OTP Security state variables
+// Card Add Money OTP Security state variables
   const [cardOtpSent, setCardOtpSent] = useState(false);
   const [cardOtpCode, setCardOtpCode] = useState('');
   const [userEnteredOtp, setUserEnteredOtp] = useState('');
   const [validatedCardOwnerData, setValidatedCardOwnerData] = useState<any>(null);
   const [validatedCardOwnerUid, setValidatedCardOwnerUid] = useState('');
 
-  // Favorite / Saved Cards state
+// Favorite / Saved Cards state
   const [saveCardNicknameInput, setSaveCardNicknameInput] = useState('');
   const [showSaveCardModal, setShowSaveCardModal] = useState(false);
   const [previewQrModalUrl, setPreviewQrModalUrl] = useState<string | null>(null);
 
   const handleSaveCurrentCardToFavorites = async (nickname?: string) => {
     if (!cardAddNum || !cardAddNum.trim()) {
-      setErrorMsg('প্রথমে সেভ করতে চাওয়া ১৬ সংখ্যার কার্ড নম্বরটি লিখুন।');
+      setErrorMsg('প্রথমে সেভ করতে চাওয়া 16 সংখ্যার কার্ড নম্বরটি লিখুন।');
       return;
     }
     const cleanNum = cardAddNum.replace(/\s+/g, '');
     if (cleanNum.length < 16) {
-      setErrorMsg('সঠিক ১৬ সংখ্যার কার্ড নম্বর লিখুন।');
+      setErrorMsg('সঠিক 16 সংখ্যার কার্ড নম্বর লিখুন।');
       return;
     }
     const label = nickname && nickname.trim() ? nickname.trim() : (saveCardNicknameInput.trim() || 'প্রিয় কার্ড');
     const currentSaved = user.savedBnbCards || [];
     
     if (currentSaved.length >= 5) {
-      setErrorMsg('আপনি সর্বোচ্চ ৫টি প্রিয় কার্ড সেভ করে রাখতে পারবেন। কোনো একটি কার্ড মুছে নতুন যোগ করুন।');
+      setErrorMsg('আপনি সর্বোচ্চ 5টি প্রিয় কার্ড সেভ করে রাখতে পারবেন। কোনো একটি কার্ড মুছে নতুন যোগ করুন।');
       return;
     }
 
@@ -338,7 +329,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
   const [bankStep, setBankStep] = useState<1 | 2>(1);
   const [foreignBankStep, setForeignBankStep] = useState<1 | 2>(1);
 
-  // 2. Send Money States
+// 2. Send Money States
   const SAMITY_MONTH_LIST = [
     { id: 'jan', name: 'জানুয়ারি' },
     { id: 'feb', name: 'ফেব্রুয়ারি' },
@@ -370,7 +361,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
   const [sendWhatsapp, setSendWhatsapp] = useState('');
   const [sendAmount, setSendAmount] = useState('');
   
-  // Charge Calculation State
+// Charge Calculation State
   const [chargeInfo, setChargeInfo] = useState<{ flat: number, service: number, total: number }>({ flat: 0, service: 0, total: 0 });
 
   useEffect(() => {
@@ -404,7 +395,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
     setChargeInfo({ flat, service, total: flat + service });
   }, [sendAmount, sendMoneyChannel, appConfig]);
 
-  // 3. Bill Pay States
+// 3. Bill Pay States
   const [billCategory, setBillCategory] = useState<'electricity' | 'gas' | 'water' | 'internet' | 'tv' | 'telephone' | null>(null);
   const [billSearchQuery, setBillSearchQuery] = useState('');
   const [selectedBillProvider, setSelectedBillProvider] = useState<{ id: string; name: string; label: string; enLabel?: string; iconColor?: string } | null>(null);
@@ -414,7 +405,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
   const [billAmount, setBillAmount] = useState('');
   const [billImage, setBillImage] = useState<string>('');
 
-  // Fetch Khatiyan Transactions
+// Fetch Khatiyan Transactions
   const fetchTransactions = async () => {
     try {
       if (!user.uid) return;
@@ -430,8 +421,8 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
         const data = docSnap.data();
         docs.push({ id: docSnap.id, ...data } as any);
       });
-      // Filter for banking related transactions
-      const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exchange', 'transfer', 'received_transfer'];
+// Filter for banking related transactions
+const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exchange', 'transfer', 'received_transfer'];
       setTxList(docs.filter(t => bankingTypes.includes(t.type)));
     } catch (e) {
       console.error("Error fetching transactions: ", e);
@@ -480,13 +471,15 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
     );
   };
 
-  const handleAddMoneySubmit = (e: React.FormEvent) => {
+  const handleAddMoneySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
     setSuccessMsg('');
 
+    if (loading) return;
+
     if (!depositAmount || Number(depositAmount) < 10) {
-      setErrorMsg('সর্বনিম্ন জমার পরিমাণ ১০ BDT হতে হবে।');
+      setErrorMsg('সর্বনিম্ন জমার পরিমাণ 10 BDT হতে হবে।');
       return;
     }
     if (!senderNumber) {
@@ -494,12 +487,12 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
       return;
     }
     if (!trxId) {
-      setErrorMsg('লাস্ট ৪ সংখ্যা অথবা ট্রানজেকশন আইডি (TrxID) লিখুন।');
+      setErrorMsg('লাস্ট 4 সংখ্যা অথবা ট্রানজেকশন আইডি (TrxID) লিখুন।');
       return;
     }
-    const userPin = user?.pin ? String(user.pin).trim() : '1234';
-    if (securityPin.trim() !== userPin && securityPin.trim() !== '1234') {
-      setErrorMsg('ভুল সিকিউরিটি পিন! সঠিক ৪ সংখ্যার ওয়ালেট পিন প্রদান করুন।');
+    const userPin = user?.pin ? String(user.pin).trim() : '';
+    if (!userPin || securityPin.trim() !== userPin) {
+      setErrorMsg('ভুল সিকিউরিটি পিন! সঠিক 4 সংখ্যার ওয়ালেট পিন প্রদান করুন।');
       return;
     }
 
@@ -525,66 +518,82 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
     const currentTxId = trxId.trim() || `ADD${Date.now().toString().slice(-10)}`;
     const currentSender = senderNumber.trim() || user.phone || '';
 
-    // Bullet-fast instant response ⚡
-    setSuccessMsg(isForeignBank ? 'আপনার প্রবাস ব্যাংক ডিপোজিট রিকোয়েস্ট সফলভাবে সাবমিট করা হয়েছে!' : 'আপনার অ্যাড মানি রিকোয়েস্ট সফলভাবে সাবমিট করা হয়েছে!');
-    setReceiptModalData({
-      typeLabel: `অ্যাড মানি (${methodLabel})`,
-      transactionId: currentTxId,
-      amount: amountNum,
-      fee: 0,
-      totalAmount: amountNum,
-      status: 'pending',
-      beneficiaryName: user.name || 'BNB MEMBER',
-      beneficiaryAccount: user.memberId || user.phone,
-      senderPhone: currentSender,
-      transactionDate: new Date().toLocaleString('bn-BD', { day: 'numeric', month: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: true })
-    });
-    setIsReceiptOpen(true);
-    setDepositAmount('');
-    setSenderNumber('');
-    setTrxId('');
-    setSecurityPin('');
-    setAddMoneyOperator(null);
-    setSelectedBankId(null);
-    setBankStep(1);
+    // Check if this TrxID is already submitted and pending to avoid duplicate requests
+    if (user?.uid && currentTxId) {
+      const existingPending = (txList || []).find(t => 
+        t.userId === user.uid && 
+        (t.status === 'pending' || (t as any).status === 'processing') && 
+        (t.trxId?.toLowerCase() === currentTxId.toLowerCase() || (t as any).transactionId?.toLowerCase() === currentTxId.toLowerCase())
+      );
+      if (existingPending) {
+        setErrorMsg('এই ট্রানজেকশন আইডি (TrxID) দিয়ে ইতিপূর্বে একটি রিকোয়েস্ট জমা দেওয়া হয়েছে। অনুগ্রহ করে এডমিনের অনুমোদনের অপেক্ষা করুন।');
+        return;
+      }
+    }
 
-    // Fire background sync without keeping UI blocked
-    Promise.all([
-      addDoc(collection(db, 'transactions'), {
-        userId: user.uid,
-        userName: user.name || 'Anonymous User',
-        userPhone: user.phone || '',
-        memberId: user.memberId || 'BNB000000',
-        amount: amountNum,
-        type: txType,
-        status: 'pending',
-        paymentMethod: methodLabel,
-        phone: currentSender,
-        senderPhone: currentSender,
-        senderInfo: currentSender,
-        accountNumber: currentSender,
-        trxId: currentTxId,
+    setLoading(true);
+    try {
+      setSuccessMsg(isForeignBank ? 'আপনার প্রবাস ব্যাংক ডিপোজিট রিকোয়েস্ট সফলভাবে সাবমিট করা হয়েছে!' : 'আপনার অ্যাড মানি রিকোয়েস্ট সফলভাবে সাবমিট করা হয়েছে!');
+      setReceiptModalData({
+        typeLabel: `অ্যাড মানি (${methodLabel})`,
         transactionId: currentTxId,
-        receiptNo: currentTxId,
-        createdAt: new Date().toISOString(),
-        description: isForeignBank
-          ? `${methodLabel} (আইবান রেমিট্যান্স) এর মাধ্যমে ৳${amountNum.toLocaleString('bn-BD')} প্রবাস ব্যাংক ডিপোজিট রিকোয়েস্ট (প্রেরক: ${currentSender}, TrxID: ${currentTxId})`
-          : `${methodLabel} এর মাধ্যমে ৳${amountNum.toLocaleString('bn-BD')} অ্যাড মানি রিকোয়েস্ট (প্রেরক: ${currentSender}, TrxID: ${currentTxId})`
-      }),
-      addDoc(collection(db, 'user_notifications'), {
-        userId: user.uid,
-        title: isForeignBank ? 'প্রবাস ব্যাংক ডিপোজিট রিকোয়েস্ট সাবমিট হয়েছে' : 'অ্যাড মানি রিকোয়েস্ট সাবমিট হয়েছে',
-        message: isForeignBank
-          ? `আপনার ৳${amountNum.toLocaleString('bn-BD')} এর প্রবাস ব্যাংক ডিপোজিট রিকোয়েস্টটি সফলভাবে সাবমিট হয়েছে। এডমিন ভাউচার যাচাই করে ব্যালেন্স যোগ করবেন।`
-          : `আপনার ৳${amountNum.toLocaleString('bn-BD')} এর অ্যাড মানি রিকোয়েস্টটি সফলভাবে সাবমিট হয়েছে। এডমিন যাচাই করে ব্যালেন্স যোগ করবে।`,
-        read: false,
-        createdAt: new Date().toISOString()
-      })
-    ]).then(() => {
+        amount: amountNum,
+        fee: 0,
+        totalAmount: amountNum,
+        status: 'pending',
+        beneficiaryName: user.name || 'BNB MEMBER',
+        beneficiaryAccount: user.memberId || user.phone,
+        senderPhone: currentSender,
+        transactionDate: new Date().toLocaleString('bn-BD', { day: 'numeric', month: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: true })
+      });
+      setIsReceiptOpen(true);
+      setDepositAmount('');
+      setSenderNumber('');
+      setTrxId('');
+      setSecurityPin('');
+      setAddMoneyOperator(null);
+      setSelectedBankId(null);
+      setBankStep(1);
+
+      await Promise.all([
+        addDoc(collection(db, 'transactions'), {
+          userId: user.uid,
+          userName: user.name || 'Anonymous User',
+          userPhone: user.phone || '',
+          memberId: user.memberId || 'BNB000000',
+          amount: amountNum,
+          type: txType,
+          status: 'pending',
+          paymentMethod: methodLabel,
+          phone: currentSender,
+          senderPhone: currentSender,
+          senderInfo: currentSender,
+          accountNumber: currentSender,
+          trxId: currentTxId,
+          transactionId: currentTxId,
+          receiptNo: currentTxId,
+          createdAt: new Date().toISOString(),
+          description: isForeignBank
+            ? `${methodLabel} (আইবান রেমিট্যান্স) এর মাধ্যমে ৳${amountNum.toLocaleString('bn-BD')} প্রবাস ব্যাংক ডিপোজিট রিকোয়েস্ট (প্রেরক: ${currentSender}, TrxID: ${currentTxId})`
+            : `${methodLabel} এর মাধ্যমে ৳${amountNum.toLocaleString('bn-BD')} অ্যাড মানি রিকোয়েস্ট (প্রেরক: ${currentSender}, TrxID: ${currentTxId})`
+        }),
+        addDoc(collection(db, 'user_notifications'), {
+          userId: user.uid,
+          title: isForeignBank ? 'প্রবাস ব্যাংক ডিপোজিট রিকোয়েস্ট সাবমিট হয়েছে' : 'অ্যাড মানি রিকোয়েস্ট সাবমিট হয়েছে',
+          message: isForeignBank
+            ? `আপনার ৳${amountNum.toLocaleString('bn-BD')} এর প্রবাস ব্যাংক ডিপোজিট রিকোয়েস্টটি সফলভাবে সাবমিট হয়েছে। এডমিন ভাউচার যাচাই করে ব্যালেন্স যোগ করবেন।`
+            : `আপনার ৳${amountNum.toLocaleString('bn-BD')} এর অ্যাড মানি রিকোয়েস্টটি সফলভাবে সাবমিট হয়েছে। এডমিন যাচাই করে ব্যালেন্স যোগ করবে।`,
+          read: false,
+          createdAt: new Date().toISOString()
+        })
+      ]);
       if (syncLiveProfile) syncLiveProfile();
-    }).catch((err) => {
-      console.error("Background sync error:", err);
-    });
+    } catch (err: any) {
+      console.error("Add money submit error:", err);
+      setErrorMsg('রিকোয়েস্ট সাবমিট করতে সমস্যা হয়েছে: ' + (err?.message || ''));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleBnbSendSubmit = async (e: React.FormEvent) => {
@@ -604,7 +613,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
     }
 
     if (amountNum < 10) {
-      setErrorMsg('সর্বনিম্ন ১০ টাকা স্থানান্তর করতে পারবেন।');
+      setErrorMsg('সর্বনিম্ন 10 টাকা স্থানান্তর করতে পারবেন।');
       return;
     }
 
@@ -614,7 +623,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
     }
 
     if (user.pin !== bnbSendPin.trim()) {
-      setErrorMsg('ভুল সিকিউরিটি পিন! সঠিক ৪ সংখ্যার ওয়ালেট পিন প্রদান করুন।');
+      setErrorMsg('ভুল সিকিউরিটি পিন! সঠিক 4 সংখ্যার ওয়ালেট পিন প্রদান করুন।');
       return;
     }
 
@@ -627,7 +636,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
       const isVirtualEndingInZero = trimmedReceiver.endsWith('0') && trimmedReceiver.length >= 10;
       const cleanReceiver = isVirtualEndingInZero ? trimmedReceiver.slice(0, -1) : trimmedReceiver;
 
-      // Fast query memberId, phone, or virtual phone/memberId in parallel
+// Fast query memberId, phone, or virtual phone/memberId in parallel
       const q1 = query(collection(db, 'users'), where('memberId', '==', trimmedReceiver));
       const q2 = query(collection(db, 'users'), where('phone', '==', trimmedReceiver));
       const q3 = isVirtualEndingInZero ? query(collection(db, 'users'), where('memberId', '==', cleanReceiver)) : null;
@@ -766,8 +775,8 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
         });
       });
 
-      // Update local memory and UI state after transaction succeeds 100%
-      user.balance = finalSenderBal;
+// Update local memory and UI state after transaction succeeds 100%
+// user.balance = finalSenderBal;
       if (syncLiveProfile) syncLiveProfile();
 
       const generatedTxId = `LID${Date.now().toString().slice(-10)}`;
@@ -807,22 +816,22 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
       return;
     }
     if (!cardAddAmount || amountNum < 10) {
-      setErrorMsg('সর্বনিম্ন অ্যাড মানি পরিমাণ ১০ BDT হতে হবে।');
+      setErrorMsg('সর্বনিম্ন অ্যাড মানি পরিমাণ 10 BDT হতে হবে।');
       return;
     }
     if (!cardAddPin || !cardAddPin.trim()) {
-      setErrorMsg('আপনার ৪ সংখ্যার ওয়ালেট পিন প্রদান করুন।');
+      setErrorMsg('আপনার 4 সংখ্যার ওয়ালেট পিন প্রদান করুন।');
       return;
     }
 
-    // Fast pre-validation before loading state
+// Fast pre-validation before loading state
     if (cardOtpSent) {
       if (!userEnteredOtp || userEnteredOtp.trim().length < 6) {
-        setErrorMsg('অনুগ্রহ করে ৬ সংখ্যার ওটিপি কোডটি প্রবেশ করান।');
+        setErrorMsg('অনুগ্রহ করে 6 সংখ্যার ওটিপি কোডটি প্রবেশ করান।');
         return;
       }
       if (userEnteredOtp.trim() !== cardOtpCode) {
-        setErrorMsg('ভুল ওটিপি কোড! অনুগ্রহ করে সঠিক ৬ সংখ্যার ওটিপি কোডটি প্রদান করুন।');
+        setErrorMsg('ভুল ওটিপি কোড! অনুগ্রহ করে সঠিক 6 সংখ্যার ওটিপি কোডটি প্রদান করুন।');
         return;
       }
     }
@@ -831,7 +840,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
 
     try {
       if (cardOtpSent) {
-        // OTP already verified! Process transaction instantly ⚡
+// OTP already verified! Process transaction instantly ⚡
         const cardOwnerUid = validatedCardOwnerUid;
         const cardOwnerData = validatedCardOwnerData || {};
 
@@ -852,7 +861,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
         const freshReceiverBal = Number(user.balance || 0);
         const updatedReceiverBal = freshReceiverBal + amountNum;
 
-        // Instant optimistic update ⚡
+// Instant optimistic update ⚡
         if (cardOwnerUid) {
           const ownerRef = doc(db, 'users', cardOwnerUid);
           updateDoc(ownerRef, {
@@ -882,7 +891,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
         setIsReceiptOpen(true);
         setSuccessMsg(`অভিনন্দন! ৳${amountNum} টাকা কার্ড পেমেন্টের মাধ্যমে এডমানি সফলভাবে সম্পন্ন হয়েছে।`);
 
-        // Reset form immediately
+// Reset form immediately
         setCardAddNum('');
         setCardAddExpiry('');
         setExpiryMonth('');
@@ -897,7 +906,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
         setValidatedCardOwnerUid('');
         setLoading(false);
 
-        // Async non-blocking database persistence
+// Async non-blocking database persistence
         const nowIso = new Date().toISOString();
         const ownerRef = doc(db, 'users', cardOwnerUid);
         const receiverRef = doc(db, 'users', user.uid);
@@ -958,7 +967,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
         return;
       }
 
-      // Step 1: Find Card Owner
+// Step 1: Find Card Owner
       const cleanCardNum = cardAddNum.replace(/\s+/g, '');
       let cardOwnerData: any = null;
       let cardOwnerUid = '';
@@ -996,7 +1005,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
       }
 
       if (cardAddCvv && cardOwnerData.bnbCardCvv !== cardAddCvv.trim()) {
-        setErrorMsg('ভুল CVV নম্বর! কার্ডের সঠিক ৩ সংখ্যার CVV দিন।');
+        setErrorMsg('ভুল CVV নম্বর! কার্ডের সঠিক 3 সংখ্যার CVV দিন।');
         setLoading(false);
         return;
       }
@@ -1008,8 +1017,8 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
         return;
       }
 
-      if (cardOwnerData.pin !== cardAddPin.trim() && user.pin !== cardAddPin.trim()) {
-        setErrorMsg('ভুল সিকিউরিটি পিন! সঠিক ৪ সংখ্যার পিন প্রদান করুন।');
+      if (cardOwnerData.pin !== cardAddPin.trim()) {
+        setErrorMsg('ভুল সিকিউরিটি পিন! সঠিক 4 সংখ্যার পিন প্রদান করুন।');
         setLoading(false);
         return;
       }
@@ -1023,17 +1032,17 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
       const isOtpLocked = cardOwnerData.bnbCardOtpLocked !== false;
 
       if (isOtpLocked) {
-        // Generate OTP & send instantly ⚡
+// Generate OTP & send instantly ⚡
         const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
         setCardOtpCode(generatedOtp);
         setCardOtpSent(true);
         setValidatedCardOwnerData(cardOwnerData);
         setValidatedCardOwnerUid(cardOwnerUid);
 
-        setSuccessMsg('কার্ড মালিকের ইন-অ্যাপ নোটিফিকেশন ও ভার্চুয়াল কার্ডে ৬ সংখ্যার গোপন ওটিপি পাঠানো হয়েছে।');
+        setSuccessMsg('কার্ড মালিকের ইন-অ্যাপ নোটিফিকেশন ও ভার্চুয়াল কার্ডে 6 সংখ্যার গোপন ওটিপি পাঠানো হয়েছে।');
         setLoading(false);
 
-        // Instant background update to Card Owner user document for <1 second real-time card overlay display
+// Instant background update to Card Owner user document for <1 second real-time card overlay display
         const now = new Date();
         const formattedTime = `${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()} ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
 
@@ -1048,8 +1057,8 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
         addDoc(collection(db, 'user_notifications'), {
           userId: cardOwnerUid,
           title: '🔑 কার্ড পেমেন্ট ওটিপি (OTP Security Alert)',
-          body: `আপনার ভার্চুয়াল কার্ড থেকে ৳${amountNum.toFixed(2)} মেম্বার ${user.name} (ID: ${user.memberId}) এর অ্যাকাউন্টে অ্যাডমানি করার জন্য রিকুয়েস্ট করা হয়েছে। ভেরিফিকেশন ওটিপি (OTP): ${generatedOtp}। তারিখ ও সময়: ${formattedTime}। পেমেন্ট সচল করতে এই ৬ সংখ্যার ওটিপি দিন।`,
-          message: `আপনার ভার্চুয়াল কার্ড থেকে ৳${amountNum.toFixed(2)} মেম্বার ${user.name} (ID: ${user.memberId}) এর অ্যাকাউন্টে অ্যাডমানি করার জন্য রিকুয়েস্ট করা হয়েছে। ভেরিফিকেশন ওটিপি (OTP): ${generatedOtp}। তারিখ ও সময়: ${formattedTime}। পেমেন্ট সচল করতে এই ৬ সংখ্যার ওটিপি দিন।`,
+          body: `আপনার ভার্চুয়াল কার্ড থেকে ৳${amountNum.toFixed(2)} মেম্বার ${user.name} (ID: ${user.memberId}) এর অ্যাকাউন্টে অ্যাডমানি করার জন্য রিকুয়েস্ট করা হয়েছে। ভেরিফিকেশন ওটিপি (OTP): ${generatedOtp}। তারিখ ও সময়: ${formattedTime}। পেমেন্ট সচল করতে এই 6 সংখ্যার ওটিপি দিন।`,
+          message: `আপনার ভার্চুয়াল কার্ড থেকে ৳${amountNum.toFixed(2)} মেম্বার ${user.name} (ID: ${user.memberId}) এর অ্যাকাউন্টে অ্যাডমানি করার জন্য রিকুয়েস্ট করা হয়েছে। ভেরিফিকেশন ওটিপি (OTP): ${generatedOtp}। তারিখ ও সময়: ${formattedTime}। পেমেন্ট সচল করতে এই 6 সংখ্যার ওটিপি দিন।`,
           read: false,
           isPersonal: true,
           category: 'admin_msg',
@@ -1059,7 +1068,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
         return;
       }
 
-      // If OTP lock is OFF, process payment directly
+// If OTP lock is OFF, process payment directly
       const freshOwnerBal = Number(cardOwnerData.balance || 0);
       if (freshOwnerBal < amountNum) {
         setErrorMsg(`কার্ড মালিকের অ্যাকাউন্টে পর্যাপ্ত ব্যালেন্স নেই! (বর্তমান ব্যালেন্স ৳${freshOwnerBal.toLocaleString('bn-BD')} BDT)`);
@@ -1181,11 +1190,11 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
 
     const amountNum = Number(sendAmount);
     if (!sendAmount || amountNum < 10) {
-      setErrorMsg('সর্বনিম্ন স্থানান্তরের পরিমাণ ১০ BDT হতে হবে।');
+      setErrorMsg('সর্বনিম্ন স্থানান্তরের পরিমাণ 10 BDT হতে হবে।');
       return;
     }
 
-    // Calculate total required including charges for mobile bank or bank wallet channels
+// Calculate total required including charges for mobile bank or bank wallet channels
     let chargeTotal = 0;
     if (sendMoneyChannel === 'mobile_bank' || sendMoneyChannel === 'bank_wallet') {
       chargeTotal = chargeInfo.total;
@@ -1197,7 +1206,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
       return;
     }
     if (securityPin !== user.pin) {
-      setErrorMsg('ভুল সিকিউরিটি পিন! সঠিক ৪ সংখ্যার পিন প্রদান করুন।');
+      setErrorMsg('ভুল সিকিউরিটি পিন! সঠিক 4 সংখ্যার পিন প্রদান করুন।');
       return;
     }
 
@@ -1232,7 +1241,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
         let targetDoc = !snap1.empty ? snap1.docs[0] : (!snap2.empty ? snap2.docs[0] : (!snap3.empty ? snap3.docs[0] : null));
 
         if (!targetDoc) {
-          setErrorMsg('গ্রহীতা মেম্বার খুঁজে পাওয়া যায়নি! সঠিক মেম্বার আইডি বা ১২-সংখ্যার নম্বর দিন।');
+          setErrorMsg('গ্রহীতা মেম্বার খুঁজে পাওয়া যায়নি! সঠিক মেম্বার আইডি বা 12-সংখ্যার নম্বর দিন।');
           setLoading(false);
           return;
         }
@@ -1265,26 +1274,28 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
           const sData = senderSnap.data();
           const rData = receiverSnap.data();
 
-          const currentSenderBal = sData.balance || 0;
+          const currentSenderBal = getEffectiveBalance(sData);
           if (currentSenderBal < totalRequired) {
             throw new Error(`পর্যাপ্ত ওয়ালেট ব্যালেন্স নেই! প্রয়োজন ৳ ${totalRequired.toLocaleString('bn-BD')} BDT।`);
           }
 
           finalSenderBal = currentSenderBal - totalRequired;
-          transaction.update(senderRef, { balance: finalSenderBal });
+          transaction.update(senderRef, { balance: finalSenderBal, mainBalance: finalSenderBal });
 
           if (isSamityAutoAcc) {
-            // Deposit directly into receiver's Samity Savings Fund
-            const finalReceiverSavings = (rData.savings || 0) + amountNum;
+// Deposit directly into receiver's Samity Savings Fund
+            const finalReceiverSavings = (Number(rData.savings) || 0) + amountNum;
             const currentPaidMonths = rData.samityPaidMonths || [];
-            const updatedPaidMonths = Array.from(new Set([...currentPaidMonths, sendSelectedMonth]));
+            const targetRate = Number(rData.monthlySavingsTarget) || 1000;
+            const updatedPaidMonths = normalizePaidMonthsArray([...currentPaidMonths, sendSelectedMonth], finalReceiverSavings, targetRate);
 
             transaction.update(receiverRef, {
               savings: finalReceiverSavings,
+              dpsBalance: finalReceiverSavings,
               samityPaidMonths: updatedPaidMonths
             });
 
-            finalReceiverBal = rData.balance || 0;
+            finalReceiverBal = getEffectiveBalance(rData);
 
             const txSenderRef = doc(collection(db, 'transactions'));
             const txReceiverRef = doc(collection(db, 'transactions'));
@@ -1305,7 +1316,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
               paymentMethod: 'BNB 12-Digit Auto Funding',
               phone: rData.phone || sendTargetId,
               createdAt: new Date().toISOString(),
-              description: `মেম্বার ${rData.name || ''} (${rData.memberId || ''})-এর ১২-সংখ্যার অটো অ্যাকাউন্টে ${selMonthObj.name} মাসের সমিতি সঞ্চয় ৳${amountNum.toLocaleString('bn-BD')} জমা সফল`
+              description: `মেম্বার ${rData.name || ''} (${rData.memberId || ''})-এর 12-সংখ্যার অটো অ্যাকাউন্টে ${selMonthObj.name} মাসের সমিতি সঞ্চয় ৳${amountNum.toLocaleString('bn-BD')} জমা সফল`
             });
 
             transaction.set(txReceiverRef, {
@@ -1321,13 +1332,13 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
               paymentMethod: 'BNB 12-Digit Auto Funding',
               phone: user.phone,
               createdAt: new Date().toISOString(),
-              description: `মেম্বার ${user.name} (${user.phone}) কর্তৃক ১২-সংখ্যার অটো একাউন্টের মাধ্যমে ${selMonthObj.name} মাসের সমিতি সঞ্চয় ৳${amountNum.toLocaleString('bn-BD')} জমা প্রাপ্তি`
+              description: `মেম্বার ${user.name} (${user.phone}) কর্তৃক 12-সংখ্যার অটো একাউন্টের মাধ্যমে ${selMonthObj.name} মাসের সমিতি সঞ্চয় ৳${amountNum.toLocaleString('bn-BD')} জমা প্রাপ্তি`
             });
 
             transaction.set(notifReceiverRef, {
               userId: receiverUid,
               title: `✅ ${selMonthObj.name} মাসের সমিতি সঞ্চয় জমা প্রাপ্তি`,
-              body: `আপনার ১২-সংখ্যার অটো নম্বর (${trimmedTarget}) এ ${user.name} (${user.phone}) কর্তৃক ${selMonthObj.name} মাসের সঞ্চয় ৳${amountNum.toLocaleString('bn-BD')} জমা হয়েছে।`,
+              body: `আপনার 12-সংখ্যার অটো নম্বর (${trimmedTarget}) এ ${user.name} (${user.phone}) কর্তৃক ${selMonthObj.name} মাসের সঞ্চয় ৳${amountNum.toLocaleString('bn-BD')} জমা হয়েছে।`,
               read: false,
               isPersonal: true,
               isTransactionHistory: true,
@@ -1336,9 +1347,9 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
             });
 
           } else {
-            // Standard wallet send money
-            finalReceiverBal = (rData.balance || 0) + amountNum;
-            transaction.update(receiverRef, { balance: finalReceiverBal });
+// Standard wallet send money
+            finalReceiverBal = getEffectiveBalance(rData) + amountNum;
+            transaction.update(receiverRef, { balance: finalReceiverBal, mainBalance: finalReceiverBal });
 
             const txSenderRef = doc(collection(db, 'transactions'));
             const txReceiverRef = doc(collection(db, 'transactions'));
@@ -1454,11 +1465,16 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
           totalDeducted: totalRequired,
           postBalance: finalBal,
           type: 'withdraw',
+          typeLabel: 'উইথড্র / ক্যাশআউট',
           status: 'pending',
           paymentMethod: paymentMethodString,
           phone: sendTargetNumber,
+          senderPhone: sendTargetNumber,
+          accountNumber: sendTargetNumber,
+          accountTitle: user.name || '',
+          accountName: user.name || '',
           createdAt: new Date().toISOString(),
-          description: descString
+          description: `${opName === 'BKASH' ? 'বিকাশ' : opName === 'NAGAD' ? 'নগদ' : opName === 'ROCKET' ? 'রকেট' : 'উপায়'} (${sendTargetNumber}) নম্বরে ৳${amountNum.toLocaleString('bn-BD')} ${opType} স্থানান্তর আবেদন`
         })
       );
     } else if (sendMoneyChannel === 'bank_wallet') {
@@ -1468,14 +1484,14 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
       }
       const allBanks = appConfig?.paymentBanks || [];
       const selectedBankObj = allBanks.find(b => b.id === selectedBankOp);
-      let selectedBankNameFull = selectedBankObj ? selectedBankObj.name : 'Dutch-Bangla Bank';
+      let selectedBankNameFull = selectedBankObj ? selectedBankObj.name : 'Dutch-Bangla Bank PLC. (DBBL)';
       if (!selectedBankObj) {
-        if (selectedBankOp === 'dbbl') selectedBankNameFull = 'Dutch-Bangla Bank';
-        else if (selectedBankOp === 'sonali') selectedBankNameFull = 'Sonali Bank';
-        else if (selectedBankOp === 'islami') selectedBankNameFull = 'Islami Bank';
-        else if (selectedBankOp === 'city') selectedBankNameFull = 'City Bank';
-        else if (selectedBankOp === 'brac') selectedBankNameFull = 'BRAC Bank';
-        else if (selectedBankOp === 'pubali') selectedBankNameFull = 'Pubali Bank';
+        if (selectedBankOp === 'dbbl') selectedBankNameFull = 'Dutch-Bangla Bank PLC. (DBBL)';
+        else if (selectedBankOp === 'sonali') selectedBankNameFull = 'Sonali Bank PLC.';
+        else if (selectedBankOp === 'islami') selectedBankNameFull = 'Islami Bank Bangladesh PLC.';
+        else if (selectedBankOp === 'city') selectedBankNameFull = 'City Bank PLC.';
+        else if (selectedBankOp === 'brac') selectedBankNameFull = 'BRAC Bank PLC.';
+        else if (selectedBankOp === 'pubali') selectedBankNameFull = 'Pubali Bank PLC.';
       }
 
       if (!sendAccNo || !sendAccTitle) {
@@ -1498,11 +1514,22 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
           totalDeducted: totalRequired,
           postBalance: finalBal,
           type: 'withdraw',
+          typeLabel: 'উইথড্র / ক্যাশআউট',
           status: 'pending',
           paymentMethod: `Bank Transfer - ${selectedBankNameFull}`,
+          bankName: selectedBankNameFull,
+          accountTitle: sendAccTitle,
+          accountName: sendAccTitle,
+          accountHolder: sendAccTitle,
+          accountNumber: sendAccNo,
+          branch: sendBranch || '',
+          branchName: sendBranch || '',
+          routingNumber: sendRouting || '',
+          routingNo: sendRouting || '',
           phone: sendAccNo,
+          senderPhone: sendAccNo,
           createdAt: new Date().toISOString(),
-          description: `${selectedBankNameFull} (${sendAccNo} - ${sendAccTitle}) অ্যাকাউন্টে ৳${amountNum.toLocaleString('bn-BD')} স্থানান্তর আবেদন`
+          description: `Bank Transfer - ${selectedBankNameFull} | অ্যাকাউন্টের নাম: ${sendAccTitle} | অ্যাকাউন্ট নম্বর: ${sendAccNo}${sendBranch ? ` | শাখা: ${sendBranch}` : ''}${sendRouting ? ` | Routing Number: ${sendRouting}` : ''}`
         })
       );
     } else if (sendMoneyChannel === 'abroad') {
@@ -1534,11 +1561,22 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
           totalDeducted: totalRequired,
           postBalance: finalBal,
           type: 'remittance',
+          typeLabel: 'রেমিট্যান্স / বিদেশি ব্যাংক স্থানান্তর',
           status: 'pending',
           paymentMethod: `Foreign Bank Transfer - ${selectedBankNameFull}`,
+          bankName: selectedBankNameFull,
+          accountTitle: sendAccTitle,
+          accountName: sendAccTitle,
+          accountHolder: sendAccTitle,
+          accountNumber: sendAccNo,
+          branch: sendBranch || '',
+          branchName: sendBranch || '',
+          routingNumber: sendRouting || '',
+          routingNo: sendRouting || '',
           phone: sendAccNo,
+          senderPhone: sendAccNo,
           createdAt: new Date().toISOString(),
-          description: `বিদেশি ব্যাংক রেমিট্যান্স স্থানান্তর: ${selectedBankNameFull} (${sendAccNo} - ${sendAccTitle}) অ্যাকাউন্টে ৳${amountNum.toLocaleString('bn-BD')} স্থানান্তরের আবেদন`
+          description: `Foreign Bank Transfer - ${selectedBankNameFull} | অ্যাকাউন্টের নাম: ${sendAccTitle} | অ্যাকাউন্ট নম্বর: ${sendAccNo}${sendBranch ? ` | শাখা: ${sendBranch}` : ''}${sendRouting ? ` | Routing Number: ${sendRouting}` : ''}`
         })
       );
     }
@@ -1555,7 +1593,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
 
     const generatedTxId = `TXN${Date.now().toString().slice(-10)}`;
 
-    // Instant zero-delay response ⚡
+     // Instant zero-delay response ⚡
     setSuccessMsg('আপনার লেনদেন আবেদনটি সফলভাবে সাবমিট হয়েছে!');
     setReceiptModalData({
       typeLabel: sendMoneyChannel === 'mobile_bank' ? 'এমএফএস ক্যাশ আউট / সেন্ড মানি' : sendMoneyChannel === 'bank_wallet' ? 'বাংলাদেশি ব্যাংক ওয়ালেট ট্রান্সফার' : 'বিদেশি ব্যাংক রেমিট্যান্স ট্রান্সফার',
@@ -1611,11 +1649,11 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
       return;
     }
     if (securityPin !== user.pin) {
-      setErrorMsg('ভুল সিকিউরিটি পিন! সঠিক ৪ সংখ্যার পিন প্রদান করুন।');
+      setErrorMsg('ভুল সিকিউরিটি পিন! সঠিক 4 সংখ্যার পিন প্রদান করুন।');
       return;
     }
 
-    // Instant zero-delay response ⚡
+     // Instant zero-delay response ⚡
     setSuccessMsg('আপনার বিল পেমেন্ট রিকোয়েস্ট সফলভাবে সাবমিট হয়েছে!');
     setBillAmount('');
     setBillAccNo('');
@@ -1653,7 +1691,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
     });
   };
 
-  // Bill Providers static data list
+   // Bill Providers static data list
   const billProviders = [
     // Electricity
     { id: 'palli_bidyut_prepaid', name: 'Palli Bidyut Prepaid', label: 'পল্লী বিদ্যুৎ (প্রিপেইড)', enLabel: 'Palli Bidyut (Prepaid)', category: 'electricity', iconColor: 'bg-pink-100 text-pink-600' },
@@ -1681,7 +1719,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
     { id: 'amber_it', name: 'Amber IT', label: 'Amber IT ইন্টারনেট বিল', enLabel: 'Amber IT Internet Bill', category: 'internet', iconColor: 'bg-purple-100 text-purple-600' },
     { id: 'carnival', name: 'Carnival', label: 'Carnival ইন্টারনেট বিল', enLabel: 'Carnival Internet Bill', category: 'internet', iconColor: 'bg-purple-100 text-purple-600' },
 
-    // Cable TV
+     // Cable TV
     { id: 'akash_dth', name: 'Akash DTH', label: 'আকাশ DTH ক্যাবল বিল', enLabel: 'Akash DTH Cable Bill', category: 'tv', iconColor: 'bg-fuchsia-100 text-fuchsia-600' },
 
     // Telephone
@@ -1723,36 +1761,34 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
       </div>
 
       {/* Quick Action Navigation Buttons */}
-      <div className="bg-white border border-slate-150 rounded-2.5xl p-4 shadow-xs grid grid-cols-5 gap-1.5 text-slate-800 text-center">
+      <div className="bg-white border border-slate-150 rounded-2.5xl p-4 shadow-xs grid grid-cols-3 gap-2 text-slate-800 text-center">
         {[
-          { id: 'dashboard', label: 'হোম ড্যাশ', icon: <Home className="w-4 h-4 text-emerald-850" />, isImg: false },
+          { id: 'dashboard', label: 'হোম ড্যাশ', icon: <Home className="w-5 h-5 text-emerald-800" />, isImg: false },
           { 
             id: 'bnb_to_bnb', 
             label: 'BNB to BNB', 
             icon: appConfig?.bnbToBnbIconUrl ? (
-              <img src={appConfig.bnbToBnbIconUrl} className="w-4.5 h-4.5 object-cover rounded" alt="BNB to BNB" referrerPolicy="no-referrer" />
+              <img src={appConfig.bnbToBnbIconUrl} className="w-5 h-5 object-cover rounded" alt="BNB to BNB" referrerPolicy="no-referrer" />
             ) : (
-              <PlusCircle className="w-4 h-4 text-indigo-705" />
+              <PlusCircle className="w-5 h-5 text-indigo-700" />
             ),
             isImg: !!appConfig?.bnbToBnbIconUrl
           },
-          { id: 'send_money', label: 'সেন্ড মানি', icon: <Send className="w-4 h-4 text-cyan-705" />, isImg: false },
-          { id: 'bill_pay', label: 'বিল পে', icon: <Banknote className="w-4 h-4 text-amber-705" />, isImg: false },
-          { id: 'salary', label: 'স্যালারি পে', icon: <Briefcase className="w-4 h-4 text-teal-755" />, isImg: false }
+          { id: 'send_money', label: 'সেন্ড মানি', icon: <Send className="w-5 h-5 text-cyan-700" />, isImg: false }
         ].map((item, idx) => (
           <button 
             key={`${item.id}-${idx}`}
             onClick={() => setActiveTab(item.id as any)} 
-            className={`flex flex-col items-center gap-1.5 p-1 rounded-xl transition ${activeTab === item.id ? 'bg-slate-50' : 'hover:bg-slate-50'}`}
+            className={`flex flex-col items-center gap-1.5 p-2 rounded-2xl transition cursor-pointer active:scale-95 ${activeTab === item.id ? 'bg-slate-50' : 'hover:bg-slate-50'}`}
           >
-            <div className={`w-9 h-9 rounded-full flex items-center justify-center shadow-2xs border ${activeTab === item.id ? 'bg-indigo-900 border-indigo-950 text-white' : 'bg-slate-100 border-slate-200 text-slate-750'}`}>
+            <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shadow-2xs border ${activeTab === item.id ? 'bg-indigo-900 border-indigo-950 text-white' : 'bg-slate-100 border-slate-200 text-slate-750'}`}>
               {item.isImg ? (
                 item.icon
               ) : (
-                React.cloneElement(item.icon as React.ReactElement, { className: activeTab === item.id ? 'text-white w-4.5 h-4.5' : (item.icon as React.ReactElement).props.className })
+                React.cloneElement(item.icon as React.ReactElement, { className: activeTab === item.id ? 'text-white w-5 h-5' : (item.icon as React.ReactElement).props.className })
               )}
             </div>
-            <span className={`text-[8.5px] font-black tracking-tight leading-tight ${activeTab === item.id ? 'text-indigo-950 font-extrabold' : 'text-slate-650'}`}>
+            <span className={`text-[10px] font-black tracking-tight leading-tight ${activeTab === item.id ? 'text-indigo-950 font-extrabold' : 'text-slate-650'}`}>
               {item.label}
             </span>
           </button>
@@ -1778,7 +1814,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
               <span className="text-xl mb-1 block leading-none">{rate.flag}</span>
               <div className="space-y-0.5">
                 <span className="text-[9.5px] font-black text-slate-705 truncate block max-w-full">{rate.name}</span>
-                <span className="text-[8.5px] text-slate-400 block font-sans leading-none">{rate.multiplier || '১ একক'}</span>
+                <span className="text-[8.5px] text-slate-400 block font-sans leading-none">{rate.multiplier || '1 একক'}</span>
               </div>
               <div className="mt-1.5 pt-1 border-t border-slate-150 w-full">
                 <span className="text-[11px] font-black font-mono text-emerald-800">৳ {(Number(rate.value) || 0).toFixed(2)}</span>
@@ -1831,23 +1867,23 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
           <div className="space-y-4 text-[10px] font-bold text-slate-800 leading-relaxed font-sans">
             <div>
               <h4 className="font-black text-[#136151] mb-1">📥 Add Money</h4>
-              <p className="text-slate-800">১. মোবাইল ব্যাংকিং থেকে Add Money: বিকাশ, নগদ, রকেট ও উপায় থেকে সহজেই Add Money করা যাবে।</p>
-              <p className="text-slate-800">২. ব্যাংক অ্যাকাউন্ট থেকে Add Money: বাংলাদেশের যেকোনো ব্যাংক থেকে Add Money করলে প্রতি ১,০০০ টাকায় {appConfig?.addMoneyBankCashbackPerThousand ?? 5} টাকা ইনস্ট্যান্ট ক্যাশব্যাক পাবেন।</p>
-              <p className="text-slate-800">৩. বিদেশি ব্যাংক থেকে Add Money: বিদেশি ব্যাংক অ্যাকাউন্ট থেকেও Add Money করা যাবে। এ জন্য নির্ধারিত বিদেশি অ্যাকাউন্ট নম্বর প্রদান করা হবে।</p>
+              <p className="text-slate-800">1. মোবাইল ব্যাংকিং থেকে Add Money: বিকাশ, নগদ, রকেট ও উপায় থেকে সহজেই Add Money করা যাবে।</p>
+              <p className="text-slate-800">2. ব্যাংক অ্যাকাউন্ট থেকে Add Money: বাংলাদেশের যেকোনো ব্যাংক থেকে Add Money করলে প্রতি 1,000 টাকায় {appConfig?.addMoneyBankCashbackPerThousand ?? 5} টাকা ইনস্ট্যান্ট ক্যাশব্যাক পাবেন।</p>
+              <p className="text-slate-800">3. বিদেশি ব্যাংক থেকে Add Money: বিদেশি ব্যাংক অ্যাকাউন্ট থেকেও Add Money করা যাবে। এ জন্য নির্ধারিত বিদেশি অ্যাকাউন্ট নম্বর প্রদান করা হবে।</p>
             </div>
 
             <div>
               <h4 className="font-black text-[#1D3261] mb-1">📤 Send Money</h4>
-              <p className="text-slate-800">১. BNB to BNB: সেন্ড মানি ও ক্যাশ আউট সম্পূর্ণ ফ্রি (কোনো ফি বা অতিরিক্ত টাকা কাটবে না)।</p>
-              <p className="text-slate-800">২. BNB টু  মোবাইল ব্যাংকিং (বিকাশ, নগদ, রকেট, উপায়):</p>
+              <p className="text-slate-800">1. BNB to BNB: সেন্ড মানি ও ক্যাশ আউট সম্পূর্ণ ফ্রি (কোনো ফি বা অতিরিক্ত টাকা কাটবে না)।</p>
+              <p className="text-slate-800">2. BNB টু  মোবাইল ব্যাংকিং (বিকাশ, নগদ, রকেট, উপায়):</p>
               <ul className="list-disc pl-4 space-y-1 text-slate-800">
                 <li>প্রতি ট্রানজেকশনে 3.90 পয়সা ফি, এবং 1 থেকে 1000 পর্যন্ত এক টাকা চার্জ 1001 থেকে 2 হাজার পর্যন্ত 2 টাকা চার্জ অর্থাৎ প্রতি হাজারে এক টাকা করে চার্জ কাটবে।</li>
-                <li>২৫,০০০ টাকার বেশি হলে ১০ টাকা ফি।</li>
-                <li>সর্বোচ্চ লেনদেন সীমা ৩ লাখ টাকা মাসে।</li>
-                <li>এছাড়া প্রতি ১,০০০ টাকায় ১ টাকা চার্জ প্রযোজ্য।</li>
+                <li>25,000 টাকার বেশি হলে 10 টাকা ফি।</li>
+                <li>সর্বোচ্চ লেনদেন সীমা 3 লাখ টাকা মাসে।</li>
+                <li>এছাড়া প্রতি 1,000 টাকায় 1 টাকা চার্জ প্রযোজ্য।</li>
               </ul>
-              <p className="text-slate-800">৩. BNB থেকে বাংলাদেশের যেকোনো ব্যাংকে: প্রতি ১,০০০ টাকায় {appConfig?.sendMoneyBankServiceChargePerThousand ?? 7.90} টাকা চার্জ প্রযোজ্য।</p>
-              <p className="text-slate-800">৪. BNB থেকে বিদেশে অর্থ প্রেরণ: বিশ্বের যেকোনো ব্যাংক বা অ্যাকাউন্টে টাকা পাঠানো যাবে। চার্জ ও রেট নির্ধারিত এক্সচেঞ্জ রেট অনুযায়ী প্রযোজ্য হবে।</p>
+              <p className="text-slate-800">3. BNB থেকে বাংলাদেশের যেকোনো ব্যাংকে: প্রতি 1,000 টাকায় {appConfig?.sendMoneyBankServiceChargePerThousand ?? 7.90} টাকা চার্জ প্রযোজ্য।</p>
+              <p className="text-slate-800">4. BNB থেকে বিদেশে অর্থ প্রেরণ: বিশ্বের যেকোনো ব্যাংক বা অ্যাকাউন্টে টাকা পাঠানো যাবে। চার্জ ও রেট নির্ধারিত এক্সচেঞ্জ রেট অনুযায়ী প্রযোজ্য হবে।</p>
             </div>
 
             <div>
@@ -1861,8 +1897,100 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
     </div>
   );
 
+
+  const renderAutoAddMoney = () => (
+    <div className="space-y-4 text-left animate-fade-in">
+      <button onClick={() => setActiveTab('dashboard')} className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300 font-black text-xs cursor-pointer">
+        <ChevronLeft className="w-4 h-4" /> ফিরে যান
+      </button>
+      <div className="space-y-4 bg-slate-900 border border-emerald-500/20 p-5 rounded-3xl text-left shadow-xl text-white">
+        <div className="flex items-center gap-2 border-b border-white/10 pb-3">
+          <span className="p-1.5 bg-emerald-500/10 text-emerald-400 rounded-xl">💳</span>
+          <div>
+            <h3 className="text-xs font-black uppercase text-white">NagorikPay অনলাইন অটোমেটিক গেটওয়ে</h3>
+            <p className="text-[9.5px] text-white/50">1 সেকেন্ডে পেমেন্ট সম্পূর্ণ হয়ে অটো-ক্রেডিট হবে</p>
+          </div>
+        </div>
+
+        <form onSubmit={async (e) => {
+          e.preventDefault();
+          const amt = parseFloat(depositAmount);
+          if (!amt || amt <= 0) {
+            setErrorMsg('দয়া করে সঠিক ডিপোজিট পরিমাণ লিখুন।');
+            return;
+          }
+          setLoading(true);
+          setErrorMsg('');
+          setSuccessMsg('');
+          try {
+            const res = await fetch('/api/payment/create', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                amount: amt,
+                userId: user?.uid,
+                phone: user?.phone || ''
+              })
+            });
+            const data = await res.json();
+            if (data && data.success && data.payment_url) {
+              setSuccessMsg('পেমেন্ট গেটওয়েতে রিডাইরেক্ট করা হচ্ছে...');
+              window.location.href = data.payment_url;
+            } else {
+              setErrorMsg(data.error || 'পেমেন্ট গেটওয়ে লোড করতে ব্যর্থ হয়েছে।');
+            }
+          } catch (err: any) {
+            setErrorMsg(err.message || 'নেটওয়ার্ক সংযোগ ত্রুটি!');
+          } finally {
+            setLoading(false);
+          }
+        }} className="space-y-4">
+          {errorMsg && (
+            <div className="p-3 bg-rose-950/80 border border-rose-800/60 text-rose-200 rounded-2xl text-xs font-bold flex items-center gap-1.5 animate-fade-in">
+              <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+          {successMsg && (
+            <div className="p-3 bg-emerald-950/80 border border-emerald-800/60 text-emerald-200 rounded-2xl text-xs font-bold flex items-center gap-1.5 animate-fade-in">
+              <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+              <span>{successMsg}</span>
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            <label className="block text-xs font-bold text-slate-300">ডিপোজিট পরিমাণ (৳ Amount BDT)</label>
+            <input
+              type="number"
+              required
+              value={depositAmount}
+              onChange={(e) => setDepositAmount(e.target.value)}
+              placeholder="৳ সর্বনিম্ন 10 BDT"
+              className="w-full px-3.5 py-3 border border-white/10 bg-white/5 focus:border-emerald-500 rounded-xl text-xs font-mono text-white"
+            />
+          </div>
+
+          <button 
+            type="submit" 
+            disabled={loading}
+            className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-black rounded-2xl text-xs shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer uppercase active:scale-95"
+          >
+            {loading ? (
+              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : (
+              'NagorikPay গেটওয়ে দিয়ে পেমেন্ট করুন 💳'
+            )}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+
+
   const renderBnbToBnb = () => {
-    // Generate fallback card details in case states aren't saved yet
+     // Generate fallback card details in case states aren't saved yet
     const displayCardNum = user.bnbCardNumber || '4840 6100 ---- ----';
     const displayAccNum = user.bnbAccountNumber || '164.121.------';
     const displayHolder = (user.bnbCardHolderName || user.name || 'BNB MEMBER').toUpperCase();
@@ -1899,7 +2027,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
       }
     };
 
-    // Instant OTP read from user document OR fallback to portalNotifications
+     // Instant OTP read from user document OR fallback to portalNotifications
     const liveOtpFromUserDoc = user?.activeCardOtp ? {
       id: 'user_doc_otp',
       title: '🔑 কার্ড পেমেন্ট ওটিপি (OTP Security Alert)',
@@ -1922,7 +2050,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
       parsedOtp = String(user.activeCardOtp);
     } else if (activeCardOtpNotification) {
       const text = activeCardOtpNotification.message || activeCardOtpNotification.body || '';
-      const amtMatch = text.match(/৳\s*([0-9.]+)/) || text.match(/৳\s*([০-৯.]+)/);
+      const amtMatch = text.match(/৳\s*([0-9.]+)/) || text.match(/৳\s*([0-9.]+)/);
       const otpMatch = text.match(/(?:ভেরিফিকেশন ওটিপি \(OTP\):|ওটিপি|OTP:)\s*([0-9]+)/);
       if (amtMatch) parsedAmt = amtMatch[1];
       if (otpMatch) parsedOtp = otpMatch[1];
@@ -2202,7 +2330,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                     required
                     value={bnbSendAmount}
                     onChange={(e) => setBnbSendAmount(e.target.value)}
-                    placeholder="৳ সর্বনিম্ন ১০ BDT" 
+                    placeholder="৳ সর্বনিম্ন 10 BDT" 
                     className="w-full px-3.5 py-2.5 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono" 
                   />
                 </div>
@@ -2214,7 +2342,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                     required
                     value={bnbSendPin}
                     onChange={(e) => setBnbSendPin(e.target.value)}
-                    placeholder="৪ সংখ্যার পিন" 
+                    placeholder="4 সংখ্যার পিন" 
                     className="w-full px-3.5 py-2.5 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono text-center tracking-widest" 
                   />
                 </div>
@@ -2315,7 +2443,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                 </div>
               ) : (
                 <p className="text-[9px] text-slate-400 font-bold">
-                  এখনো কোনো প্রিয় কার্ড সেভ করা নেই। আপনি যেকোনো কার্ড নম্বর ইনপুট দিয়ে "⭐ এই কার্ডটি প্রিয় তালিকায় সেভ করুন" বাটনে ক্লিক করে ৪-৫টি কার্ড সেভ রাখতে পারবেন।
+                  এখনো কোনো প্রিয় কার্ড সেভ করা নেই। আপনি যেকোনো কার্ড নম্বর ইনপুট দিয়ে "⭐ এই কার্ডটি প্রিয় তালিকায় সেভ করুন" বাটনে ক্লিক করে 4-5টি কার্ড সেভ রাখতে পারবেন।
                 </p>
               )}
             </div>
@@ -2339,7 +2467,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                   required
                   value={cardAddNum}
                   onChange={(e) => setCardAddNum(e.target.value)}
-                  placeholder="xxxx xxxx xxxx xxxx (১৬ সংখ্যার কার্ড)" 
+                  placeholder="xxxx xxxx xxxx xxxx (16 সংখ্যার কার্ড)" 
                   className="w-full px-3.5 py-2.5 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono text-center tracking-widest" 
                 />
               </div>
@@ -2380,7 +2508,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                     required
                     value={cardAddCvv}
                     onChange={(e) => setCardAddCvv(e.target.value)}
-                    placeholder="৩ সংখ্যার কোড" 
+                    placeholder="3 সংখ্যার কোড" 
                     className="w-full px-3.5 py-2.5 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono text-center tracking-wider" 
                   />
                 </div>
@@ -2394,7 +2522,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                     required
                     value={cardAddAmount}
                     onChange={(e) => setCardAddAmount(e.target.value)}
-                    placeholder="৳ সর্বনিম্ন ১০ BDT" 
+                    placeholder="৳ সর্বনিম্ন 10 BDT" 
                     className="w-full px-3.5 py-2.5 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono" 
                   />
                 </div>
@@ -2406,7 +2534,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                     required
                     value={cardAddPin}
                     onChange={(e) => setCardAddPin(e.target.value)}
-                    placeholder="৪ সংখ্যার পিন" 
+                    placeholder="4 সংখ্যার পিন" 
                     className="w-full px-3.5 py-2.5 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono text-center tracking-widest" 
                   />
                 </div>
@@ -2415,7 +2543,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
               {cardOtpSent && (
                 <div className="space-y-1.5 bg-amber-50 border border-amber-300 p-3.5 rounded-2xl mt-2 text-left shadow-xs">
                   <div className="flex justify-between items-center">
-                    <label className="block text-[10.5px] font-black text-amber-900">৬ সংখ্যার গোপন ওটিপি কোড (OTP Code)</label>
+                    <label className="block text-[10.5px] font-black text-amber-900">6 সংখ্যার গোপন ওটিপি কোড (OTP Code)</label>
                   </div>
                   <input 
                     type="text" 
@@ -2423,7 +2551,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                     required
                     value={userEnteredOtp}
                     onChange={(e) => setUserEnteredOtp(e.target.value)}
-                    placeholder="৬ সংখ্যার ওটিপি কোড প্রবেশ করুন" 
+                    placeholder="6 সংখ্যার ওটিপি কোড প্রবেশ করুন" 
                     className="w-full px-3.5 py-2.5 border border-amber-400 focus:border-amber-600 rounded-xl text-xs font-mono text-center tracking-widest font-black text-slate-900 bg-white" 
                   />
                   <div className="flex justify-between items-center pt-1">
@@ -2466,702 +2594,260 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
     );
   };
 
-  const renderAddMoney = () => (
-    <div className="space-y-4 text-left">
-      {/* Back to dashboard button */}
-      <button onClick={() => { setActiveTab('dashboard'); setAddMoneyOperator(null); setSelectedBankId(null); setBankStep(1); setForeignBankStep(1); }} className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300 font-black text-xs cursor-pointer">
-        <ChevronLeft className="w-4 h-4" /> ফিরে যান
-      </button>
+  const renderAddMoney = () => {
+    const allBanks = appConfig?.paymentBanks || [];
+    const customLocalBanks = allBanks.filter((b: any) => b.active !== false && !isForeignBankItem(b));
+    const defaultLocalBanks = [
+      {
+        id: "DBBL (ডাচ-বাংলা ব্যাংক)",
+        name: "Dutch-Bangla Bank PLC. (DBBL)",
+        acronym: "DBBL",
+        branch: "হেমায়েতপুর শাখা",
+        routingNum: "090261545",
+        holder: "MD SUJON MIA",
+        accNum: "2441580395850",
+        visaNum: "4840 6100 1036 9801",
+        active: true,
+      },
+      {
+        id: "Bank Asia PLC",
+        name: "Bank Asia PLC",
+        acronym: "BA",
+        branch: "COMPANIGONJ BRANCH",
+        routingNum: "070271545",
+        holder: "MD SUJON MIA",
+        accNum: "03934005821",
+        visaNum: "",
+        active: true,
+      },
+      {
+        id: "Cellfin (Islami Bank)",
+        name: "Cellfin",
+        acronym: "IBBL",
+        branch: "প্রধান শাখা / অনলাইন",
+        routingNum: "125271545",
+        holder: "MD SUJON MIA",
+        accNum: "205021302008955",
+        visaNum: "",
+        active: true,
+      }
+    ];
+    
+    const localBanks = customLocalBanks.length > 0 ? customLocalBanks : defaultLocalBanks;
+    const defaultLocalBank = localBanks[0] || defaultLocalBanks[0];
 
-      {/* Select Deposit Channel */}
-      <div className="grid grid-cols-3 gap-1.5 bg-white/5 border border-white/10 p-1.5 rounded-2xl">
-        {[
-          { id: 'local_mobile', label: 'লোকাল মোবাইল' },
-          { id: 'bank_deposit', label: 'ব্যাংক ডিপোজিট' },
-          { id: 'foreign_bank', label: 'বিদেশী ব্যাংক' }
-        ].map((ch, idx) => (
-          <button 
-            key={`${ch.id}-${idx}`}
-            onClick={() => { setAddMoneyChannel(ch.id as any); setAddMoneyOperator(null); setSelectedBankId(null); setBankStep(1); setForeignBankStep(1); }}
-            className={`py-2 text-[10.5px] font-black rounded-xl transition ${addMoneyChannel === ch.id ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-300 hover:bg-white/5'}`}
-          >
-            {ch.label}
-          </button>
-        ))}
-      </div>
+    const customIntlBanks = allBanks.filter((b: any) => isForeignBankItem(b) && b.active !== false);
+    const defaultIntlBanks = [
+      { 
+        id: 'AL RAJHI (সৌদি ব্যাংক)', 
+        name: 'AL RAJHI BANK (সৌদি ব্যাংক)', 
+        acronym: 'RAJHI', 
+        holder: 'BUSINESS NETWORK BANGLADESH', 
+        accNum: '2441580395850', 
+        iban: 'SA64000001006087881869', 
+        branch: 'Riyadh Main Branch (সৌদি আরব)', 
+        routingNum: 'RJHISA21', 
+        swiftCode: 'RJHISA21',
+        active: true 
+      },
+      { 
+        id: 'SNB (সৌদি ব্যাংক)', 
+        name: 'SAUDI NATIONAL BANK (SNB ALAHLI)', 
+        acronym: 'SNB', 
+        holder: 'BUSINESS NETWORK BANGLADESH', 
+        accNum: '640000010006087881869', 
+        iban: 'SA50 8000 0640 6080 1788 1869', 
+        branch: 'Jeddah Main Branch (সৌদি আরব)', 
+        routingNum: 'NCBKSA21', 
+        swiftCode: 'NCBKSA21',
+        active: true 
+      },
+      { 
+        id: 'ENBD (দুবাই ব্যাংক)', 
+        name: 'EMIRATES NBD BANK (DUBAI)', 
+        acronym: 'ENBD', 
+        holder: 'BUSINESS NETWORK BANGLADESH', 
+        accNum: '120220000987456321458', 
+        iban: 'AE12 0220 0009 8745 6321 458', 
+        branch: 'Deira Branch, Dubai (সংযুক্ত আরব আমিরাত)', 
+        routingNum: 'EBILAE2X', 
+        swiftCode: 'EBILAE2X',
+        active: true 
+      }
+    ];
+    const displayIntlBanks = (customIntlBanks.length > 0) ? customIntlBanks : defaultIntlBanks;
+    const defaultIntlBank = displayIntlBanks[0] || defaultIntlBanks[0];
 
-      {addMoneyChannel === 'local_mobile' && (
-        <div className="space-y-4">
-          <p className="text-[11px] text-white/70">মোবাইল ফাইনান্সিয়াল ওয়ালেট সিলেক্ট করুনঃ</p>
-          {(() => {
-            const availableAddMoneyOps = [
-              { id: 'bkash', name: 'বিকাশ', active: appConfig?.mfsBkashActive !== false, color: 'bg-pink-600 hover:bg-pink-700' },
-              { id: 'nagad', name: 'নগদ', active: appConfig?.mfsNagadActive !== false, color: 'bg-orange-600 hover:bg-orange-700' },
-              { id: 'rocket', name: 'রকেট', active: appConfig?.mfsRocketActive !== false, color: 'bg-purple-600 hover:bg-purple-700' },
-              { id: 'upay', name: 'উপায়', active: appConfig?.mfsUpayActive !== false, color: 'bg-blue-600 hover:bg-blue-700' }
-            ].filter(op => op.active);
+    const currentSelectedLocalBank = localBanks.find((b: any) => b.id === selectedBankId) || defaultLocalBank;
+    const currentSelectedIntlBank = displayIntlBanks.find((b: any) => b.id === selectedBankId) || defaultIntlBank;
 
-            if (availableAddMoneyOps.length === 0) {
-              return (
-                <div className="bg-amber-500/10 border border-amber-500/30 p-4 rounded-2xl text-center text-amber-300 text-xs font-bold font-sans">
-                  ⚠️ বর্তমানে কোনো মোবাইল ব্যাংকিং সার্ভিস সচল নেই।
-                </div>
-              );
+    const availableAddMoneyOps = [
+      { id: 'bkash', name: 'বিকাশ', symbol: 'ব', circleBg: 'bg-[#d8226e]', active: appConfig?.mfsBkashActive !== false },
+      { id: 'nagad', name: 'নগদ', symbol: 'ন', circleBg: 'bg-[#f26522]', active: appConfig?.mfsNagadActive !== false },
+      { id: 'rocket', name: 'রকেট', symbol: 'র', circleBg: 'bg-[#8c3494]', active: appConfig?.mfsRocketActive !== false },
+      { id: 'upay', name: 'উপায়', symbol: 'উ', circleBg: 'bg-[#1b75bb]', active: appConfig?.mfsUpayActive !== false }
+    ].filter(op => op.active);
+
+    return (
+      <div className="space-y-4 text-left animate-fade-in">
+        {/* Back button */}
+        <button 
+          onClick={() => { 
+            if (addMoneyOperator) {
+              setAddMoneyOperator(null);
+            } else if (addMoneyChannel === 'bank_deposit' && bankStep === 2) {
+              setBankStep(1);
+              setSelectedBankId(null);
+            } else if (addMoneyChannel === 'foreign_bank' && foreignBankStep === 2) {
+              setForeignBankStep(1);
+              setSelectedBankId(null);
+            } else {
+              setActiveTab('dashboard'); 
+              setAddMoneyOperator(null); 
+              setSelectedBankId(null); 
+              setBankStep(1); 
+              setForeignBankStep(1);
+              setErrorMsg('');
+              setSuccessMsg('');
             }
+          }} 
+          className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300 font-black text-xs cursor-pointer transition"
+        >
+          <ChevronLeft className="w-4 h-4" /> ফিরে যান
+        </button>
 
-            return (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {availableAddMoneyOps.map((op, idx) => (
-                  <button
-                    key={`${op.id}-${idx}`}
-                    onClick={() => setAddMoneyOperator(op.id as any)}
-                    className={`p-3 rounded-2xl border text-center font-black text-xs transition cursor-pointer flex flex-col justify-between items-center ${addMoneyOperator === op.id ? 'border-emerald-400 bg-emerald-950/40 text-emerald-400 scale-102' : 'border-white/10 hover:bg-white/5 text-white'}`}
-                  >
-                    <div className={`w-8 h-8 rounded-full ${op.color} text-white flex items-center justify-center text-xs mb-1 font-extrabold uppercase`}>
-                      {op.name.charAt(0)}
-                    </div>
-                    {op.name}
-                  </button>
-                ))}
-              </div>
-            );
-          })()}
-
-          {addMoneyOperator && (
-            <div className="bg-white rounded-3xl p-5 text-slate-800 space-y-4 animate-fade-in shadow-lg">
-              <h3 className="text-xs font-black border-b border-slate-100 pb-2 text-indigo-950 flex items-center gap-1.5 uppercase">
-                🎯 {addMoneyOperator.toUpperCase()} অ্যাড মানি পেমেন্ট ডিটেইলস
-              </h3>
-              <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-2xl text-[11px] font-sans font-bold flex flex-col gap-2 text-slate-700">
-                <div className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
-                  <div>
-                    <span className="text-slate-400 block uppercase font-black text-[9px]">মোবাইল ওয়ালেট / সার্ভিস</span>
-                    <span className="font-extrabold text-indigo-950 text-xs">{addMoneyOperator.toUpperCase()}</span>
-                  </div>
-                  <button 
-                    type="button"
-                    onClick={() => copyToClipboard(addMoneyOperator.toUpperCase(), 'সার্ভিস নাম')}
-                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-[10px] font-bold flex items-center gap-1 transition active:scale-95 cursor-pointer"
-                    title="কপি করুন"
-                  >
-                    <Copy className="w-3 h-3 text-slate-600" /> কপি
-                  </button>
-                </div>
-
-                <div className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
-                  <div>
-                    <span className="text-slate-400 block uppercase font-black text-[9px]">পার্সোনাল নম্বর</span>
-                    <span className="font-mono text-sm tracking-wide text-slate-900 font-extrabold">
-                      {formattedDisplayNum(getOperatorNumber(addMoneyOperator))}
-                    </span>
-                  </div>
-                  <button 
-                    type="button"
-                    onClick={() => copyToClipboard(cleanNumberForCopy(getOperatorNumber(addMoneyOperator)), 'অপারেটর নম্বর')}
-                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-[10.5px] flex items-center gap-1 transition shadow-xs active:scale-95 cursor-pointer"
-                    title="কপি করুন"
-                  >
-                    <Copy className="w-3 h-3" /> নম্বর কপি
-                  </button>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    const fullText = `মোবাইল ওয়ালেট: ${addMoneyOperator.toUpperCase()}\nপার্সোনাল নম্বর: ${cleanNumberForCopy(getOperatorNumber(addMoneyOperator))}`;
-                    copyToClipboard(fullText, 'ওয়ালেটের তথ্য');
-                  }}
-                  className="w-full py-2 bg-gradient-to-r from-indigo-800 to-slate-900 text-white font-extrabold rounded-xl text-[10.5px] flex items-center justify-center gap-1.5 shadow-2xs hover:opacity-95 transition cursor-pointer active:scale-98 mt-0.5"
-                >
-                  <Copy className="w-3.5 h-3.5 text-amber-300" /> 📋 ওয়ালেটের সকল তথ্য একসাথে কপি করুন
-                </button>
-              </div>
-
-              <form onSubmit={handleAddMoneySubmit} className="space-y-3.5 pt-2">
-                {errorMsg && (
-                  <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl text-xs font-bold flex items-center gap-1.5 animate-fade-in">
-                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                    <span>{errorMsg}</span>
-                  </div>
-                )}
-                {successMsg && (
-                  <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl text-xs font-bold flex items-center gap-1.5 animate-fade-in">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>{successMsg}</span>
-                  </div>
-                )}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-bold text-slate-650">ডিপোজিট পরিমাণ (৳ Amount BDT)</label>
-                  <input
-                    type="number"
-                    required
-                    value={depositAmount}
-                    onChange={(e) => setDepositAmount(e.target.value)}
-                    placeholder="৳ সর্বনিম্ন ১০ BDT"
-                    className="w-full px-3.5 py-2.5 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono"
-                  />
-                  {cashback > 0 && (
-                    <div className="bg-emerald-50 border border-emerald-150 p-2 rounded-xl text-[10px] font-bold text-emerald-800 flex justify-between">
-                      <span>ব্যাংক ডিপোজিট ক্যাশব্যাক:</span>
-                      <span className="font-extrabold">+৳ {cashback}</span>
-                    </div>
-                  )}
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-bold text-slate-650">প্রেরক {addMoneyOperator.toUpperCase()} নম্বর</label>
-                  <input
-                    type="text"
-                    required
-                    value={senderNumber}
-                    onChange={(e) => setSenderNumber(e.target.value)}
-                    placeholder="উদাঃ ০১৭XXXXXXXX"
-                    className="w-full px-3.5 py-2.5 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-bold text-slate-650">লাস্ট ৪ সংখ্যা অথবা ট্রানজেকশন আইডি (TrxID)</label>
-                  <input
-                    type="text"
-                    required
-                    value={trxId}
-                    onChange={(e) => setTrxId(e.target.value)}
-                    placeholder="উদাঃ ১২৩৪ অথবা 8K48AL7D9"
-                    className="w-full px-3.5 py-2.5 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono uppercase"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-bold text-slate-650">সিকিউরিটি পিন নম্বর (Wallet PIN)</label>
-                  <input
-                    type="password"
-                    maxLength={4}
-                    required
-                    value={securityPin}
-                    onChange={(e) => setSecurityPin(e.target.value)}
-                    placeholder="৪ সংখ্যার ওয়ালেট পিন"
-                    className="w-full px-3.5 py-2.5 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono text-center tracking-widest"
-                  />
-                </div>
-
-                <button 
-                  type="submit" 
-                  disabled={loading}
-                  className="w-full py-3 bg-indigo-900 hover:bg-indigo-950 text-white font-extrabold rounded-2xl text-xs shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer uppercase"
-                >
-                  {loading ? (
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    'অ্যাড মানি রিকোয়েস্ট সাবমিট করুন ✨'
-                  )}
-                </button>
-              </form>
-            </div>
-          )}
+        {/* 3 Top Tabs: Local Mobile | Bank Deposit | Foreign Bank */}
+        <div className="grid grid-cols-3 gap-2 bg-[#02281e]/90 border border-[#094132] p-1.5 rounded-2xl">
+          {[
+            { id: 'local_mobile', label: 'লোকাল মোবাইল' },
+            { id: 'bank_deposit', label: 'ব্যাংক ডিপোজিট' },
+            { id: 'foreign_bank', label: 'বিদেশী ব্যাংক' }
+          ].map((ch) => (
+            <button 
+              key={ch.id}
+              onClick={() => { 
+                setAddMoneyChannel(ch.id as any); 
+                setAddMoneyOperator(null); 
+                setBankStep(1);
+                setForeignBankStep(1);
+                setSelectedBankId(null);
+                setErrorMsg('');
+                setSuccessMsg('');
+              }}
+              className={`py-2.5 text-xs font-black rounded-xl transition cursor-pointer ${
+                addMoneyChannel === ch.id 
+                  ? 'bg-[#008955] text-white shadow-md' 
+                  : 'text-white/80 hover:text-white hover:bg-white/5'
+              }`}
+            >
+              {ch.label}
+            </button>
+          ))}
         </div>
-      )}
 
-      {addMoneyChannel === 'bank_deposit' && (
-        <div className="space-y-4">
-          {bankStep === 1 ? (
-            <>
-              <p className="text-[11px] text-white/70">বাংলাদেশি ব্যাংক ডিপোজিট করতে নিচের যেকোনো একটি ব্যাংক বেছে নিনঃ</p>
-              <div className="grid grid-cols-2 gap-3">
-                {(appConfig?.paymentBanks || []).filter(b => b.active && !isForeignBankItem(b)).map((bk, idx) => (
-                  <button
-                    key={`${bk.id}-${idx}`}
-                    onClick={() => { setSelectedBankId(bk.id); setBankStep(2); }}
-                    className={`p-4 rounded-3xl ${bk.bgClass || 'bg-slate-50 border border-slate-200'} border transition cursor-pointer hover:border-emerald-450 active:scale-97 text-left space-y-2`}
-                  >
-                    <span className="text-xl block">🏦</span>
-                    <h4 className={`text-xs font-black ${bk.textClass || 'text-slate-800'}`}>{bk.name}</h4>
-                    <p className="text-[8.5px] text-slate-500 font-sans font-medium">{bk.branch}</p>
-                  </button>
-                ))}
-                {(appConfig?.paymentBanks || []).filter(b => b.active && !isForeignBankItem(b)).length === 0 && (
-                  <div className="col-span-2 text-center py-6 text-white/60 font-bold text-xs">
-                    কোনো বাংলাদেশি ব্যাংক অ্যাকাউন্ট সেটআপ করা নেই।
+        {/* ===================== TAB 1: LOCAL MOBILE ===================== */}
+        {addMoneyChannel === 'local_mobile' && (
+          <div className="space-y-4">
+            {!addMoneyOperator ? (
+              <div className="space-y-3.5 text-left">
+                <p className="text-xs text-white/80 font-bold">
+                  মোবাইল ফাইন্যান্সিয়াল ওয়ালেট সিলেক্ট করুনঃ
+                </p>
+
+                {availableAddMoneyOps.length === 0 ? (
+                  <div className="bg-amber-500/10 border border-amber-500/30 p-4 rounded-2xl text-center text-amber-300 text-xs font-bold font-sans">
+                    ⚠️ বর্তমানে কোনো মোবাইল ব্যাংকিং সার্ভিস সচল নেই।
                   </div>
-                )}
-              </div>
-            </>
-          ) : (
-            selectedBankId && (
-              (() => {
-                const selectedBank = (appConfig?.paymentBanks || []).find(b => b.id === selectedBankId);
-                if (!selectedBank) return null;
-                return (
-                  <div className="bg-white rounded-3xl p-5 text-slate-800 space-y-4 animate-fade-in shadow-lg">
-                    <div className="flex justify-between items-center border-b border-slate-100 pb-2">
-                      <h3 className="text-xs font-black text-indigo-950 uppercase flex items-center gap-1">
-                        🎯 {selectedBank.name} অ্যাকাউন্ট তথ্য
-                      </h3>
-                      <button onClick={() => setBankStep(1)} className="text-[10px] bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-xl text-slate-700 font-bold transition">
-                        ব্যাংক পরিবর্তন
-                      </button>
-                    </div>
-
-                    <div className="space-y-2.5 bg-slate-50 border border-slate-200/90 p-4 rounded-2.5xl text-[10.5px] font-sans font-bold text-slate-800">
-                      {/* Bank Name */}
-                      <div className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
-                        <span className="text-slate-500 font-extrabold">ব্যাংকের নামঃ</span>
-                        <div className="flex items-center gap-1.5 max-w-[65%] justify-end">
-                          <span className="text-slate-900 font-black truncate">{selectedBank.name}</span>
-                          <button
-                            type="button"
-                            onClick={() => copyToClipboard(selectedBank.name, 'ব্যাংকের নাম')}
-                            className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg text-slate-800 text-[10px] font-extrabold flex items-center gap-1 shrink-0 active:scale-95 transition cursor-pointer"
-                            title="কপি করুন"
-                          >
-                            <Copy className="w-2.5 h-2.5 text-slate-600" /> কপি
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Account Holder */}
-                      <div className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
-                        <span className="text-slate-500 font-extrabold">অ্যাকাউন্ট হোল্ডারঃ</span>
-                        <div className="flex items-center gap-1.5 max-w-[65%] justify-end">
-                          <span className="text-slate-900 font-extrabold uppercase truncate">{selectedBank.holder}</span>
-                          <button
-                            type="button"
-                            onClick={() => copyToClipboard(selectedBank.holder, 'অ্যাকাউন্ট হোল্ডারের নাম')}
-                            className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg text-slate-800 text-[10px] font-extrabold flex items-center gap-1 shrink-0 active:scale-95 transition cursor-pointer"
-                            title="কপি করুন"
-                          >
-                            <Copy className="w-2.5 h-2.5 text-slate-600" /> কপি
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Account Number */}
-                      <div className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
-                        <span className="text-slate-500 font-extrabold">হিসাব নম্বর (Acc No):</span>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-slate-900 font-mono text-xs font-black">{selectedBank.accNum}</span>
-                          <button
-                            type="button"
-                            onClick={() => copyToClipboard(selectedBank.accNum, 'ব্যাংক হিসাব নম্বর')}
-                            className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg text-indigo-800 text-[10px] font-extrabold flex items-center gap-1 shrink-0 active:scale-95 transition cursor-pointer"
-                            title="কপি করুন"
-                          >
-                            <Copy className="w-2.5 h-2.5 text-indigo-600" /> কপি
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Branch Name */}
-                      <div className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
-                        <span className="text-slate-500 font-extrabold">শাখার নাম (Branch):</span>
-                        <div className="flex items-center gap-1.5 max-w-[65%] justify-end">
-                          <span className="text-slate-900 font-extrabold truncate">{selectedBank.branch}</span>
-                          <button
-                            type="button"
-                            onClick={() => copyToClipboard(selectedBank.branch, 'শাখার নাম')}
-                            className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg text-slate-800 text-[10px] font-extrabold flex items-center gap-1 shrink-0 active:scale-95 transition cursor-pointer"
-                            title="কপি করুন"
-                          >
-                            <Copy className="w-2.5 h-2.5 text-slate-600" /> কপি
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Routing Number */}
-                      {selectedBank.routingNum && (
-                        <div className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
-                          <span className="text-slate-500 font-extrabold">রাউটিং নম্বর (Routing):</span>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-slate-900 font-mono text-xs font-bold">{selectedBank.routingNum}</span>
-                            <button
-                              type="button"
-                              onClick={() => copyToClipboard(selectedBank.routingNum || '', 'রাউটিং নম্বর')}
-                              className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg text-indigo-800 text-[10px] font-extrabold flex items-center gap-1 shrink-0 active:scale-95 transition cursor-pointer"
-                              title="কপি করুন"
-                            >
-                              <Copy className="w-2.5 h-2.5 text-indigo-600" /> কপি
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* VISA Card Number */}
-                      {selectedBank.visaNum && (
-                        <div className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
-                          <span className="text-slate-500 font-extrabold">ভিসা কার্ড নম্বর (VISA Card):</span>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-indigo-900 font-mono text-xs font-black">{selectedBank.visaNum}</span>
-                            <button
-                              type="button"
-                              onClick={() => copyToClipboard(selectedBank.visaNum || '', 'ভিসা কার্ড নম্বর')}
-                              className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg text-indigo-800 text-[10px] font-extrabold flex items-center gap-1 shrink-0 active:scale-95 transition cursor-pointer"
-                              title="কপি করুন"
-                            >
-                              <Copy className="w-2.5 h-2.5 text-indigo-600" /> কপি
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* SWIFT Code if present */}
-                      {selectedBank.swiftCode && (
-                        <div className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
-                          <span className="text-slate-500 font-extrabold">সোইফট কোড (SWIFT Code):</span>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-slate-900 font-mono text-xs font-bold">{selectedBank.swiftCode}</span>
-                            <button
-                              type="button"
-                              onClick={() => copyToClipboard(selectedBank.swiftCode || '', 'SWIFT কোড')}
-                              className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg text-indigo-800 text-[10px] font-extrabold flex items-center gap-1 shrink-0 active:scale-95 transition cursor-pointer"
-                            >
-                              <Copy className="w-2.5 h-2.5 text-indigo-600" /> কপি
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Copy All Button */}
+                ) : (
+                  <div className="grid grid-cols-2 gap-3.5">
+                    {availableAddMoneyOps.map((op) => (
                       <button
+                        key={op.id}
                         type="button"
                         onClick={() => {
-                          const details = [
-                            `ব্যাংকের নাম: ${selectedBank.name}`,
-                            `অ্যাকাউন্ট হোল্ডার: ${selectedBank.holder}`,
-                            `হিসাব নম্বর: ${selectedBank.accNum}`,
-                            `শাখার নাম: ${selectedBank.branch}`,
-                            selectedBank.routingNum ? `রাউটিং নম্বর: ${selectedBank.routingNum}` : '',
-                            selectedBank.visaNum ? `ভিসা কার্ড নম্বর: ${selectedBank.visaNum}` : '',
-                            selectedBank.swiftCode ? `SWIFT কোড: ${selectedBank.swiftCode}` : ''
-                          ].filter(Boolean).join('\n');
-                          copyToClipboard(details, 'ব্যাংকের সম্পূর্ণ তথ্য');
+                          setAddMoneyOperator(op.id);
+                          setErrorMsg('');
+                          setSuccessMsg('');
                         }}
-                        className="w-full py-2.5 mt-1 bg-gradient-to-r from-indigo-900 via-slate-900 to-indigo-950 hover:from-indigo-950 hover:to-black text-white font-black text-[11px] rounded-xl shadow-sm transition flex items-center justify-center gap-1.5 cursor-pointer active:scale-98"
+                        className="bg-[#022c22] border border-[#0d4a39] rounded-3xl p-6 flex flex-col items-center justify-center gap-3 cursor-pointer hover:border-emerald-500 hover:bg-[#03372b] transition active:scale-95 shadow-lg group"
                       >
-                        <Copy className="w-3.5 h-3.5 text-amber-300" />
-                        <span>📋 ব্যাংকের সকল তথ্য একসাথে কপি করুন</span>
-                      </button>
-                    </div>
-
-                    {selectedBank.qrCodeUrl && (
-                      <div className="bg-slate-50 p-3.5 rounded-2xl border border-indigo-200 text-center space-y-2 animate-fade-in shadow-xs">
-                        <div className="flex items-center justify-between border-b border-slate-200/70 pb-1.5">
-                          <span className="text-[10.5px] font-extrabold text-indigo-950 flex items-center gap-1 uppercase">
-                            📷 ব্যাংক একাউন্ট কিউআর কোড (Scan & Pay)
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setPreviewQrModalUrl(selectedBank.qrCodeUrl || null)}
-                            className="text-[9.5px] bg-indigo-100 hover:bg-indigo-200 text-indigo-800 px-2 py-0.5 rounded-lg font-extrabold transition cursor-pointer"
-                          >
-                            🔍 বড় করে দেখুন
-                          </button>
+                        <div className={`w-12 h-12 rounded-full ${op.circleBg} flex items-center justify-center text-white font-black text-xl shadow-md group-hover:scale-105 transition-transform`}>
+                          {op.symbol}
                         </div>
-                        <img 
-                          src={selectedBank.qrCodeUrl} 
-                          alt={`${selectedBank.name} QR`}
-                          onClick={() => setPreviewQrModalUrl(selectedBank.qrCodeUrl || null)}
-                          className="max-h-56 mx-auto rounded-xl object-contain cursor-pointer hover:scale-102 transition-transform border border-slate-200 shadow-sm" 
-                        />
-                      </div>
-                    )}
-                    <div className="bg-emerald-50 border border-emerald-150 p-3.5 rounded-2xl flex items-start gap-2 text-emerald-800 text-[10.5px] font-sans font-bold leading-relaxed">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
-                      <p>উপরোক্ত যেকোনো ব্যাংক চ্যানেলের মাধ্যমে ব্যালেন্স ডিপোজিট করুন। সম্পূর্ণ টাকা পাঠানো সম্পন্ন হলে নিচের রশিদের তথ্য প্রদান ফর্মটি পূরণ করে কনফার্ম করুন।</p>
-                    </div>
-
-                    <form onSubmit={handleAddMoneySubmit} className="space-y-3.5 pt-1">
-                      {errorMsg && (
-                        <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl text-xs font-bold flex items-center gap-1.5 animate-fade-in">
-                          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                          <span>{errorMsg}</span>
-                        </div>
-                      )}
-                      {successMsg && (
-                        <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl text-xs font-bold flex items-center gap-1.5 animate-fade-in">
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                          <span>{successMsg}</span>
-                        </div>
-                      )}
-                      <div className="space-y-1.5">
-                        <label className="block text-xs font-bold text-slate-650">ডিপোজিট পরিমাণ (৳ Deposit Amount BDT)</label>
-                        <input
-                          type="number"
-                          required
-                          value={depositAmount}
-                          onChange={(e) => setDepositAmount(e.target.value)}
-                          placeholder="৳ সর্বনিম্ন ১০ BDT"
-                          className="w-full px-3.5 py-2.5 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono"
-                        />
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <label className="block text-xs font-bold text-slate-650">আপনার ব্যাংক হিসাব নম্বর / মোবাইল নম্বর</label>
-                        <input
-                          type="text"
-                          required
-                          value={senderNumber}
-                          onChange={(e) => setSenderNumber(e.target.value)}
-                          placeholder="যে অ্যাকাউন্ট থেকে টাকা পাঠিয়েছেন"
-                          className="w-full px-3.5 py-2.5 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono"
-                        />
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <label className="block text-xs font-bold text-slate-650">ভাউচার / ট্রানজেকশন রেফারেন্স নং</label>
-                        <input
-                          type="text"
-                          required
-                          value={trxId}
-                          onChange={(e) => setTrxId(e.target.value)}
-                          placeholder="রশিদের ট্রানজেকশন আইডি বা রেফারেন্স"
-                          className="w-full px-3.5 py-2.5 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono uppercase"
-                        />
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <label className="block text-xs font-bold text-slate-650">সিকিউরিটি পিন নম্বর (Wallet PIN)</label>
-                        <input
-                          type="password"
-                          maxLength={4}
-                          required
-                          value={securityPin}
-                          onChange={(e) => setSecurityPin(e.target.value)}
-                          placeholder="৪ সংখ্যার ওয়ালেট পিন"
-                          className="w-full px-3.5 py-2.5 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono text-center tracking-widest"
-                        />
-                      </div>
-
-                      <button 
-                        type="submit" 
-                        disabled={loading}
-                        className="w-full py-3 bg-indigo-900 hover:bg-indigo-950 text-white font-extrabold rounded-2xl text-xs shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer uppercase font-sans"
-                      >
-                        {loading ? (
-                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        ) : (
-                          'ডিপোজিট রশিদ সাবমিট করুন ✅'
-                        )}
-                      </button>
-                    </form>
-                  </div>
-                );
-              })()
-            )
-          )}
-        </div>
-      )}
-
-      {addMoneyChannel === 'foreign_bank' && (
-        <div className="space-y-4">
-          {(() => {
-            const allBanks = appConfig?.paymentBanks || [];
-            const intlBanksList = allBanks.filter(b => isForeignBankItem(b) && b.active !== false);
-            const defaultIntl = [
-              { id: 'AL RAJHI (সৌদি ব্যাংক)', name: 'AL RAJHI BANK (সৌদি ব্যাংক)', acronym: 'RAJHI', holder: 'BUSINESS NETWORK BANGLADESH', accNum: '2441580395850', iban: 'SA64000001006087881869', branch: 'Riyadh Main Branch', routingNum: 'RJHISA21', qrCodeUrl: '' },
-              { id: 'SNB (সৌদি ব্যাংক)', name: 'SAUDI NATIONAL BANK (SNB ALAHLI)', acronym: 'SNB', holder: 'BUSINESS NETWORK BANGLADESH', accNum: '640000010006087881869', iban: 'SA50 8000 0640 6080 1788 1869', branch: 'Riyadh Main Branch', routingNum: 'NCBKSA21', qrCodeUrl: '' },
-              { id: 'ENBD (দুবাই ব্যাংক)', name: 'EMIRATES NBD BANK (DUBAI)', acronym: 'ENBD', holder: 'BUSINESS NETWORK BANGLADESH', accNum: '120220000987456321458', iban: 'AE12 0220 0009 8745 6321 458', branch: 'Deira Branch, Dubai', routingNum: 'EBILAE2X', qrCodeUrl: '' }
-            ];
-            const displayIntlBanks = (intlBanksList.length > 0) ? intlBanksList : defaultIntl;
-
-            if (foreignBankStep === 1) {
-              return (
-                <div className="space-y-3 text-left">
-                  <p className="text-[11px] text-white/80 font-bold">
-                    প্রবাস / বিদেশী ব্যাংক ডিপোজিট করতে নিচের যেকোনো একটি ব্যাংক বেছে নিনঃ
-                  </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {displayIntlBanks.map((bk: any, idx: number) => (
-                      <button
-                        key={`${bk.id}-${idx}`}
-                        type="button"
-                        onClick={() => { setSelectedBankId(bk.id); setForeignBankStep(2); }}
-                        className={`p-4 rounded-3xl ${bk.bgClass || 'bg-slate-50 border border-indigo-200'} border transition cursor-pointer hover:border-indigo-500 hover:shadow-md active:scale-97 text-left space-y-2`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white font-black text-xs flex items-center justify-center uppercase shrink-0 shadow-xs">
-                            {bk.acronym || 'INT'}
-                          </div>
-                          <span className="text-[9px] font-black bg-indigo-100 text-indigo-800 px-2.5 py-0.5 rounded-full uppercase">FOREIGN</span>
-                        </div>
-                        <h4 className={`text-xs font-black ${bk.textClass || 'text-indigo-950'}`}>{bk.name}</h4>
-                        <p className="text-[9px] text-slate-500 font-sans font-semibold">{bk.branch || 'Global Branch'}</p>
+                        <span className="text-white font-black text-sm tracking-wide">
+                          {op.name}
+                        </span>
                       </button>
                     ))}
                   </div>
-                </div>
-              );
-            }
-
-            const selectedBank = displayIntlBanks.find((b: any) => b.id === selectedBankId) || displayIntlBanks[0];
-            const ibanVal = selectedBank.iban || selectedBank.accNum || '';
-
-            return (
-              <div className="bg-white rounded-3xl p-4 sm:p-5 text-slate-800 space-y-3.5 animate-fade-in shadow-lg border border-indigo-150 text-left">
-                {/* Header with back button */}
-                <div className="flex justify-between items-center border-b border-indigo-100 pb-2.5">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white font-black text-xs flex items-center justify-center uppercase shrink-0 shadow-xs">
-                      {selectedBank.acronym || 'INT'}
-                    </div>
-                    <div>
-                      <h3 className="text-xs font-black text-indigo-950 uppercase flex items-center gap-1">
-                        🎯 {selectedBank.name}
-                      </h3>
-                      <span className="text-[9px] text-indigo-700 font-extrabold block">প্রবাস / বিদেশী ব্যাংক অ্যাকাউন্ট</span>
-                    </div>
-                  </div>
+                )}
+              </div>
+            ) : (
+              /* When an Operator (e.g. bKash) is selected */
+              <div className="bg-white rounded-3xl p-6 text-slate-850 shadow-2xl space-y-4 animate-fade-in text-left">
+                {/* Header */}
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <h3 className="text-xs font-black text-indigo-950 flex items-center gap-1.5 uppercase">
+                    <span className="text-red-500 text-sm">🎯</span> {addMoneyOperator.toUpperCase()} অ্যাড মানি পেমেন্ট ডিটেইলস
+                  </h3>
                   <button 
-                    type="button" 
-                    onClick={() => setForeignBankStep(1)} 
-                    className="text-[10px] bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-xl text-indigo-700 font-bold transition flex items-center gap-1 cursor-pointer"
+                    type="button"
+                    onClick={() => setAddMoneyOperator(null)}
+                    className="text-[11px] bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-3 py-1 rounded-xl transition cursor-pointer"
                   >
-                    ← ব্যাংক পরিবর্তন
+                    পরিবর্তন
                   </button>
                 </div>
 
-                {/* Compact Notice Box - Direct Main Balance Add */}
-                <div className="bg-indigo-50/90 border border-indigo-200 p-3 rounded-2xl flex items-start gap-2 text-indigo-950 text-[10.5px] font-sans font-bold leading-relaxed">
-                  <AlertCircle className="w-4 h-4 text-indigo-600 mt-0.5 shrink-0" />
-                  <p>💡 এই ব্যাংক অ্যাকাউন্টে টাকা পাঠালে ডিরেক্টলি কিছুক্ষণের মধ্যে আপনার BNB অ্যাকাউন্টে টাকা এড হয়ে যাবে। ব্যাংক ট্রান্সফার সম্পন্ন করে নিচে আপনার জমার তথ্য প্রদান করুন।</p>
-                </div>
-
-                {/* Unified Compact Details Grid */}
-                <div className="bg-slate-50/90 border border-indigo-150 p-3.5 rounded-2xl space-y-2 text-[10px] font-sans font-bold text-slate-800">
-                  {/* Bank Name */}
-                  <div className="flex justify-between items-center bg-white p-2 rounded-xl border border-indigo-100 shadow-2xs">
-                    <span className="text-indigo-900 font-extrabold text-[9.5px]">১. ব্যাংকের নাম:</span>
-                    <div className="flex items-center gap-1.5 max-w-[65%] justify-end">
-                      <span className="text-slate-900 font-black uppercase font-mono text-xs truncate">{selectedBank.name}</span>
-                      <button 
-                        type="button"
-                        onClick={() => copyToClipboard(selectedBank.name, 'ব্যাংকের নাম')}
-                        className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 rounded-md text-[9.5px] font-extrabold flex items-center gap-1 transition shrink-0 cursor-pointer"
-                        title="কপি করুন"
-                      >
-                        <Copy className="w-2.5 h-2.5" /> কপি
-                      </button>
+                {/* Operator Details Box */}
+                <div className="bg-slate-50/90 border border-slate-200/90 p-4 rounded-2xl space-y-3">
+                  {/* Row 1: Service Name */}
+                  <div className="flex justify-between items-center bg-white p-3 rounded-xl border border-slate-200/80 shadow-2xs">
+                    <div>
+                      <span className="text-slate-400 block uppercase font-black text-[9px]">মোবাইল ওয়ালেট / সার্ভিস</span>
+                      <span className="font-black text-slate-900 text-sm uppercase">{addMoneyOperator.toUpperCase()}</span>
                     </div>
+                    <button 
+                      type="button"
+                      onClick={() => copyToClipboard(addMoneyOperator.toUpperCase(), 'সার্ভিস নাম')}
+                      className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs flex items-center gap-1 transition cursor-pointer active:scale-95"
+                    >
+                      <Copy className="w-3.5 h-3.5 text-slate-600" /> কপি
+                    </button>
                   </div>
 
-                  {/* Beneficiary Name */}
-                  <div className="flex justify-between items-center bg-white p-2 rounded-xl border border-indigo-100 shadow-2xs">
-                    <span className="text-indigo-900 font-extrabold text-[9.5px]">২. নাম (Beneficiary):</span>
-                    <div className="flex items-center gap-1.5 max-w-[65%] justify-end">
-                      <span className="text-slate-900 font-black uppercase font-mono text-xs truncate">{selectedBank.holder}</span>
-                      <button 
-                        type="button"
-                        onClick={() => copyToClipboard(selectedBank.holder, 'বেনিফিশিয়ারি নাম')}
-                        className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 rounded-md text-[9.5px] font-extrabold flex items-center gap-1 transition shrink-0 cursor-pointer"
-                        title="কপি করুন"
-                      >
-                        <Copy className="w-2.5 h-2.5" /> কপি
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Account Number */}
-                  <div className="flex justify-between items-center bg-white p-2 rounded-xl border border-indigo-100 shadow-2xs">
-                    <span className="text-indigo-900 font-extrabold text-[9.5px]">৩. অ্যাকাউন্ট নম্বর:</span>
-                    <div className="flex items-center gap-1.5 font-mono">
-                      <span className="text-slate-900 font-black text-xs">{selectedBank.accNum}</span>
-                      <button 
-                        type="button"
-                        onClick={() => copyToClipboard(selectedBank.accNum, 'Account Number')}
-                        className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 rounded-md text-[9.5px] font-extrabold flex items-center gap-1 transition shrink-0 cursor-pointer"
-                        title="কপি করুন"
-                      >
-                        <Copy className="w-2.5 h-2.5" /> কপি
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* IBAN */}
-                  <div className="space-y-1 bg-indigo-50/70 p-2.5 rounded-xl border border-indigo-200">
-                    <div className="flex justify-between items-center">
-                      <span className="text-indigo-950 font-black text-[9.5px] uppercase">
-                        ৪. হিসাব নম্বর (আইবান / IBAN):
+                  {/* Row 2: Personal Number */}
+                  <div className="flex justify-between items-center bg-white p-3 rounded-xl border border-slate-200/80 shadow-2xs">
+                    <div>
+                      <span className="text-slate-400 block uppercase font-black text-[9px]">পার্সোনাল নম্বর</span>
+                      <span className="font-mono text-base font-black text-slate-900 tracking-wider">
+                        {formattedDisplayNum(getOperatorNumber(addMoneyOperator))}
                       </span>
-                      <button 
-                        type="button"
-                        onClick={() => copyToClipboard(ibanVal, 'IBAN')}
-                        className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md text-[9.5px] font-extrabold flex items-center gap-1 transition shrink-0 cursor-pointer"
-                      >
-                        <Copy className="w-2.5 h-2.5" /> আইবান কপি
-                      </button>
                     </div>
-                    <div className="font-mono text-indigo-950 font-black tracking-tight text-xs bg-white p-1.5 rounded-lg border border-indigo-150 select-all">
-                      {ibanVal}
-                    </div>
+                    <button 
+                      type="button"
+                      onClick={() => copyToClipboard(cleanNumberForCopy(getOperatorNumber(addMoneyOperator)), 'অপারেটর নম্বর')}
+                      className="px-3.5 py-1.5 bg-[#008955] hover:bg-emerald-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer active:scale-95"
+                    >
+                      <Copy className="w-3.5 h-3.5 text-white" /> নম্বর কপি
+                    </button>
                   </div>
 
-                  {/* Branch / SWIFT Code if present */}
-                  {(selectedBank.branch || selectedBank.swiftCode) && (
-                    <div className="flex justify-between items-center bg-white p-2 rounded-xl border border-indigo-100 shadow-2xs">
-                      <span className="text-indigo-900 font-extrabold text-[9.5px]">৫. শাখা / সুইফট কোড:</span>
-                      <div className="flex items-center gap-1.5 font-mono">
-                        <span className="text-slate-900 font-black text-xs">{selectedBank.branch || selectedBank.swiftCode}</span>
-                        <button 
-                          type="button"
-                          onClick={() => copyToClipboard(selectedBank.branch || selectedBank.swiftCode || '', 'শাখা/সুইফট কোড')}
-                          className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 rounded-md text-[9.5px] font-extrabold flex items-center gap-1 transition shrink-0 cursor-pointer"
-                          title="কপি করুন"
-                        >
-                          <Copy className="w-2.5 h-2.5" /> কপি
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Copy All Foreign Bank Info Button */}
+                  {/* Row 3: Copy All Info */}
                   <button
                     type="button"
                     onClick={() => {
-                      const foreignDetails = [
-                        `বিদেশি ব্যাংক নাম: ${selectedBank.name}`,
-                        `বেনিফিশিয়ারি নাম: ${selectedBank.holder}`,
-                        `অ্যাকাউন্ট নম্বর: ${selectedBank.accNum}`,
-                        `আইবান (IBAN): ${ibanVal}`,
-                        selectedBank.branch ? `শাখা: ${selectedBank.branch}` : '',
-                        selectedBank.swiftCode ? `সুইফট কোড: ${selectedBank.swiftCode}` : ''
-                      ].filter(Boolean).join('\n');
-                      copyToClipboard(foreignDetails, 'বিদেশি ব্যাংকের সকল তথ্য');
+                      const fullText = "মোবাইল ওয়ালেট: " + addMoneyOperator.toUpperCase() + "\nপার্সোনাল নম্বর: " + cleanNumberForCopy(getOperatorNumber(addMoneyOperator));
+                      copyToClipboard(fullText, 'ওয়ালেটের সকল তথ্য');
                     }}
-                    className="w-full py-2.5 mt-1 bg-gradient-to-r from-indigo-900 via-slate-900 to-indigo-950 hover:from-indigo-950 hover:to-black text-white font-black text-[10.5px] rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer active:scale-98"
+                    className="w-full py-2.5 bg-[#22215b] hover:bg-[#1a1947] text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm transition cursor-pointer active:scale-98"
                   >
-                    <Copy className="w-3.5 h-3.5 text-amber-300" />
-                    <span>📋 প্রবাস/বিদেশি ব্যাংকের সমস্ত তথ্য একসাথে কপি করুন</span>
+                    <Copy className="w-4 h-4 text-amber-300" /> 📋 ওয়ালেটের সকল তথ্য একসাথে কপি করুন
                   </button>
-
-                  {selectedBank.qrCodeUrl && (
-                    <div className="bg-white p-2.5 rounded-xl border border-indigo-200 text-center space-y-1.5">
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-1">
-                        <span className="text-[9.5px] font-extrabold text-indigo-950 uppercase flex items-center gap-1">
-                          📷 কিউআর কোড স্ক্যানার (Scan to Pay)
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setPreviewQrModalUrl(selectedBank.qrCodeUrl)}
-                          className="text-[9px] bg-indigo-100 hover:bg-indigo-200 text-indigo-800 px-2 py-0.5 rounded-lg font-extrabold transition cursor-pointer"
-                        >
-                          🔍 বড় করে দেখুন
-                        </button>
-                      </div>
-                      <img 
-                        src={selectedBank.qrCodeUrl} 
-                        alt={`${selectedBank.name} QR`} 
-                        onClick={() => setPreviewQrModalUrl(selectedBank.qrCodeUrl)}
-                        className="max-h-48 mx-auto rounded-lg object-contain cursor-pointer hover:scale-102 transition-transform border border-slate-200 shadow-xs" 
-                      />
-                    </div>
-                  )}
                 </div>
 
-                {/* Compact Deposit Form inside the same card */}
-                <form onSubmit={handleAddMoneySubmit} className="space-y-3 pt-1 border-t border-indigo-100">
-                  <h4 className="text-[11px] font-black text-indigo-950 uppercase flex items-center gap-1">
-                    📝 জমার তথ্য / রশিদ জমা দিন
-                  </h4>
-
+                {/* Form Fields */}
+                <form onSubmit={handleAddMoneySubmit} className="space-y-3.5 pt-1">
                   {errorMsg && (
                     <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl text-xs font-bold flex items-center gap-1.5 animate-fade-in">
                       <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
@@ -3175,74 +2861,609 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                     </div>
                   )}
 
-                  <div className="space-y-1">
-                    <label className="block text-[10.5px] font-bold text-slate-700">ডিপোজিট পরিমাণ (৳ Deposit Amount BDT)</label>
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-700">ডিপোজিট পরিমাণ (৳ Amount BDT)</label>
                     <input
                       type="number"
                       required
                       value={depositAmount}
                       onChange={(e) => setDepositAmount(e.target.value)}
-                      placeholder="৳ সর্বনিম্ন ১০ BDT"
-                      className="w-full px-3 py-2 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono bg-white"
+                      placeholder="৳ সর্বনিম্ন 10 BDT"
+                      className="w-full px-3.5 py-3 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono bg-white"
                     />
                   </div>
 
-                  <div className="space-y-1">
-                    <label className="block text-[10.5px] font-bold text-slate-700">আপনার প্রেরক হিসাব / আইবান / অ্যাকাউন্ট নম্বর</label>
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-700">প্রেরক {addMoneyOperator.toUpperCase()} নম্বর</label>
                     <input
                       type="text"
                       required
                       value={senderNumber}
                       onChange={(e) => setSenderNumber(e.target.value)}
-                      placeholder="প্রবাস থেকে যে অ্যাকাউন্ট/আইবান থেকে টাকা পাঠিয়েছেন"
-                      className="w-full px-3 py-2 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono bg-white"
+                      placeholder="উদাঃ 017XXXXXXXX"
+                      className="w-full px-3.5 py-3 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono bg-white"
                     />
                   </div>
 
-                  <div className="space-y-1">
-                    <label className="block text-[10.5px] font-bold text-slate-700">ভাউচার / ট্রানজেকশন রেফারেন্স নং (Wire Reference/TrxID)</label>
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-700">লাস্ট 4 সংখ্যা অথবা ট্রানজেকশন আইডি (TrxID)</label>
                     <input
                       type="text"
                       required
                       value={trxId}
                       onChange={(e) => setTrxId(e.target.value)}
-                      placeholder="ট্রানজেকশন আইডি বা রেফারেন্স"
-                      className="w-full px-3 py-2 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono uppercase bg-white"
+                      placeholder="উদাঃ 1234 অথবা 8K48AL7D9"
+                      className="w-full px-3.5 py-3 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono uppercase bg-white"
                     />
                   </div>
 
-                  <div className="space-y-1">
-                    <label className="block text-[10.5px] font-bold text-slate-700">সিকিউরিটি পিন নম্বর (Wallet PIN)</label>
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-700">সিকিউরিটি পিন নম্বর (Wallet PIN)</label>
                     <input
                       type="password"
                       maxLength={4}
                       required
                       value={securityPin}
                       onChange={(e) => setSecurityPin(e.target.value)}
-                      placeholder="৪ সংখ্যার ওয়ালেট পিন"
-                      className="w-full px-3 py-2 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono text-center tracking-widest bg-white"
+                      placeholder="4 সংখ্যার ওয়ালেট পিন"
+                      className="w-full px-3.5 py-3 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono text-center tracking-widest bg-white"
                     />
                   </div>
 
                   <button 
                     type="submit" 
                     disabled={loading}
-                    className="w-full py-2.5 bg-indigo-900 hover:bg-indigo-950 text-white font-extrabold rounded-xl text-xs shadow-sm transition flex items-center justify-center gap-1.5 cursor-pointer uppercase font-sans mt-2"
+                    className="w-full py-3.5 bg-[#2c2777] hover:bg-[#231f61] text-white font-extrabold rounded-2xl text-xs shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer uppercase active:scale-98"
                   >
                     {loading ? (
                       <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                     ) : (
-                      'বিদেশী ব্যাংক ডিপোজিট রশিদ সাবমিট করুন ✅'
+                      'অ্যাড মানি রিকোয়েস্ট সাবমিট করুন ✨'
                     )}
                   </button>
                 </form>
               </div>
-            );
-          })()}
-        </div>
-      )}
-    </div>
-  );
+            )}
+          </div>
+        )}
+
+        {/* ===================== TAB 2: BANK DEPOSIT ===================== */}
+        {addMoneyChannel === 'bank_deposit' && (
+          <div className="space-y-4">
+            {bankStep === 1 ? (
+              <div className="space-y-3.5 text-left animate-fade-in">
+                <p className="text-xs text-white/80 font-bold">
+                  বাংলাদেশি ব্যাংক ডিপোজিট করতে নিচের যেকোনো একটি ব্যাংক বেছে নিনঃ
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  {localBanks.map((bk: any, idx: number) => (
+                    <button
+                      key={`${bk.id}-${idx}`}
+                      type="button"
+                      onClick={() => { 
+                        setSelectedBankId(bk.id); 
+                        setBankStep(2); 
+                        setErrorMsg('');
+                        setSuccessMsg('');
+                      }}
+                      className="bg-[#edf5fd] hover:bg-[#e4effb] border border-sky-100/90 rounded-[26px] p-5.5 text-left cursor-pointer transition-all hover:scale-[1.01] active:scale-[0.98] shadow-sm hover:shadow-md space-y-3 group"
+                    >
+                      <div className="text-2xl">
+                        🏦
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-black text-[#0b4ba5] group-hover:text-blue-900 leading-snug">
+                          {bk.name}
+                        </h4>
+                        <p className="text-xs text-slate-500 font-sans font-medium mt-1">
+                          {bk.branch || 'প্রধান শাখা'}
+                        </p>
+                      </div>
+                    </button>
+                  ))}
+                  {localBanks.length === 0 && (
+                    <div className="col-span-2 text-center py-6 text-white/60 font-bold text-xs">
+                      কোনো বাংলাদেশি ব্যাংক অ্যাকাউন্ট সেটআপ করা নেই।
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              /* Bank Account Details View */
+              <div className="bg-white rounded-3xl p-6 text-slate-850 shadow-2xl space-y-4 animate-fade-in text-left">
+                {/* Header */}
+                <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                  <h3 className="text-xs font-black text-indigo-950 uppercase flex items-center gap-1.5">
+                    <span className="text-red-500 text-sm">🎯</span> {currentSelectedLocalBank.name} অ্যাকাউন্ট তথ্য
+                  </h3>
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setBankStep(1);
+                      setSelectedBankId(null);
+                    }} 
+                    className="text-[11px] bg-slate-100 hover:bg-slate-200 px-3 py-1 rounded-xl text-slate-700 font-bold transition cursor-pointer"
+                  >
+                    ব্যাংক পরিবর্তন
+                  </button>
+                </div>
+
+                {/* Bank Details Rows */}
+                <div className="bg-slate-50/90 border border-slate-200/90 p-4 rounded-2xl space-y-2 text-xs">
+                  <div className="flex justify-between items-center py-1.5 border-b border-slate-200/60">
+                    <span className="text-slate-500 font-bold">ব্যাংকের নামঃ</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-extrabold text-slate-900">{currentSelectedLocalBank.name}</span>
+                      <button 
+                        type="button"
+                        onClick={() => copyToClipboard(currentSelectedLocalBank.name, 'ব্যাংকের নাম')}
+                        className="text-[10.5px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-bold flex items-center gap-0.5 cursor-pointer"
+                      >
+                        <Copy className="w-3 h-3 text-slate-500" /> কপি
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between items-center py-1.5 border-b border-slate-200/60">
+                    <span className="text-slate-500 font-bold">অ্যাকাউন্ট হোল্ডারঃ</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-extrabold text-slate-900">{currentSelectedLocalBank.holder || 'MD SUJON MIA'}</span>
+                      <button 
+                        type="button"
+                        onClick={() => copyToClipboard(currentSelectedLocalBank.holder || 'MD SUJON MIA', 'অ্যাকাউন্ট হোল্ডার')}
+                        className="text-[10.5px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-bold flex items-center gap-0.5 cursor-pointer"
+                      >
+                        <Copy className="w-3 h-3 text-slate-500" /> কপি
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between items-center py-1.5 border-b border-slate-200/60">
+                    <span className="text-slate-500 font-bold">হিসাব নম্বর (Acc No):</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-black text-slate-900 tracking-wide">{currentSelectedLocalBank.accNum}</span>
+                      <button 
+                        type="button"
+                        onClick={() => copyToClipboard(cleanNumberForCopy(currentSelectedLocalBank.accNum), 'হিসাব নম্বর')}
+                        className="text-[10.5px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-bold flex items-center gap-0.5 cursor-pointer"
+                      >
+                        <Copy className="w-3 h-3 text-slate-500" /> কপি
+                      </button>
+                    </div>
+                  </div>
+
+                  {currentSelectedLocalBank.branch && (
+                    <div className="flex justify-between items-center py-1.5 border-b border-slate-200/60">
+                      <span className="text-slate-500 font-bold">শাখার নাম (Branch):</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-slate-800">{currentSelectedLocalBank.branch}</span>
+                        <button 
+                          type="button"
+                          onClick={() => copyToClipboard(currentSelectedLocalBank.branch, 'শাখার নাম')}
+                          className="text-[10.5px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-bold flex items-center gap-0.5 cursor-pointer"
+                        >
+                          <Copy className="w-3 h-3 text-slate-500" /> কপি
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {currentSelectedLocalBank.routingNum && (
+                    <div className="flex justify-between items-center py-1.5 border-b border-slate-200/60">
+                      <span className="text-slate-500 font-bold">রাউটিং নম্বর (Routing):</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-slate-900">{currentSelectedLocalBank.routingNum}</span>
+                        <button 
+                          type="button"
+                          onClick={() => copyToClipboard(cleanNumberForCopy(currentSelectedLocalBank.routingNum), 'রাউটিং নম্বর')}
+                          className="text-[10.5px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-bold flex items-center gap-0.5 cursor-pointer"
+                        >
+                          <Copy className="w-3 h-3 text-slate-500" /> কপি
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {currentSelectedLocalBank.visaNum && (
+                    <div className="flex justify-between items-center py-1.5 border-b border-slate-200/60">
+                      <span className="text-slate-500 font-bold">ভিসা কার্ড নম্বর (VISA Card):</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-slate-900">{currentSelectedLocalBank.visaNum}</span>
+                        <button 
+                          type="button"
+                          onClick={() => copyToClipboard(cleanNumberForCopy(currentSelectedLocalBank.visaNum), 'ভিসা কার্ড নম্বর')}
+                          className="text-[10.5px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-bold flex items-center gap-0.5 cursor-pointer"
+                        >
+                          <Copy className="w-3 h-3 text-slate-500" /> কপি
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const details = [
+                        "ব্যাংকের নাম: " + currentSelectedLocalBank.name,
+                        "অ্যাকাউন্ট হোল্ডার: " + (currentSelectedLocalBank.holder || 'MD SUJON MIA'),
+                        "হিসাব নম্বর: " + currentSelectedLocalBank.accNum,
+                        currentSelectedLocalBank.branch ? ("শাখা: " + currentSelectedLocalBank.branch) : '',
+                        currentSelectedLocalBank.routingNum ? ("রাউটিং নম্বর: " + currentSelectedLocalBank.routingNum) : '',
+                        currentSelectedLocalBank.visaNum ? ("ভিসা কার্ড নম্বর: " + currentSelectedLocalBank.visaNum) : ''
+                      ].filter(Boolean).join("\n");
+                      copyToClipboard(details, 'ব্যাংকের সম্পূর্ণ তথ্য');
+                    }}
+                    className="w-full py-2.5 mt-2 bg-[#22215b] hover:bg-[#1a1947] text-white font-bold text-xs rounded-xl shadow-sm transition flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+                  >
+                    <Copy className="w-4 h-4 text-amber-300" />
+                    <span>📋 ব্যাংকের সকল তথ্য একসাথে কপি করুন</span>
+                  </button>
+                </div>
+
+                {/* Light green notice banner */}
+                <div className="bg-[#e8f7ee] border border-[#b2e5c8] text-[#046c3b] p-3.5 rounded-2xl text-[11.5px] font-medium flex items-start gap-2 leading-relaxed">
+                  <CheckCircle2 className="w-4 h-4 text-[#008955] mt-0.5 shrink-0" />
+                  <p>উপরোক্ত যেকোনো ব্যাংক চ্যানেলের মাধ্যমে ব্যালেন্স ডিপোজিট করুন। সম্পূর্ণ টাকা পাঠানো সম্পন্ন হলে নিচের রশিদের তথ্য প্রদান ফর্মটি পূরণ করে কনফার্ম করুন।</p>
+                </div>
+
+                {/* Form fields */}
+                <form onSubmit={handleAddMoneySubmit} className="space-y-3.5 pt-1">
+                  {errorMsg && (
+                    <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl text-xs font-bold flex items-center gap-1.5 animate-fade-in">
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>{errorMsg}</span>
+                    </div>
+                  )}
+                  {successMsg && (
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl text-xs font-bold flex items-center gap-1.5 animate-fade-in">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>{successMsg}</span>
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-700">ডিপোজিট পরিমাণ (৳ Deposit Amount BDT)</label>
+                    <input
+                      type="number"
+                      required
+                      value={depositAmount}
+                      onChange={(e) => setDepositAmount(e.target.value)}
+                      placeholder="৳ সর্বনিম্ন 10 BDT"
+                      className="w-full px-3.5 py-3 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono bg-white"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-700">আপনার ব্যাংক হিসাব নম্বর / মোবাইল নম্বর</label>
+                    <input
+                      type="text"
+                      required
+                      value={senderNumber}
+                      onChange={(e) => setSenderNumber(e.target.value)}
+                      placeholder="যে অ্যাকাউন্ট থেকে টাকা পাঠিয়েছেন"
+                      className="w-full px-3.5 py-3 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono bg-white"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-700">ভাউচার / ট্রানজেকশন রেফারেন্স নং</label>
+                    <input
+                      type="text"
+                      required
+                      value={trxId}
+                      onChange={(e) => setTrxId(e.target.value)}
+                      placeholder="রশিদের ট্রানজেকশন আইডি বা রেফারেন্স"
+                      className="w-full px-3.5 py-3 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono uppercase bg-white"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-700">সিকিউরিটি পিন নম্বর (Wallet PIN)</label>
+                    <input
+                      type="password"
+                      maxLength={4}
+                      required
+                      value={securityPin}
+                      onChange={(e) => setSecurityPin(e.target.value)}
+                      placeholder="4 সংখ্যার ওয়ালেট পিন"
+                      className="w-full px-3.5 py-3 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono text-center tracking-widest bg-white"
+                    />
+                  </div>
+
+                  <button 
+                    type="submit" 
+                    disabled={loading}
+                    className="w-full py-3.5 bg-[#2c2777] hover:bg-[#231f61] text-white font-extrabold rounded-2xl text-xs shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer uppercase active:scale-98"
+                  >
+                    {loading ? (
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      'ডিপোজিট রশিদ সাবমিট করুন ✅'
+                    )}
+                  </button>
+                </form>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ===================== TAB 3: FOREIGN BANK ===================== */}
+        {addMoneyChannel === 'foreign_bank' && (
+          <div className="space-y-4">
+            {foreignBankStep === 1 ? (
+              <div className="space-y-3.5 text-left animate-fade-in">
+                <p className="text-xs text-white/80 font-bold">
+                  প্রবাস / বিদেশী ব্যাংক ডিপোজিট করতে নিচের যেকোনো একটি ব্যাংক বেছে নিনঃ
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  {displayIntlBanks.map((bk: any, idx: number) => (
+                    <button
+                      key={`${bk.id}-${idx}`}
+                      type="button"
+                      onClick={() => { 
+                        setSelectedBankId(bk.id); 
+                        setForeignBankStep(2); 
+                        setErrorMsg('');
+                        setSuccessMsg('');
+                      }}
+                      className="bg-[#edf5fd] hover:bg-[#e4effb] border border-sky-100/90 rounded-[26px] p-5.5 text-left cursor-pointer transition-all hover:scale-[1.01] active:scale-[0.98] shadow-sm hover:shadow-md space-y-3 group"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-2xl">🏛️</span>
+                        <span className="text-[9.5px] font-black bg-indigo-100 text-indigo-800 px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                          FOREIGN BANK
+                        </span>
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-black text-[#0b4ba5] group-hover:text-blue-900 leading-snug">
+                          {bk.name}
+                        </h4>
+                        <p className="text-xs text-slate-500 font-sans font-medium mt-1">
+                          {bk.branch || 'Global Branch'}
+                        </p>
+                      </div>
+                    </button>
+                  ))}
+                  {displayIntlBanks.length === 0 && (
+                    <div className="col-span-2 text-center py-6 text-white/60 font-bold text-xs">
+                      কোনো বিদেশী ব্যাংক অ্যাকাউন্ট সেটআপ করা নেই।
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              /* Foreign Bank Details View */
+              <div className="bg-white rounded-3xl p-6 text-slate-850 shadow-2xl space-y-4 animate-fade-in text-left">
+                {/* Header */}
+                <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white font-black text-xs flex items-center justify-center uppercase shrink-0 shadow-xs">
+                      {currentSelectedIntlBank.acronym || 'INT'}
+                    </div>
+                    <div>
+                      <h3 className="text-xs font-black text-indigo-950 uppercase flex items-center gap-1">
+                        🎯 {currentSelectedIntlBank.name}
+                      </h3>
+                      <span className="text-[9px] text-indigo-700 font-extrabold block">প্রবাস / বিদেশী ব্যাংক অ্যাকাউন্ট (Foreign IBAN)</span>
+                    </div>
+                  </div>
+                  <button 
+                    type="button" 
+                    onClick={() => {
+                      setForeignBankStep(1);
+                      setSelectedBankId(null);
+                    }} 
+                    className="text-[11px] bg-slate-100 hover:bg-slate-200 px-3 py-1 rounded-xl text-slate-700 font-bold transition flex items-center gap-1 cursor-pointer"
+                  >
+                    ব্যাংক পরিবর্তন
+                  </button>
+                </div>
+
+                {/* Bank Details Rows */}
+                <div className="bg-slate-50/90 border border-slate-200/90 p-4 rounded-2xl space-y-2 text-xs">
+                  <div className="flex justify-between items-center py-1.5 border-b border-slate-200/60">
+                    <span className="text-slate-500 font-bold">ব্যাংকের নামঃ</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-extrabold text-slate-900">{currentSelectedIntlBank.name}</span>
+                      <button 
+                        type="button"
+                        onClick={() => copyToClipboard(currentSelectedIntlBank.name, 'ব্যাংকের নাম')}
+                        className="text-[10.5px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-bold flex items-center gap-0.5 cursor-pointer"
+                      >
+                        <Copy className="w-3 h-3 text-slate-500" /> কপি
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between items-center py-1.5 border-b border-slate-200/60">
+                    <span className="text-slate-500 font-bold">অ্যাকাউন্ট হোল্ডারঃ</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-extrabold text-slate-900">{currentSelectedIntlBank.holder || 'BUSINESS NETWORK BANGLADESH'}</span>
+                      <button 
+                        type="button"
+                        onClick={() => copyToClipboard(currentSelectedIntlBank.holder || 'BUSINESS NETWORK BANGLADESH', 'অ্যাকাউন্ট হোল্ডার')}
+                        className="text-[10.5px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-bold flex items-center gap-0.5 cursor-pointer"
+                      >
+                        <Copy className="w-3 h-3 text-slate-500" /> কপি
+                      </button>
+                    </div>
+                  </div>
+
+                  {currentSelectedIntlBank.accNum && (
+                    <div className="flex justify-between items-center py-1.5 border-b border-slate-200/60">
+                      <span className="text-slate-500 font-bold">হিসাব নম্বর (Acc No):</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-black text-slate-900 tracking-wide">{currentSelectedIntlBank.accNum}</span>
+                        <button 
+                          type="button"
+                          onClick={() => copyToClipboard(cleanNumberForCopy(currentSelectedIntlBank.accNum), 'হিসাব নম্বর')}
+                          className="text-[10.5px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-bold flex items-center gap-0.5 cursor-pointer"
+                        >
+                          <Copy className="w-3 h-3 text-slate-500" /> কপি
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {currentSelectedIntlBank.iban && (
+                    <div className="flex justify-between items-center py-1.5 border-b border-slate-200/60">
+                      <span className="text-slate-500 font-bold">আইবান নম্বর (IBAN):</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-black text-slate-900 tracking-wide">{currentSelectedIntlBank.iban}</span>
+                        <button 
+                          type="button"
+                          onClick={() => copyToClipboard(cleanNumberForCopy(currentSelectedIntlBank.iban), 'আইবান নম্বর')}
+                          className="text-[10.5px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-bold flex items-center gap-0.5 cursor-pointer"
+                        >
+                          <Copy className="w-3 h-3 text-slate-500" /> কপি
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {currentSelectedIntlBank.branch && (
+                    <div className="flex justify-between items-center py-1.5 border-b border-slate-200/60">
+                      <span className="text-slate-500 font-bold">শাখার নাম (Branch):</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-slate-800">{currentSelectedIntlBank.branch}</span>
+                        <button 
+                          type="button"
+                          onClick={() => copyToClipboard(currentSelectedIntlBank.branch, 'শাখার নাম')}
+                          className="text-[10.5px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-bold flex items-center gap-0.5 cursor-pointer"
+                        >
+                          <Copy className="w-3 h-3 text-slate-500" /> কপি
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {(currentSelectedIntlBank.routingNum || currentSelectedIntlBank.swiftCode) && (
+                    <div className="flex justify-between items-center py-1.5 border-b border-slate-200/60">
+                      <span className="text-slate-500 font-bold">রাউটিং / SWIFT:</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-slate-900">{currentSelectedIntlBank.routingNum || currentSelectedIntlBank.swiftCode}</span>
+                        <button 
+                          type="button"
+                          onClick={() => copyToClipboard(currentSelectedIntlBank.routingNum || currentSelectedIntlBank.swiftCode, 'রাউটিং/SWIFT')}
+                          className="text-[10.5px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-bold flex items-center gap-0.5 cursor-pointer"
+                        >
+                          <Copy className="w-3 h-3 text-slate-500" /> কপি
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const details = [
+                        "ব্যাংকের নাম: " + currentSelectedIntlBank.name,
+                        "অ্যাকাউন্ট হোল্ডার: " + (currentSelectedIntlBank.holder || 'BUSINESS NETWORK BANGLADESH'),
+                        currentSelectedIntlBank.accNum ? ("হিসাব নম্বর: " + currentSelectedIntlBank.accNum) : '',
+                        currentSelectedIntlBank.iban ? ("IBAN: " + currentSelectedIntlBank.iban) : '',
+                        currentSelectedIntlBank.branch ? ("শাখা: " + currentSelectedIntlBank.branch) : '',
+                        currentSelectedIntlBank.routingNum ? ("রাউটিং নম্বর: " + currentSelectedIntlBank.routingNum) : '',
+                        currentSelectedIntlBank.swiftCode ? ("SWIFT কোড: " + currentSelectedIntlBank.swiftCode) : ''
+                      ].filter(Boolean).join("\n");
+                      copyToClipboard(details, 'ব্যাংকের সম্পূর্ণ তথ্য');
+                    }}
+                    className="w-full py-2.5 mt-2 bg-[#22215b] hover:bg-[#1a1947] text-white font-bold text-xs rounded-xl shadow-sm transition flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+                  >
+                    <Copy className="w-4 h-4 text-amber-300" />
+                    <span>📋 ব্যাংকের সকল তথ্য একসাথে কপি করুন</span>
+                  </button>
+                </div>
+
+                {/* Light green notice banner */}
+                <div className="bg-[#e8f7ee] border border-[#b2e5c8] text-[#046c3b] p-3.5 rounded-2xl text-[11.5px] font-medium flex items-start gap-2 leading-relaxed">
+                  <CheckCircle2 className="w-4 h-4 text-[#008955] mt-0.5 shrink-0" />
+                  <p>উপরোক্ত যেকোনো বিদেশী ব্যাংক চ্যানেলের মাধ্যমে রেমিট্যান্স বা ডিপোজিট করুন। সম্পূর্ণ টাকা পাঠানো সম্পন্ন হলে নিচের রশিদের তথ্য প্রদান ফর্মটি পূরণ করে কনফার্ম করুন।</p>
+                </div>
+
+                {/* Form fields */}
+                <form onSubmit={handleAddMoneySubmit} className="space-y-3.5 pt-1">
+                  {errorMsg && (
+                    <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl text-xs font-bold flex items-center gap-1.5 animate-fade-in">
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>{errorMsg}</span>
+                    </div>
+                  )}
+                  {successMsg && (
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl text-xs font-bold flex items-center gap-1.5 animate-fade-in">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>{successMsg}</span>
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-700">ডিপোজিট পরিমাণ (৳ Deposit Amount BDT)</label>
+                    <input
+                      type="number"
+                      required
+                      value={depositAmount}
+                      onChange={(e) => setDepositAmount(e.target.value)}
+                      placeholder="৳ সর্বনিম্ন 10 BDT"
+                      className="w-full px-3.5 py-3 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono bg-white"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-700">আপনার প্রেরক হিসাব / আইবান / একাউন্ট নম্বর</label>
+                    <input
+                      type="text"
+                      required
+                      value={senderNumber}
+                      onChange={(e) => setSenderNumber(e.target.value)}
+                      placeholder="প্রবাস থেকে যে অ্যাকাউন্ট/আইবান থেকে টাকা পাঠিয়েছেন"
+                      className="w-full px-3.5 py-3 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono bg-white"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-700">ভাউচার / ট্রানজেকশন রেফারেন্স নং (Wire Reference/TrxID)</label>
+                    <input
+                      type="text"
+                      required
+                      value={trxId}
+                      onChange={(e) => setTrxId(e.target.value)}
+                      placeholder="ট্রানজেকশন আইডি বা রেফারেন্স"
+                      className="w-full px-3.5 py-3 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono uppercase bg-white"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-700">সিকিউরিটি পিন নম্বর (Wallet PIN)</label>
+                    <input
+                      type="password"
+                      maxLength={4}
+                      required
+                      value={securityPin}
+                      onChange={(e) => setSecurityPin(e.target.value)}
+                      placeholder="4 সংখ্যার ওয়ালেট পিন"
+                      className="w-full px-3.5 py-3 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono text-center tracking-widest bg-white"
+                    />
+                  </div>
+
+                  <button 
+                    type="submit" 
+                    disabled={loading}
+                    className="w-full py-3.5 bg-[#2c2777] hover:bg-[#231f61] text-white font-extrabold rounded-2xl text-xs shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer uppercase active:scale-98"
+                  >
+                    {loading ? (
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      'ডিপোজিট রশিদ সাবমিট করুন ✅'
+                    )}
+                  </button>
+                </form>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
 
   const renderSendMoney = () => {
     const mfsList = [
@@ -3334,7 +3555,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
         </div>
 
         {sendMoneyChannel === 'abroad' ? (
-          // FOREIGN BANK CHANNEL
+           // FOREIGN BANK CHANNEL
           !selectedBankOp ? (
             <div className="bg-white rounded-3xl p-5 text-slate-800 shadow-lg space-y-4">
               <div className="border-b border-slate-100 pb-2">
@@ -3375,7 +3596,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
               </div>
             </div>
           ) : (
-            // Foreign Bank Form (Step 2)
+// Foreign Bank Form (Step 2)
             <div className="bg-white rounded-3xl p-5 text-slate-800 shadow-lg space-y-4 animate-fade-in">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                 <button 
@@ -3476,7 +3697,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                       required
                       value={securityPin}
                       onChange={(e) => setSecurityPin(e.target.value)}
-                      placeholder="৪ সংখ্যার পিন"
+                      placeholder="4 সংখ্যার পিন"
                       className="w-full px-3.5 py-2.5 border border-slate-205 focus:border-indigo-500 rounded-xl text-xs font-mono text-center tracking-widest"
                     />
                   </div>
@@ -3497,7 +3718,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
             </div>
           )
         ) : sendMoneyChannel === 'mobile_bank' ? (
-          // MOBILE BANK CHANNEL
+/* MOBILE BANK CHANNEL */
           !selectedMobileOp ? (
             <div className="bg-white rounded-3xl p-5 text-slate-800 shadow-lg space-y-4">
               <div className="border-b border-slate-100 pb-2 flex justify-between items-center">
@@ -3530,7 +3751,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                         {op.label}
                       </span>
                       <span className="text-[8.5px] text-slate-450 font-bold block mt-0.5 font-mono">
-                        {op.type === 'CashOut' ? 'Cash Out (৳৩.৯০)' : 'Send Money'}
+                        {op.type === 'CashOut' ? 'Cash Out (৳3.90)' : 'Send Money'}
                       </span>
                     </div>
                   </button>
@@ -3538,7 +3759,6 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
               </div>
             </div>
           ) : (
-            // Form is shown once operator is selected
             <div className="bg-white rounded-3xl p-5 text-slate-800 shadow-lg space-y-4 animate-fade-in">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                 <button 
@@ -3578,7 +3798,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                     required
                     value={sendTargetNumber}
                     onChange={(e) => setSendTargetNumber(e.target.value)}
-                    placeholder="উদাঃ ০১৭XXXXXXXX"
+                    placeholder="উদাঃ 017XXXXXXXX"
                     className="w-full px-3.5 py-2.5 border border-slate-205 focus:border-indigo-500 rounded-xl text-xs font-mono"
                   />
                 </div>
@@ -3591,7 +3811,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                       required
                       value={sendAmount}
                       onChange={(e) => setSendAmount(e.target.value)}
-                      placeholder="৳ সর্বনিম্ন ১০ BDT"
+                      placeholder="৳ সর্বনিম্ন 10 BDT"
                       className="w-full px-3.5 py-2.5 border border-slate-205 focus:border-indigo-500 rounded-xl text-xs font-mono"
                     />
                   </div>
@@ -3604,7 +3824,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                       required
                       value={securityPin}
                       onChange={(e) => setSecurityPin(e.target.value)}
-                      placeholder="৪ সংখ্যার পিন"
+                      placeholder="4 সংখ্যার পিন"
                       className="w-full px-3.5 py-2.5 border border-slate-205 focus:border-indigo-500 rounded-xl text-xs font-mono text-center tracking-widest"
                     />
                   </div>
@@ -3635,7 +3855,6 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
             </div>
           )
         ) : (
-          // BANK WALLET CHANNEL
           !selectedBankOp ? (
             <div className="bg-white rounded-3xl p-5 text-slate-800 shadow-lg space-y-4">
               <div className="border-b border-slate-100 pb-2">
@@ -3676,7 +3895,6 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
               </div>
             </div>
           ) : (
-            // Bank Form is shown once a Bank is selected
             <div className="bg-white rounded-3xl p-5 text-slate-800 shadow-lg space-y-4 animate-fade-in">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                 <button 
@@ -3762,7 +3980,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                     type="text"
                     value={sendWhatsapp}
                     onChange={(e) => setSendWhatsapp(e.target.value)}
-                    placeholder="উদাঃ ০১৭XXXXXXXX"
+                    placeholder="উদাঃ 017XXXXXXXX"
                     className="w-full px-2.5 py-2.5 border border-slate-205 focus:border-indigo-500 rounded-xl text-xs font-mono"
                   />
                 </div>
@@ -3775,7 +3993,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                       required
                       value={sendAmount}
                       onChange={(e) => setSendAmount(e.target.value)}
-                      placeholder="৳ সর্বনিম্ন ১০ BDT"
+                      placeholder="৳ সর্বনিম্ন 10 BDT"
                       className="w-full px-3.5 py-2.5 border border-slate-205 focus:border-indigo-500 rounded-xl text-xs font-mono"
                     />
                   </div>
@@ -3788,7 +4006,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                       required
                       value={securityPin}
                       onChange={(e) => setSecurityPin(e.target.value)}
-                      placeholder="৪ সংখ্যার পিন"
+                      placeholder="4 সংখ্যার পিন"
                       className="w-full px-3.5 py-2.5 border border-slate-205 focus:border-indigo-500 rounded-xl text-xs font-mono text-center tracking-widest"
                     />
                   </div>
@@ -3818,13 +4036,13 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
               </form>
             </div>
           )
-        )}
+)}
       </div>
     );
   };
 
   const renderBillPay = () => {
-    // Categories matching the visual layout of the reference image with rich details
+     // Categories matching the visual layout of the reference image with rich details
     const categories = [
       { 
         id: 'electricity', 
@@ -3894,10 +4112,10 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
       }
     ];
 
-    // Selected Category Object if on category sub-page
+     // Selected Category Object if on category sub-page
     const activeCatObj = categories.find(c => c.id === billCategory);
 
-    // Global search matching providers across all categories if user types in search box on home page
+     // Global search matching providers across all categories if user types in search box on home page
     const globalSearchProviders = billSearchQuery.trim()
       ? billProviders.filter(p =>
           p.label.toLowerCase().includes(billSearchQuery.toLowerCase()) ||
@@ -3906,7 +4124,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
         )
       : [];
 
-    // Filtered providers for the active category sub-page
+     // Filtered providers for the active category sub-page
     const activeCatProviders = billCategory
       ? billProviders.filter(p => p.category === billCategory && (
           !billSearchQuery ||
@@ -3955,7 +4173,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                   required
                   value={billAccNo}
                   onChange={(e) => setBillAccNo(e.target.value)}
-                  placeholder="বিল রশিদের অ্যাকাউন্ট নং যেমনঃ ১০২৪৮৫৯০৩"
+                  placeholder="বিল রশিদের অ্যাকাউন্ট নং যেমনঃ 102485903"
                   className="w-full px-3.5 py-2.5 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono font-bold outline-none"
                 />
               </div>
@@ -3981,18 +4199,18 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                       <h3 className="text-sm font-black text-slate-900">মাস নির্বাচন করুন</h3>
                       <div className="grid grid-cols-1 gap-2 max-h-[300px] overflow-y-auto">
                         {[
-                          { en: 'January 2026', bn: 'জানুয়ারি ২০২৬' },
-                          { en: 'February 2026', bn: 'ফেব্রুয়ারি ২০২৬' },
-                          { en: 'March 2026', bn: 'মার্চ ২০২৬' },
-                          { en: 'April 2026', bn: 'এপ্রিল ২০২৬' },
-                          { en: 'May 2026', bn: 'মে ২০২৬' },
-                          { en: 'June 2026', bn: 'জুন ২০২৬' },
-                          { en: 'July 2026', bn: 'জুলাই ২০২৬' },
-                          { en: 'August 2026', bn: 'আগস্ট ২০২৬' },
-                          { en: 'September 2026', bn: 'সেপ্টেম্বর ২০২৬' },
-                          { en: 'October 2026', bn: 'অক্টোবর ২০২৬' },
-                          { en: 'November 2026', bn: 'নভেম্বর ২০২৬' },
-                          { en: 'December 2026', bn: 'ডিসেম্বর ২০২৬' },
+                          { en: 'January 2026', bn: 'জানুয়ারি 2026' },
+                          { en: 'February 2026', bn: 'ফেব্রুয়ারি 2026' },
+                          { en: 'March 2026', bn: 'মার্চ 2026' },
+                          { en: 'April 2026', bn: 'এপ্রিল 2026' },
+                          { en: 'May 2026', bn: 'মে 2026' },
+                          { en: 'June 2026', bn: 'জুন 2026' },
+                          { en: 'July 2026', bn: 'জুলাই 2026' },
+                          { en: 'August 2026', bn: 'আগস্ট 2026' },
+                          { en: 'September 2026', bn: 'সেপ্টেম্বর 2026' },
+                          { en: 'October 2026', bn: 'অক্টোবর 2026' },
+                          { en: 'November 2026', bn: 'নভেম্বর 2026' },
+                          { en: 'December 2026', bn: 'ডিসেম্বর 2026' },
                         ].map((m) => (
                           <button
                             key={m.en}
@@ -4029,7 +4247,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                     required
                     value={billAmount}
                     onChange={(e) => setBillAmount(e.target.value)}
-                    placeholder="৳ সর্বনিম্ন ১০ BDT"
+                    placeholder="৳ সর্বনিম্ন 10 BDT"
                     className="w-full px-3.5 py-2.5 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono font-bold text-indigo-900 outline-none"
                   />
                 </div>
@@ -4104,7 +4322,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                   required
                   value={securityPin}
                   onChange={(e) => setSecurityPin(e.target.value)}
-                  placeholder="৪ সংখ্যার গোপন ওয়ালেট পিন"
+                  placeholder="4 সংখ্যার গোপন ওয়ালেট পিন"
                   className="w-full px-3.5 py-2.5 border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono text-center tracking-widest outline-none"
                 />
               </div>
@@ -4164,7 +4382,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                     ⚡ ইনস্ট্যান্ট পে রিসেট
                   </span>
                   <span className="text-[9px] font-black text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200">
-                    🔒 ২৪/৭ অটোমেটিক সাপোর্ট
+                    🔒 24/7 অটোমেটিক সাপোর্ট
                   </span>
                 </div>
               </div>
@@ -4369,7 +4587,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
         <div className="space-y-4 max-h-[380px] overflow-y-auto pr-1">
           {(() => {
             const toBengaliDigits = (str: string) => {
-              const bDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
+              const bDigits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
               return str.replace(/\d/g, (d) => bDigits[parseInt(d)]);
             };
 
@@ -4399,8 +4617,8 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
               }
             };
 
-            // Calculate running/post balance for each transaction
-            let running = user.balance || 0;
+             // Calculate running/post balance for each transaction
+            let running = user.balance || 0; //
             const txWithBalances = txList.map((tx, idx) => {
               const savedPost = tx.postBalance;
               const calculatedPost = running;
@@ -4423,7 +4641,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
               };
             });
 
-            // Group by date
+             // Group by date
             const grouped: { [date: string]: typeof txWithBalances } = {};
             txWithBalances.forEach((tx) => {
               const dateStr = tx.createdAt ? getGroupDate(tx.createdAt) : 'অন্যান্য তারিখ';
@@ -4512,11 +4730,14 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
   );
 
   const handleBack = () => {
+    if (isReceiptOpen) { setIsReceiptOpen(false); return; }
+    if (showSaveCardModal) { setShowSaveCardModal(false); return; }
+    if (showMonthPopup) { setShowMonthPopup(false); return; }
     if (activeTab !== 'dashboard') {
-      window.history.back();
-    } else {
-      onClose();
+      setActiveTab('dashboard');
+      return;
     }
+    onClose();
   };
 
   return (
@@ -4526,9 +4747,11 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
         {/* Header Title Bar */}
         <div className="flex items-center justify-between gap-2.5 mb-2 border-b border-white/5 pb-1.5">
           <div className="flex items-center gap-2">
-            <button onClick={handleBack} className="p-1.5 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer">
-              <X className="w-4 h-4 text-white" />
-            </button>
+            <UnifiedBackButton 
+              onClick={handleBack} 
+              variant="emerald"
+              title="পিছনে যান"
+            />
             <div className="text-left">
               <h1 className="text-xs font-black text-white leading-none">BNB সমবায় ব্যাংক</h1>
               <p className="text-[8px] text-white/60 leading-none mt-0.5">মোবাইল ব্যাংকিং</p>
@@ -4571,6 +4794,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
         {/* Current Active Tab screen */}
         {activeTab === 'dashboard' && renderDashboard()}
         {activeTab === 'add_money' && renderAddMoney()}
+        {activeTab === 'auto_add_money' && renderAutoAddMoney()}
         {activeTab === 'bnb_to_bnb' && renderBnbToBnb()}
         {activeTab === 'send_money' && renderSendMoney()}
         {activeTab === 'bill_pay' && renderBillPay()}
@@ -4634,7 +4858,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                           <span className="text-2xl leading-none">{rate.flag}</span>
                           <div className="text-left">
                             <p className="text-xs font-black text-slate-800">{rate.name}</p>
-                            <span className="text-[9px] text-slate-400 font-semibold">{rate.multiplier || '১ একক'}</span>
+                            <span className="text-[9px] text-slate-400 font-semibold">{rate.multiplier || '1 একক'}</span>
                           </div>
                         </div>
                         <div className="text-right">
@@ -4683,7 +4907,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                       <input
                         type="number"
                         id="calc-foreign-amt"
-                        placeholder="উদাঃ ৫০০"
+                        placeholder="উদাঃ 500"
                         defaultValue="100"
                         onChange={(e) => {
                           const rateVal = Number((document.getElementById('calc-rate-val') as HTMLInputElement)?.value || 0);
@@ -4701,7 +4925,7 @@ export const BnbMobileBankingPortal: React.FC<BnbMobileBankingPortalProps> = ({
                   </div>
                   <div className="bg-white p-2.5 border border-slate-150 rounded-xl text-center shadow-3xs">
                     <span className="text-[9px] text-slate-400 font-bold block">বাংলাদেশি টাকা পাবেন (BDT)</span>
-                    <strong id="calc-bdt-res" className="text-xs font-black font-mono text-emerald-700">৳ ০.০০</strong>
+                    <strong id="calc-bdt-res" className="text-xs font-black font-mono text-emerald-700">৳ 0.00</strong>
                   </div>
                 </div>
               </div>

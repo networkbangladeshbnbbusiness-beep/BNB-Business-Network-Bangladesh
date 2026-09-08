@@ -29,10 +29,72 @@ var import_vite = require("vite");
 var import_app = require("firebase/app");
 var import_firestore = require("firebase/firestore");
 var import_firebase_admin = __toESM(require("firebase-admin"), 1);
+async function processVerifiedPayment(db, transaction_id, verifiedUserId, verifiedAmount, rawVerifyData) {
+  if (!db) throw new Error("database_disconnected");
+  if (!verifiedUserId) throw new Error("user_not_found_in_verification");
+  const depositAmount = parseFloat(verifiedAmount);
+  if (isNaN(depositAmount) || depositAmount <= 0) {
+    throw new Error("invalid_amount");
+  }
+  const txDocRef = (0, import_firestore.doc)(db, "transactions", `NP_${transaction_id}`);
+  const userDocRef = (0, import_firestore.doc)(db, "users", verifiedUserId);
+  return await (0, import_firestore.runTransaction)(db, async (t) => {
+    const txSnap = await t.get(txDocRef);
+    if (txSnap.exists()) {
+      return { alreadyProcessed: true, amount: txSnap.data().amount };
+    }
+    const userDoc = await t.get(userDocRef);
+    if (!userDoc.exists()) {
+      throw new Error("user_not_found");
+    }
+    const userData = userDoc.data();
+    const currentBalance = Number(userData.balance) || 0;
+    const currentMainBalance = Number(userData.mainBalance) || 0;
+    const newBalance = currentBalance + depositAmount;
+    const newMainBalance = currentMainBalance + depositAmount;
+    t.update(userDocRef, {
+      balance: newBalance,
+      mainBalance: newMainBalance
+    });
+    t.set(txDocRef, {
+      id: txDocRef.id,
+      userId: verifiedUserId,
+      userName: userData.name || "Anonymous User",
+      userPhone: userData.phone || "",
+      memberId: userData.memberId || "BNB000000",
+      amount: depositAmount,
+      type: "add_money",
+      status: "success",
+      paymentMethod: "NagorikPay Gateway",
+      phone: userData.phone || "",
+      senderPhone: userData.phone || "",
+      senderInfo: "NagorikPay Gateway",
+      accountNumber: userData.phone || "",
+      trxId: transaction_id,
+      transactionId: transaction_id,
+      receiptNo: transaction_id,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      description: `NagorikPay \u09AA\u09C7\u09AE\u09C7\u09A8\u09CD\u099F \u0997\u09C7\u099F\u0993\u09AF\u09BC\u09C7\u09B0 \u09AE\u09BE\u09A7\u09CD\u09AF\u09AE\u09C7 \u09F3${depositAmount.toLocaleString("bn-BD")} \u099F\u09BE\u0995\u09BE \u0985\u09A8\u09B2\u09BE\u0987\u09A8 \u0985\u09CD\u09AF\u09BE\u09A1 \u09AE\u09BE\u09A8\u09BF \u09B8\u09AB\u09B2\u09AD\u09BE\u09AC\u09C7 \u09B8\u09AE\u09CD\u09AA\u09A8\u09CD\u09A8 \u09B9\u09AF\u09BC\u09C7\u099B\u09C7\u0964`
+    });
+    const notifRef = (0, import_firestore.doc)((0, import_firestore.collection)(db, "user_notifications"));
+    t.set(notifRef, {
+      id: notifRef.id,
+      userId: verifiedUserId,
+      title: "\u0985\u09A8\u09B2\u09BE\u0987\u09A8 \u0985\u09CD\u09AF\u09BE\u09A1 \u09AE\u09BE\u09A8\u09BF \u09B8\u09AB\u09B2 \u09B9\u09DF\u09C7\u099B\u09C7 \u{1F389}",
+      body: `\u09A8\u09BE\u0997\u09B0\u09BF\u0995\u09AA\u09C7 \u0997\u09C7\u099F\u0993\u09AF\u09BC\u09C7\u09B0 \u09AE\u09BE\u09A7\u09CD\u09AF\u09AE\u09C7 \u0986\u09AA\u09A8\u09BE\u09B0 \u0993\u09DF\u09BE\u09B2\u09C7\u099F\u09C7 \u09F3${depositAmount.toLocaleString("bn-BD")} \u099F\u09BE\u0995\u09BE \u09B8\u09AB\u09B2\u09AD\u09BE\u09AC\u09C7 \u09AF\u09CB\u0997 \u09B9\u09DF\u09C7\u099B\u09C7\u0964`,
+      message: `\u09A8\u09BE\u0997\u09B0\u09BF\u0995\u09AA\u09C7 \u0997\u09C7\u099F\u0993\u09AF\u09BC\u09C7\u09B0 \u09AE\u09BE\u09A7\u09CD\u09AF\u09AE\u09C7 \u0986\u09AA\u09A8\u09BE\u09B0 \u0993\u09DF\u09BE\u09B2\u09C7\u099F\u09C7 \u09F3${depositAmount.toLocaleString("bn-BD")} \u099F\u09BE\u0995\u09BE \u09B8\u09AB\u09B2\u09AD\u09BE\u09AC\u09C7 \u09AF\u09CB\u0997 \u09B9\u09DF\u09C7\u099B\u09C7\u0964`,
+      screen: "wallet",
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      read: false
+    });
+    return { alreadyProcessed: false, newBalance, amount: depositAmount };
+  });
+}
 async function startServer() {
   const app = (0, import_express.default)();
-  const PORT = 3e3;
+  const PORT = Number(process.env.PORT) || 3e3;
   app.use(import_express.default.json());
+  app.use(import_express.default.urlencoded({ extended: true }));
   let adminDb = null;
   const firebaseAdmin = import_firebase_admin.default;
   try {
@@ -413,6 +475,217 @@ async function startServer() {
       result,
       error: hasErrors ? result.errors.join(", ") : void 0
     });
+  });
+  app.post("/api/payment/create", async (req, res) => {
+    let debugData = {
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      frontend_payload: req.body,
+      user_profile_data: null,
+      outgoing_nagorikpay_payload: null,
+      outgoing_headers: null,
+      nagorikpay_response_status: null,
+      nagorikpay_response_body: null,
+      error: null
+    };
+    try {
+      const { amount, userId, phone } = req.body;
+      if (!amount || !userId) {
+        debugData.error = "amount and userId are required.";
+        import_fs.default.writeFileSync(import_path.default.join(process.cwd(), "payment_debug.json"), JSON.stringify(debugData, null, 2));
+        return res.status(400).json({ error: "amount and userId are required." });
+      }
+      let baseDomain = "";
+      if (req.headers.origin) {
+        baseDomain = req.headers.origin;
+      } else if (req.headers.referer) {
+        try {
+          const refUrl = new URL(req.headers.referer);
+          baseDomain = `${refUrl.protocol}//${refUrl.host}`;
+        } catch (e) {
+          const protocol = req.secure || req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+          const host = req.headers["x-forwarded-host"] || req.headers.host;
+          baseDomain = `${protocol}://${host}`;
+        }
+      } else {
+        const protocol = req.secure || req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+        const host = req.headers["x-forwarded-host"] || req.headers.host;
+        baseDomain = `${protocol}://${host}`;
+      }
+      let cus_name = "BNB Customer";
+      let cus_phone = phone || "";
+      let cus_email = "customer@bnbbusiness.com";
+      if (db) {
+        try {
+          const userDocRef = (0, import_firestore.doc)(db, "users", userId);
+          const userDoc = await (0, import_firestore.getDoc)(userDocRef);
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            cus_name = userData.name || userData.userName || cus_name;
+            cus_phone = userData.phone || userData.userPhone || cus_phone || "";
+            cus_email = userData.email || cus_email;
+            debugData.user_profile_data = {
+              fetched_name: userData.name || userData.userName || null,
+              fetched_phone: userData.phone || userData.userPhone || null,
+              fetched_email: userData.email || null
+            };
+          } else {
+            debugData.user_profile_data = { error: "User document not found in firestore" };
+          }
+        } catch (dbErr) {
+          console.error("Error fetching user details for NagorikPay payment initialization:", dbErr);
+          debugData.user_profile_data = { error: dbErr.message || "Firestore getDoc exception" };
+        }
+      } else {
+        debugData.user_profile_data = { error: "Firestore db object is not defined on server" };
+      }
+      if (!cus_phone) {
+        cus_phone = "01800000000";
+      }
+      const payload = {
+        amount: parseFloat(amount),
+        cus_name,
+        cus_phone,
+        cus_email,
+        success_url: `${baseDomain}/api/payment/nagorikpay-callback?userId=${userId}&amount=${amount}`,
+        cancel_url: `${baseDomain}/api/payment/nagorikpay-cancel?userId=${userId}&amount=${amount}`,
+        webhook_url: `${baseDomain}/api/payment/nagorikpay-webhook?userId=${userId}&amount=${amount}`,
+        metadata: {
+          userId,
+          amount,
+          phone: cus_phone
+        }
+      };
+      debugData.outgoing_nagorikpay_payload = payload;
+      debugData.outgoing_headers = {
+        "Content-Type": "application/json",
+        "api_key": "vk5JYpiHRbSG7QYfMDeOdMQddh2L54jmhtAGki1dFea9yrmVjD"
+      };
+      console.log("Initiating NagorikPay payment creation with payload:", JSON.stringify(payload));
+      const response = await fetch("https://secure-pay.nagorikpay.com/api/payment/create", {
+        method: "POST",
+        headers: debugData.outgoing_headers,
+        body: JSON.stringify(payload)
+      });
+      debugData.nagorikpay_response_status = response.status;
+      let responseData;
+      const responseText = await response.text();
+      try {
+        responseData = JSON.parse(responseText);
+        debugData.nagorikpay_response_body = responseData;
+      } catch (jsonErr) {
+        responseData = { text: responseText };
+        debugData.nagorikpay_response_body = responseText;
+      }
+      console.log("NagorikPay create payment response:", JSON.stringify(responseData));
+      import_fs.default.writeFileSync(import_path.default.join(process.cwd(), "payment_debug.json"), JSON.stringify(debugData, null, 2));
+      if (responseData && (responseData.status === true || responseData.status === "true" || responseData.status === "success" || responseData.status === 1 || responseData.status === "1" || responseData.payment_url)) {
+        const paymentUrl = responseData.payment_url || responseData.redirect_url || responseData.url || responseData.checkout_url;
+        if (paymentUrl) {
+          return res.json({ success: true, payment_url: paymentUrl });
+        }
+      }
+      return res.status(400).json({
+        success: false,
+        error: responseData?.message || responseData?.error || "Failed to create payment on NagorikPay",
+        debug: debugData
+      });
+    } catch (error) {
+      console.error("Error in /api/payment/create:", error);
+      debugData.error = error.message || error.toString();
+      import_fs.default.writeFileSync(import_path.default.join(process.cwd(), "payment_debug.json"), JSON.stringify(debugData, null, 2));
+      return res.status(500).json({ error: error.message || "Server error initiating payment", debug: debugData });
+    }
+  });
+  app.all("/api/payment/nagorikpay-callback", async (req, res) => {
+    try {
+      const transaction_id = req.query.transaction_id || req.body.transaction_id || req.query.invoice_id || req.body.invoice_id;
+      if (!transaction_id) {
+        console.error("No transaction_id provided in callback");
+        return res.redirect("/?payment_status=failed&error=missing_transaction_id");
+      }
+      const verifyResponse = await fetch("https://secure-pay.nagorikpay.com/api/payment/verify", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "api-key": "vk5JYpiHRbSG7QYfMDeOdMQddh2L54jmhtAGki1dFea9yrmVjD",
+          "API-KEY": "vk5JYpiHRbSG7QYfMDeOdMQddh2L54jmhtAGki1dFea9yrmVjD"
+        },
+        body: JSON.stringify({ transaction_id })
+      });
+      const verifyData = await verifyResponse.json();
+      console.log("NagorikPay callback verification API response:", JSON.stringify(verifyData));
+      const statusUpper = String(verifyData?.status || "").toUpperCase();
+      const isVerified = verifyData?.status === true || verifyData?.status === "true" || statusUpper === "TRUE" || statusUpper === "SUCCESS" || statusUpper === "APPROVED";
+      if (!isVerified) {
+        console.error("NagorikPay transaction verification failed:", verifyData);
+        return res.redirect(`/?payment_status=failed&error=verification_failed`);
+      }
+      let verifiedUserId = verifyData?.metadata?.userId || verifyData?.meta_data?.userId || verifyData?.userId || verifyData?.user_id || verifyData?.cus_id || req.query.userId || req.body.userId;
+      let verifiedAmount = verifyData?.metadata?.amount || verifyData?.meta_data?.amount || verifyData?.amount || verifyData?.payment_amount || verifyData?.total_amount || req.query.amount || req.body.amount;
+      if (!verifiedUserId || !verifiedAmount) {
+        console.error("CRITICAL: verifyData missing userId or amount!", verifyData);
+        return res.redirect(`/?payment_status=failed&error=missing_verification_metadata`);
+      }
+      try {
+        const txResult = await processVerifiedPayment(db, transaction_id, verifiedUserId, verifiedAmount, verifyData);
+        if (txResult.alreadyProcessed) {
+          console.log(`Transaction ${transaction_id} already processed via callback. Idempotency protected.`);
+        } else {
+          console.log(`Callback successfully credited user ${verifiedUserId} with \u09F3${txResult.amount}. New Balance: \u09F3${txResult.newBalance}`);
+        }
+        return res.redirect(`/?payment_status=success&amount=${txResult.amount}`);
+      } catch (err) {
+        console.error("Error processing callback payment:", err.message);
+        return res.redirect(`/?payment_status=failed&error=${encodeURIComponent(err.message || "processing_failed")}`);
+      }
+    } catch (error) {
+      console.error("Error in /api/payment/nagorikpay-callback:", error);
+      return res.redirect(`/?payment_status=failed&error=${encodeURIComponent(error.message || "callback_error")}`);
+    }
+  });
+  app.all("/api/payment/nagorikpay-cancel", (req, res) => {
+    console.log("NagorikPay payment cancelled by user:", req.query, "Body:", req.body);
+    return res.redirect("/?payment_status=cancelled");
+  });
+  app.post("/api/payment/nagorikpay-webhook", async (req, res) => {
+    console.log("NagorikPay payment webhook received:", req.body);
+    try {
+      const transaction_id = req.body.transaction_id || req.body.invoice_id || req.body.trx_id;
+      if (!transaction_id) {
+        return res.status(400).json({ error: "missing_transaction_id" });
+      }
+      const verifyResponse = await fetch("https://secure-pay.nagorikpay.com/api/payment/verify", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "api-key": "vk5JYpiHRbSG7QYfMDeOdMQddh2L54jmhtAGki1dFea9yrmVjD",
+          "API-KEY": "vk5JYpiHRbSG7QYfMDeOdMQddh2L54jmhtAGki1dFea9yrmVjD"
+        },
+        body: JSON.stringify({ transaction_id })
+      });
+      const verifyData = await verifyResponse.json();
+      console.log("NagorikPay webhook verification API response:", JSON.stringify(verifyData));
+      const statusUpper = String(verifyData?.status || "").toUpperCase();
+      const isVerified = verifyData?.status === true || verifyData?.status === "true" || statusUpper === "TRUE" || statusUpper === "SUCCESS" || statusUpper === "APPROVED";
+      if (!isVerified) {
+        return res.status(400).json({ error: "verification_failed" });
+      }
+      let verifiedUserId = verifyData?.metadata?.userId || verifyData?.meta_data?.userId || verifyData?.userId || verifyData?.user_id || verifyData?.cus_id || req.query.userId || req.body.userId;
+      let verifiedAmount = verifyData?.metadata?.amount || verifyData?.meta_data?.amount || verifyData?.amount || verifyData?.payment_amount || verifyData?.total_amount || req.query.amount || req.body.amount;
+      if (!verifiedUserId || !verifiedAmount) {
+        return res.status(400).json({ error: "missing_verification_metadata", verifyData });
+      }
+      const txResult = await processVerifiedPayment(db, transaction_id, verifiedUserId, verifiedAmount, verifyData);
+      if (txResult.alreadyProcessed) {
+        console.log(`Webhook ignored transaction ${transaction_id} as it was already processed.`);
+      } else {
+        console.log(`Webhook successfully credited user ${verifiedUserId} with \u09F3${txResult.amount}.`);
+      }
+      return res.status(200).json({ received: true, status: "processed", transaction_id });
+    } catch (err) {
+      console.error("Error processing webhook payment:", err);
+      return res.status(500).json({ error: err.message });
+    }
   });
   if (process.env.NODE_ENV !== "production") {
     const vite = await (0, import_vite.createServer)({

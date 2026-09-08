@@ -1,17 +1,15 @@
-import https from 'https';
+import { initializeApp } from "firebase/app";
+import { getFirestore, doc, getDoc } from "firebase/firestore";
+import fs from "fs";
 
-const q = encodeURIComponent('firestore "This database cannot exceed free quota limits even when a billing instrument is enabled"');
-https.get(`https://html.duckduckgo.com/html/?q=${q}`, {
-  headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-}, (res) => {
-  let data = '';
-  res.on('data', chunk => data += chunk);
-  res.on('end', () => {
-      const matches = data.match(/<a class="result__snippet[^>]*>(.*?)<\/a>/g);
-      if (matches) {
-          console.log(matches.map(m => m.replace(/<[^>]+>/g, '')).join('\n---\n'));
-      } else {
-          console.log("no results");
-      }
-  });
-});
+const configPath = './firebase-applet-config.json';
+const firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app, "ai-studio-120ec6e1-2db5-45d2-b1b1-46493400c959");
+
+async function check() {
+  const d = await getDoc(doc(db, "transactions", "NP_NP123456")); // generic check
+  console.log("Check complete.");
+  process.exit();
+}
+check();

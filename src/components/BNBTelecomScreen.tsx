@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, Transaction, Offer, AppConfig } from '../types';
 import { db } from '../lib/firebase';
+import UnifiedBackButton from './UnifiedBackButton';
 import { collection, addDoc, doc, updateDoc, setDoc, query, where, getDocs } from 'firebase/firestore';
 import { 
   ChevronLeft, 
@@ -31,8 +32,10 @@ import {
   Check
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useBackHandler } from '../lib/navigationManager';
 import TelecomAdmin from './TelecomAdmin';
 import MoneyExchangeModule from './MoneyExchangeModule';
+import { BnbPaymentReceiptModal, PaymentReceiptData } from './BnbPaymentReceiptModal';
 
 // Helper functions for operator-specific cashback rules matching
 const isOperatorMatch = (ruleOpRaw?: string, targetOpRaw?: string): boolean => {
@@ -208,7 +211,7 @@ export default function BNBTelecomScreen({
       snapshot.forEach(docSnap => {
         list.push({ id: docSnap.id, ...docSnap.data() } as Transaction);
       });
-      list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
       setTxHistory(list);
     } catch (e) {
       console.error("Error fetching telecom tx:", e);
@@ -232,8 +235,41 @@ export default function BNBTelecomScreen({
   const [dailyBonusClaimed, setDailyBonusClaimed] = useState(false);
   const [bonusText, setBonusText] = useState('');
 
+  // Full-Screen Transaction Receipt Modal State
+  const [receiptModalData, setReceiptModalData] = useState<PaymentReceiptData | null>(null);
+  const [isReceiptOpen, setIsReceiptOpen] = useState(false);
+
+  const openReceiptForTx = (tx: any) => {
+    let label = tx.typeLabel || 'মোবাইল রিচার্জ';
+    if (tx.packTitle) label = `ড্রাইভ প্যাক (${tx.operator || ''})`;
+    setReceiptModalData({
+      typeLabel: label,
+      transactionId: (tx.id || tx.transactionId || `TXN${Date.now()}`).replace('tx-tel-', '').replace('tx-cash-', '').toUpperCase(),
+      amount: tx.amount || 0,
+      fee: 0,
+      totalAmount: tx.amount || 0,
+      status: tx.status || 'pending',
+      beneficiaryName: tx.userName || user.name || 'BNB সদস্য',
+      beneficiaryAccount: tx.memberId || user.memberId || user.phone,
+      senderPhone: tx.phone || tx.receiverPhone || user.phone || 'N/A',
+      description: tx.description,
+      paymentMethod: tx.operator || tx.paymentMethod,
+      transactionDate: tx.createdAt ? new Date(tx.createdAt).toLocaleString('bn-BD', {
+        day: 'numeric',
+        month: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: 'numeric',
+        second: 'numeric',
+        hour12: true
+      }) : new Date().toLocaleString('bn-BD')
+    });
+    setIsReceiptOpen(true);
+  };
+
   const closeTelecomModals = () => {
     let closed = false;
+    if (isReceiptOpen) { setIsReceiptOpen(false); closed = true; }
     if (selectedOffer) { setSelectedOffer(null); setPurchaseError(''); setPurchaseSuccess(false); closed = true; }
     if (showSectionTxHistory) { setShowSectionTxHistory(false); closed = true; }
     if (showCashRecharge) { setShowCashRecharge(false); closed = true; }
@@ -258,42 +294,16 @@ export default function BNBTelecomScreen({
     prevModalCountRef.current = activeModalCount;
   }, [activeModalCount]);
 
-  useEffect(() => {
+  // BNB Telecom Internal Back Handler
+  useBackHandler(() => {
+    const modalClosed = closeTelecomModals();
+    if (modalClosed) return true;
     if (activeSubView !== 'main') {
-      if (pushedViewRef.current !== activeSubView) {
-        pushedViewRef.current = activeSubView;
-        window.history.pushState({ dashboardModal: 'telecom', telecomSubView: activeSubView }, '');
-      }
-    } else {
-      pushedViewRef.current = 'main';
+      setActiveSubView('main');
+      return true;
     }
-  }, [activeSubView]);
-
-  useEffect(() => {
-    const handlePopState = () => {
-      const modalClosed = closeTelecomModals();
-      if (modalClosed) return;
-      if (activeSubView !== 'main') {
-        setActiveSubView('main');
-        pushedViewRef.current = 'main';
-        return;
-      }
-      onBack();
-    };
-
-    window.addEventListener('popstate', handlePopState);
-    return () => {
-      window.removeEventListener('popstate', handlePopState);
-    };
-  }, [
-    selectedOffer,
-    showSectionTxHistory,
-    showCashRecharge,
-    showMoneyExchange,
-    showAddBalanceModal,
-    activeSubView,
-    onBack
-  ]);
+    return false;
+  }, true, 25);
 
   // Base list of offers (combines Firestore offers with beautiful high fidelity fallback presets)
   const fallbackPresets: Offer[] = [
@@ -301,13 +311,13 @@ export default function BNBTelecomScreen({
     { id: 'p2', title: '100GB INTERNET (Family Extra)', operator: 'Grameenphone', category: 'internet', validity: '30 Days', price: 745, isHot: true, createdAt: '' },
     { id: 'p3', title: '500 MARVEL MINUTES', operator: 'Airtel', category: 'minute', validity: '30 Days', price: 270, isHot: true, createdAt: '' },
     { id: 'p4', title: '৳1000 RECHARGE SPECIAL TARIFF', operator: 'Alaap', category: 'bundle', validity: 'UNLIMITED', price: 1000, isHot: true, createdAt: '' },
-    { id: 'p5', title: '১ জিবি স্পেশাল ক্লাউড প্যাক', operator: 'Robi', category: 'internet', validity: '৩ দিন', price: 39, isHot: false, createdAt: '' },
-    { id: 'p6', title: '৫ জিবি স্পাদাহ ইন্টারনেট', operator: 'Robi', category: 'internet', validity: '৭ দিন', price: 129, isHot: false, createdAt: '' },
-    { id: 'p7', title: '১০ জিবি ইন্টারনেট ও ট্যালেন্ট', operator: 'Banglalink', category: 'internet', validity: '৩০ দিন', price: 349, isHot: false, createdAt: '' },
-    { id: 'p8', title: '৩০ জিবি সুপার আল্ট্রা প্যাক', operator: 'Banglalink', category: 'internet', validity: '৩০ দিন', price: 599, isHot: false, createdAt: '' },
-    { id: 'p9', title: '২০০ মিনিট সুপার টকটাইম', operator: 'Teletalk', category: 'minute', validity: '১৫ দিন', price: 110, isHot: false, createdAt: '' },
-    { id: 'p10', title: '৫০০ মিনিট ধামাকা অফার প্যাক', operator: 'Banglalink', category: 'minute', validity: '৩০ দিন', price: 298, isHot: true, createdAt: '' },
-    { id: 'p11', title: '২০ জিবি ধামাকা ইন্টারনেট', operator: 'Skitto', category: 'internet', validity: '৩০ দিন', price: 249, isHot: true, createdAt: '' }
+    { id: 'p5', title: '1 জিবি স্পেশাল ক্লাউড প্যাক', operator: 'Robi', category: 'internet', validity: '3 দিন', price: 39, isHot: false, createdAt: '' },
+    { id: 'p6', title: '5 জিবি স্পাদাহ ইন্টারনেট', operator: 'Robi', category: 'internet', validity: '7 দিন', price: 129, isHot: false, createdAt: '' },
+    { id: 'p7', title: '10 জিবি ইন্টারনেট ও ট্যালেন্ট', operator: 'Banglalink', category: 'internet', validity: '30 দিন', price: 349, isHot: false, createdAt: '' },
+    { id: 'p8', title: '30 জিবি সুপার আল্ট্রা প্যাক', operator: 'Banglalink', category: 'internet', validity: '30 দিন', price: 599, isHot: false, createdAt: '' },
+    { id: 'p9', title: '200 মিনিট সুপার টকটাইম', operator: 'Teletalk', category: 'minute', validity: '15 দিন', price: 110, isHot: false, createdAt: '' },
+    { id: 'p10', title: '500 মিনিট ধামাকা অফার প্যাক', operator: 'Banglalink', category: 'minute', validity: '30 দিন', price: 298, isHot: true, createdAt: '' },
+    { id: 'p11', title: '20 জিবি ধামাকা ইন্টারনেট', operator: 'Skitto', category: 'internet', validity: '30 দিন', price: 249, isHot: true, createdAt: '' }
   ];
 
   // Merge Firestore offers and filter duplicates
@@ -345,12 +355,12 @@ export default function BNBTelecomScreen({
         typeLabel: 'ডেইলি বোনাস',
         amount: 5,
         status: 'success',
-        description: 'BNB টেলিকম ডেইলি বোনাস (৳৫.০০) সফলভাবে মেইন ওয়ালেটে যুক্ত হয়েছে।',
+        description: 'BNB টেলিকম ডেইলি বোনাস (৳5.00) সফলভাবে মেইন ওয়ালেটে যুক্ত হয়েছে।',
         createdAt: new Date().toISOString()
       };
 
       setDailyBonusClaimed(true);
-      setBonusText('অভিনন্দন! আপনার মেইন ওয়ালেটে ৳৫.০০ বোনাস সফলভাবে যুক্ত করা হয়েছে।');
+      setBonusText('অভিনন্দন! আপনার মেইন ওয়ালেটে ৳5.00 বোনাস সফলভাবে যুক্ত করা হয়েছে।');
       syncLiveProfile();
 
       // Async Firestore updates
@@ -379,7 +389,7 @@ export default function BNBTelecomScreen({
     const cleanNumber = recipientNumber.trim();
     const isNumeric = /^\d+$/.test(cleanNumber);
     if (!cleanNumber || cleanNumber.length !== 11 || !isNumeric) {
-      setPurchaseError('অনুগ্রহ করে সঠিক ১১ ডিজিটের প্রাপক মোবাইল নম্বর দিন (মেম্বার আইডি বা অক্ষর গ্রহণযোগ্য নয়)।');
+      setPurchaseError('অনুগ্রহ করে সঠিক 11 ডিজিটের প্রাপক মোবাইল নম্বর দিন (মেম্বার আইডি বা অক্ষর গ্রহণযোগ্য নয়)।');
       return;
     }
 
@@ -441,12 +451,32 @@ export default function BNBTelecomScreen({
         }
       })();
 
-      // Auto close and reset after 2 seconds
-      setTimeout(() => {
-        setSelectedOffer(null);
-        setPurchaseSuccess(false);
-      }, 2000);
-
+      // Show Full-Screen Transaction Receipt Modal
+      setReceiptModalData({
+        typeLabel: `ড্রাইভ প্যাক (${selectedOffer.operator})`,
+        transactionId: txId.replace('tx-tel-', '').toUpperCase(),
+        amount: selectedOffer.price,
+        fee: 0,
+        totalAmount: selectedOffer.price,
+        status: 'pending',
+        beneficiaryName: user.name,
+        beneficiaryAccount: user.memberId || user.phone,
+        senderPhone: recipientNumber,
+        paymentMethod: selectedOffer.operator,
+        description: description,
+        transactionDate: new Date().toLocaleString('bn-BD', {
+          day: 'numeric',
+          month: 'numeric',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: 'numeric',
+          second: 'numeric',
+          hour12: true
+        })
+      });
+      setSelectedOffer(null);
+      setPurchaseSuccess(false);
+      setIsReceiptOpen(true);
     } catch (err: any) {
       console.error(err);
       setPurchaseError(`ক্রয় সম্পন্নকরণে ত্রুটি ঘটেছেঃ ${err?.message || 'সার্ভার সংযোগ সমস্যা'}`);
@@ -465,14 +495,14 @@ export default function BNBTelecomScreen({
 
     const reloadAmt = Number(cashRechargeAmount);
     if (!reloadAmt || reloadAmt < 10) {
-      setPurchaseError('সর্বনিম্ন ক্যাশ রিচার্জ ১০ টাকা হতে হবে।');
+      setPurchaseError('সর্বনিম্ন ক্যাশ রিচার্জ 10 টাকা হতে হবে।');
       return;
     }
 
     const cleanCashNumber = cashRecipientNumber.trim();
     const isNumeric = /^\d+$/.test(cleanCashNumber);
     if (!cleanCashNumber || cleanCashNumber.length !== 11 || !isNumeric) {
-      setPurchaseError('১১ ডিজিটের সঠিক মোবাইল নম্বর লিখুন (মেম্বার আইডি বা অক্ষর গ্রহণযোগ্য নয়)।');
+      setPurchaseError('11 ডিজিটের সঠিক মোবাইল নম্বর লিখুন (মেম্বার আইডি বা অক্ষর গ্রহণযোগ্য নয়)।');
       return;
     }
 
@@ -549,14 +579,35 @@ export default function BNBTelecomScreen({
         }
       })();
 
-      setTimeout(() => {
-        setShowCashRecharge(false);
-        setCashRechargeAmount('');
-        setCashRecipientNumber('');
-        setCashRechargePin('');
-        setPurchaseSuccess(false);
-      }, 2000);
-
+      // Show Full-Screen Transaction Receipt Modal
+      setReceiptModalData({
+        typeLabel: typeLabel,
+        transactionId: txId.replace('tx-cash-', '').toUpperCase(),
+        amount: reloadAmt,
+        fee: 0,
+        totalAmount: reloadAmt,
+        status: 'pending',
+        beneficiaryName: user.name,
+        beneficiaryAccount: user.memberId || user.phone,
+        senderPhone: cleanCashNumber,
+        paymentMethod: cashRechargeOperator,
+        description: description,
+        transactionDate: new Date().toLocaleString('bn-BD', {
+          day: 'numeric',
+          month: 'numeric',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: 'numeric',
+          second: 'numeric',
+          hour12: true
+        })
+      });
+      setShowCashRecharge(false);
+      setCashRechargeAmount('');
+      setCashRecipientNumber('');
+      setCashRechargePin('');
+      setPurchaseSuccess(false);
+      setIsReceiptOpen(true);
     } catch (err: any) {
       console.error(err);
       setPurchaseError(`মোবাইল রিচার্জ সম্পন্নকরণ ব্যর্থ হয়েছে`);
@@ -602,12 +653,11 @@ export default function BNBTelecomScreen({
       {/* Dynamic Header */}
       <header className="bg-white border-b border-slate-200/80 px-4 py-3 flex items-center justify-between sticky top-0 z-40 backdrop-blur-md">
         <div className="flex items-center gap-2 xs:gap-3">
-          <button 
+          <UnifiedBackButton
             onClick={handleBack}
-            className="p-1.5 xs:p-2 hover:bg-slate-100 rounded-xl text-slate-500 hover:text-slate-805 transition-colors cursor-pointer"
-          >
-            <ChevronLeft className="w-5.5 h-5.5" />
-          </button>
+            variant="dark"
+            title="পিছনে যান"
+          />
           <div className="text-left">
             <h1 className="text-xs xs:text-sm font-black flex items-center gap-1 text-indigo-700">
               <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
@@ -617,11 +667,12 @@ export default function BNBTelecomScreen({
           </div>
         </div>
 
-        {/* Dynamic Software Main Balance display pill as requested (circled in red) */}
-        <div className="flex items-center gap-2">
+        {/* Grouped Header Actions: Main Balance, Recharge Balance, Transaction History */}
+        <div className="flex items-center gap-1.5 xs:gap-2">
+          {/* 1. Main Balance */}
           <div 
             onClick={syncLiveProfile}
-            className="flex items-center gap-1 bg-emerald-50 border border-emerald-150 px-2 xs:px-2.5 py-1 xs:py-1.5 rounded-xl text-[10px] xs:text-[11px] font-black text-emerald-950 select-none shadow-3xs hover:bg-emerald-100/50 cursor-pointer transition active:scale-95 shrink-0"
+            className="flex items-center gap-1 bg-emerald-50 hover:bg-emerald-100/70 border border-emerald-200 px-2 xs:px-2.5 py-1 xs:py-1.5 rounded-xl text-[10px] xs:text-[11px] font-black text-emerald-950 select-none shadow-3xs cursor-pointer transition active:scale-95 shrink-0"
             title="মেইন ব্যালেন্স রিফ্রেশ করতে ক্লিক করুন"
           >
             <span className="text-[8px] xs:text-[9.5px] text-emerald-700 font-sans hidden xxs:inline">মেইনঃ</span>
@@ -629,28 +680,38 @@ export default function BNBTelecomScreen({
             <RefreshCw className="w-2.5 h-2.5 text-emerald-600 animate-pulse" />
           </div>
 
-          <div className="relative group">
-            <div 
-              className="flex items-center gap-1 bg-rose-50 border border-rose-150 px-2 xs:px-2.5 py-1 xs:py-1.5 rounded-xl text-[10px] xs:text-[11px] font-black text-rose-950 select-none shadow-3xs shrink-0"
+          {/* 2. Recharge Balance */}
+          <div 
+            className="flex items-center gap-1 bg-rose-50 border border-rose-200 px-2 xs:px-2.5 py-1 xs:py-1.5 rounded-xl text-[10px] xs:text-[11px] font-black text-rose-950 select-none shadow-3xs shrink-0"
+          >
+            <span className="text-[8px] xs:text-[9.5px] text-rose-700 font-sans hidden xxs:inline">রিচার্জঃ</span>
+            <span className="font-mono text-[10.5px] xs:text-[11.5px] font-black tracking-tight text-rose-900">৳{user.telecomBalance?.toLocaleString() || '0'}</span>
+            <button 
+              onClick={() => setShowAddBalanceModal(true)}
+              className="ml-0.5 bg-rose-200 hover:bg-rose-300 text-rose-950 text-[8px] font-black px-1.5 py-0.5 rounded-md cursor-pointer transition active:scale-95"
             >
-              <span className="text-[8px] xs:text-[9.5px] text-rose-700 font-sans hidden xxs:inline">রিচার্জঃ</span>
-              <span className="font-mono text-[10.5px] xs:text-[11.5px] font-black tracking-tight text-rose-900">৳{user.telecomBalance?.toLocaleString() || '0'}</span>
-              <button 
-                onClick={() => setShowAddBalanceModal(true)}
-                className="ml-1 bg-rose-200 text-rose-900 text-[8px] font-black px-1.5 py-0.5 rounded-md hover:bg-rose-300"
-              >
-                Add
-              </button>
-            </div>
+              Add
+            </button>
           </div>
-        </div>
 
-        <div className="flex items-center gap-1.5">
+          {/* 3. Transaction History */}
+          <button
+            onClick={() => {
+              fetchTxHistory();
+              setShowSectionTxHistory(true);
+            }}
+            className="flex items-center gap-1 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2 xs:px-2.5 py-1 xs:py-1.5 rounded-xl text-[10px] xs:text-[11px] font-black text-indigo-700 transition cursor-pointer shrink-0 shadow-3xs active:scale-95"
+            title="লেনদেনের হিস্ট্রি"
+          >
+            <History className="w-3.5 h-3.5 text-indigo-600" />
+            <span className="font-sans">হিস্ট্রি</span>
+          </button>
+
           {/* Admin Switcher for Admins & Sub-Admins */}
           {(user.role === 'admin' || user.role === 'sub_admin') && (
             <button
               onClick={() => setActiveSubView(activeSubView === 'admin' ? 'main' : 'admin')}
-              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[10px] font-black transition cursor-pointer shrink-0 shadow-3xs active:scale-95 ${
+              className={`flex items-center gap-1 px-2 xs:px-2.5 py-1 xs:py-1.5 rounded-xl text-[10px] font-black transition cursor-pointer shrink-0 shadow-3xs active:scale-95 ${
                 activeSubView === 'admin'
                   ? 'bg-amber-500 text-white border border-amber-600'
                   : 'bg-gradient-to-r from-purple-900 to-indigo-900 text-amber-300 border border-purple-700 hover:brightness-110'
@@ -658,22 +719,9 @@ export default function BNBTelecomScreen({
               title="টেলিকম এডমিন কন্ট্রোল"
             >
               <ShieldCheck className="w-3.5 h-3.5 text-amber-300" />
-              <span className="font-sans">{activeSubView === 'admin' ? 'ইউজার মোড' : 'এডমিন'}</span>
+              <span className="font-sans hidden sm:inline">{activeSubView === 'admin' ? 'ইউজার মোড' : 'এডমিন'}</span>
             </button>
           )}
-
-          {/* Transaction History BTN */}
-          <button
-            onClick={() => {
-              fetchTxHistory();
-              setShowSectionTxHistory(true);
-            }}
-            className="flex items-center gap-1 bg-indigo-50 hover:bg-indigo-100 border border-indigo-150 px-2.5 py-1.5 rounded-xl text-[10px] font-black text-indigo-700 transition cursor-pointer shrink-0 shadow-3xs active:scale-95"
-            title="লেনদেনের হিস্ট্রি"
-          >
-            <History className="w-3.5 h-3.5 text-indigo-600" />
-            <span className="font-sans">হিস্ট্রি</span>
-          </button>
         </div>
       </header>
 
@@ -697,7 +745,7 @@ export default function BNBTelecomScreen({
           </div>
           <div className="flex-grow overflow-hidden relative mr-1.5">
             <marquee className="text-[10px] font-bold text-slate-700 leading-none py-0.5" behavior="scroll" direction="left" scrollamount="4">
-              {appConfig?.telecomTicker || "টেলিকম ফ্লেক্সিলোড ও সুপার ফাস্ট ড্রাইভ অফার গাইডঃ সব অপারেটরের ইনস্ট্যান্ট ক্যাশব্যাক ও বেস্ট ডিসকাউন্টেড অফার ড্রাইভ প্যাকেজ সমূহ সচল রয়েছে। অটোমেটেড রিচার্জ ১০ সেকেন্ড থেকে ৫ মিনিটের মধ্যে সচলভাবে সম্পন্ন হয়।"}
+              {appConfig?.telecomTicker || "টেলিকম ফ্লেক্সিলোড ও সুপার ফাস্ট ড্রাইভ অফার গাইডঃ সব অপারেটরের ইনস্ট্যান্ট ক্যাশব্যাক ও বেস্ট ডিসকাউন্টেড অফার ড্রাইভ প্যাকেজ সমূহ সচল রয়েছে। অটোমেটেড রিচার্জ 10 সেকেন্ড থেকে 5 মিনিটের মধ্যে সচলভাবে সম্পন্ন হয়।"}
             </marquee>
           </div>
         </div>
@@ -757,7 +805,11 @@ export default function BNBTelecomScreen({
                   <button
                     onClick={() => {
                       setCashRechargeOperator('');
+                      setCashRecipientNumber('');
+                      setCashRechargeAmount('');
+                      setCashRechargePin('');
                       setPurchaseError('');
+                      setPurchaseSuccess(false);
                       setShowCashRecharge(true);
                     }}
                     className="py-2.5 px-1 bg-white hover:bg-slate-50 text-indigo-950 font-black rounded-xl text-[10.5px] transition-all cursor-pointer shadow-md text-center flex flex-col items-center justify-center gap-1 active:scale-95 border border-white/15"
@@ -770,7 +822,11 @@ export default function BNBTelecomScreen({
                   <button
                     onClick={() => {
                       setCashRechargeOperator('Alaap');
+                      setCashRecipientNumber('');
+                      setCashRechargeAmount('');
+                      setCashRechargePin('');
                       setPurchaseError('');
+                      setPurchaseSuccess(false);
                       setShowCashRecharge(true);
                     }}
                     className="py-2.5 px-1 bg-indigo-500/35 hover:bg-indigo-500/50 border border-indigo-400/20 text-indigo-50 font-black rounded-xl text-[10.5px] transition-all cursor-pointer text-center flex flex-col items-center justify-center gap-1 active:scale-95"
@@ -783,7 +839,11 @@ export default function BNBTelecomScreen({
                   <button
                     onClick={() => {
                       setCashRechargeOperator('Brilliant');
+                      setCashRecipientNumber('');
+                      setCashRechargeAmount('');
+                      setCashRechargePin('');
                       setPurchaseError('');
+                      setPurchaseSuccess(false);
                       setShowCashRecharge(true);
                     }}
                     className="py-2.5 px-1 bg-indigo-500/35 hover:bg-indigo-500/50 border border-indigo-400/20 text-indigo-50 font-black rounded-xl text-[10.5px] transition-all cursor-pointer text-center flex flex-col items-center justify-center gap-1 active:scale-95"
@@ -1155,7 +1215,7 @@ export default function BNBTelecomScreen({
 
                     {/* Security Transaction Pin Verification */}
                     <div>
-                      <label className="block text-[10px] font-extrabold text-slate-500 mb-1">আপনার ৪ ডিজিটের সিকিউরিটি পিন</label>
+                      <label className="block text-[10px] font-extrabold text-slate-500 mb-1">আপনার 4 ডিজিটের সিকিউরিটি পিন</label>
                       <input
                         type="password"
                         required
@@ -1237,8 +1297,8 @@ export default function BNBTelecomScreen({
               }}>
                 <div className="mb-4">
                   <label className="text-xs font-bold text-slate-600">পরিমাণ (৳)</label>
-                  <input type="number" value={addBalanceAmount} onChange={(e) => setAddBalanceAmount(e.target.value)} required className="w-full p-2 bg-slate-50 border rounded-xl mt-1 text-sm font-mono" placeholder="১০০০" />
-                  <p className="text-[10px] text-emerald-600 font-bold mt-1">কমিশন (২%): ৳{(Number(addBalanceAmount) * 0.02).toFixed(2)}</p>
+                  <input type="number" value={addBalanceAmount} onChange={(e) => setAddBalanceAmount(e.target.value)} required className="w-full p-2 bg-slate-50 border rounded-xl mt-1 text-sm font-mono" placeholder="1000" />
+                  <p className="text-[10px] text-emerald-600 font-bold mt-1">কমিশন (2%): ৳{(Number(addBalanceAmount) * 0.02).toFixed(2)}</p>
                 </div>
                 <div className="mb-6">
                   <label className="text-xs font-bold text-slate-600">পিন নম্বর</label>
@@ -1365,7 +1425,7 @@ export default function BNBTelecomScreen({
                         min={10}
                         value={cashRechargeAmount}
                         onChange={(e) => setCashRechargeAmount(e.target.value)}
-                        placeholder="১০ - ১০০০ টাকা"
+                        placeholder="10 - 1000 টাকা"
                         className="w-full p-2.5 bg-slate-50 border border-slate-205 rounded-xl font-mono text-xs focus:outline-none"
                       />
                     </div>
@@ -1387,13 +1447,13 @@ export default function BNBTelecomScreen({
                         maxLength={11}
                         value={cashRecipientNumber}
                         onChange={(e) => setCashRecipientNumber(e.target.value.replace(/\D/g, ''))}
-                        placeholder="উদাঃ ০১৮XXXXXXXX (১১ ডিজিটের মোবাইল নম্বর)"
+                        placeholder="উদাঃ 018XXXXXXXX (11 ডিজিটের মোবাইল নম্বর)"
                         className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs text-slate-805"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-[10px] text-slate-500 mb-1">আপনার ৪ ডিজিটের পিন নম্বর</label>
+                      <label className="block text-[10px] text-slate-500 mb-1">আপনার 4 ডিজিটের পিন নম্বর</label>
                       <input
                         type="password"
                         required
@@ -1499,11 +1559,11 @@ export default function BNBTelecomScreen({
                               </p>
                             ) : expectedCashback > 0 ? (
                               <p className="text-[10px] text-emerald-700 font-extrabold leading-normal">
-                                আপনি ৳{cashRechargeAmount} টাকায় <strong className="text-emerald-950">৳{expectedCashback.toFixed(2)}</strong> লভ্যাংশ কমিশন (২%) পাবেন।
+                                আপনি ৳{cashRechargeAmount} টাকায় <strong className="text-emerald-950">৳{expectedCashback.toFixed(2)}</strong> লভ্যাংশ কমিশন (2%) পাবেন।
                               </p>
                             ) : (
                               <p className="text-[9.5px] text-emerald-600 font-bold leading-relaxed font-sans">
-                                যত টাকা মোবাইল রিচার্জ করবেন সেই অনুযায়ী ২% কমিশন ওয়ালেটে যুক্ত হবে।
+                                যত টাকা মোবাইল রিচার্জ করবেন সেই অনুযায়ী 2% কমিশন ওয়ালেটে যুক্ত হবে।
                               </p>
                             )}
                           </div>
@@ -1566,7 +1626,7 @@ export default function BNBTelecomScreen({
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-black uppercase text-slate-400">হেল্পলাইন নম্বর:</span>
                   <span className="text-[10px] font-black text-emerald-600 bg-emerald-100/60 px-2 py-0.5 rounded-md font-mono">
-                    ২৪/৭ সচল
+                    24/7 সচল
                   </span>
                 </div>
 
@@ -1729,7 +1789,11 @@ export default function BNBTelecomScreen({
 
                   return filteredTxs.map((tx, idx) => {
                     return (
-                      <div key={`${tx.id}-${idx}`} className="p-3 bg-white border border-slate-150 rounded-2xl shadow-3xs flex justify-between items-start gap-3 text-left">
+                      <div 
+                        key={`${tx.id}-${idx}`} 
+                        onClick={() => openReceiptForTx(tx)}
+                        className="p-3 bg-white border border-slate-150 hover:border-indigo-300 hover:bg-indigo-50/30 rounded-2xl shadow-3xs flex justify-between items-start gap-3 text-left cursor-pointer transition active:scale-[0.99]"
+                      >
                         <div className="space-y-1">
                           <span className="text-xs font-black text-slate-800 block">{tx.typeLabel || 'মোবাইল রিচার্জ'}</span>
                           <span className="text-[10px] text-slate-400 block font-medium">
@@ -1738,7 +1802,7 @@ export default function BNBTelecomScreen({
                           <p className="text-[10.5px] text-slate-650 font-bold leading-normal">{tx.description}</p>
                           {tx.id && (
                             <span className="inline-block text-[9px] bg-slate-105 text-slate-500 font-mono px-2 py-0.5 rounded-md">
-                              TXN ID: {tx.id.replace('tx-tel-', '').toUpperCase()}
+                              TXN ID: {tx.id.replace('tx-tel-', '').replace('tx-cash-', '').toUpperCase()}
                             </span>
                           )}
                         </div>
@@ -1769,6 +1833,14 @@ export default function BNBTelecomScreen({
       </AnimatePresence>
     </>
   )}
+
+      {/* Full-Screen BNB Payment Receipt Modal */}
+      <BnbPaymentReceiptModal
+        isOpen={isReceiptOpen}
+        onClose={() => setIsReceiptOpen(false)}
+        data={receiptModalData}
+        appLogo={appConfig?.logoUrl || "/bnb_logo.png"}
+      />
 
     </div>
   );
