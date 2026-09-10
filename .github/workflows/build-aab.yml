@@ -42,23 +42,24 @@ jobs:
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
         run: |
-          if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
-            echo "Decoding release keystore from secrets..."
-            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
-          elif [ -f "public/keystore_b64.txt" ]; then
-            echo "Restoring original Google Play release keystore from project base64..."
-            base64 -d public/keystore_b64.txt > android/app/release.keystore
+          mkdir -p android/app
+          if [ -f "public/keystore_b64.txt" ] && [ -s "public/keystore_b64.txt" ]; then
+            echo "Found public/keystore_b64.txt, restoring original release keystore..."
+            node -e 'const fs = require("fs"); const b64 = fs.readFileSync("public/keystore_b64.txt", "utf8").trim().replace(/\s+/g, ""); fs.writeFileSync("android/app/release.keystore", Buffer.from(b64, "base64"));'
+          elif [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
+            echo "Decoding release keystore from GitHub secrets..."
+            node -e 'const fs = require("fs"); const b64 = (process.env.RELEASE_KEYSTORE_BASE64 || "").trim().replace(/\s+/g, ""); fs.writeFileSync("android/app/release.keystore", Buffer.from(b64, "base64"));'
           elif [ -f "android/app/release.keystore" ]; then
-            echo "Using existing release keystore in android/app/release.keystore..."
+            echo "Found existing android/app/release.keystore."
           else
-            echo "No keystore found, generating fallback release keystore..."
+            echo "Generating fallback release keystore with alias almayadin..."
             keytool -genkeypair -v \
               -keystore android/app/release.keystore \
               -alias almayadin \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -storetype PKCS12 \
               -storepass almayadin123 -keypass almayadin123 \
-              -dname "CN=BNB Business Network, OU=BNB, O=BNB, L=Dhaka, ST=Dhaka, C=BD"
+              -dname "CN=BNB Bangladesh, OU=BNB, O=BNB, L=Dhaka, ST=Dhaka, C=BD"
           fi
 
       - name: Build Release AAB
@@ -68,7 +69,25 @@ jobs:
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD || 'almayadin123' }}
         run: |
           cd android
-          gradle bundleRelease --stacktrace
+          chmod +x gradlew || true
+          ./gradlew bundleRelease --stacktrace || gradle bundleRelease --stacktrace
+
+      - name: Sign AAB with jarsigner
+        run: |
+          AAB_FILE=$(find android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
+          if [ -n "$AAB_FILE" ] && [ -f "android/app/release.keystore" ]; then
+            echo "Signing $AAB_FILE..."
+            jarsigner -verbose \
+              -sigalg SHA256withRSA \
+              -digestalg SHA-256 \
+              -keystore android/app/release.keystore \
+              -storepass "almayadin123" \
+              -keypass "almayadin123" \
+              "$AAB_FILE" "almayadin" || true
+            
+            echo "Verifying signed AAB..."
+            jarsigner -verify "$AAB_FILE" || true
+          fi
 
       - name: Upload AAB Artifact
         uses: actions/upload-artifact@v4
