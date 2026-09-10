@@ -48,7 +48,7 @@ jobs:
 
 
       # ==========================================
-      # 5. Accept Android Licenses
+      # 5. Accept Android SDK Licenses
       # ==========================================
       - name: Accept Android SDK Licenses
         shell: bash
@@ -159,9 +159,9 @@ jobs:
 
 
       # ==========================================
-      # 12. Fix Gradle Wrapper
+      # 12. Prepare Gradle Wrapper
       # ==========================================
-      - name: Fix Gradle Wrapper
+      - name: Prepare Gradle Wrapper
         working-directory: android
         shell: bash
         run: |
@@ -170,38 +170,35 @@ jobs:
           mkdir -p gradle/wrapper
 
           if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
-
             GRADLE_VERSION=$(grep "distributionUrl" \
               gradle/wrapper/gradle-wrapper.properties \
               | sed -E 's/.*gradle-([0-9]+\.[0-9]+(\.[0-9]+)?)-.*/\1/' \
               | head -n 1)
-
-            if [ -z "$GRADLE_VERSION" ]; then
-              GRADLE_VERSION="8.10.2"
-            fi
-
           else
-
             GRADLE_VERSION="8.10.2"
+          fi
 
-            cat > gradle/wrapper/gradle-wrapper.properties <<EOF
-distributionBase=GRADLE_USER_HOME
-distributionPath=wrapper/dists
-distributionUrl=https\://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip
-networkTimeout=10000
-validateDistributionUrl=true
-zipStoreBase=GRADLE_USER_HOME
-zipStorePath=wrapper/dists
-EOF
-
+          if [ -z "$GRADLE_VERSION" ]; then
+            GRADLE_VERSION="8.10.2"
           fi
 
           echo "Using Gradle version: $GRADLE_VERSION"
+
+          printf '%s\n' \
+            'distributionBase=GRADLE_USER_HOME' \
+            'distributionPath=wrapper/dists' \
+            "distributionUrl=https\\://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
+            'networkTimeout=10000' \
+            'validateDistributionUrl=true' \
+            'zipStoreBase=GRADLE_USER_HOME' \
+            'zipStorePath=wrapper/dists' \
+            > gradle/wrapper/gradle-wrapper.properties
 
           wget -q \
             "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
             -O /tmp/gradle.zip
 
+          rm -rf /tmp/gradle
           mkdir -p /tmp/gradle
 
           unzip -q /tmp/gradle.zip -d /tmp/gradle
@@ -209,7 +206,7 @@ EOF
           GRADLE_HOME="/tmp/gradle/gradle-${GRADLE_VERSION}"
 
           if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            echo "gradle-wrapper.jar missing. Generating it..."
+            echo "Generating Gradle wrapper..."
 
             "$GRADLE_HOME/bin/gradle" wrapper \
               --gradle-version "$GRADLE_VERSION" \
@@ -237,6 +234,7 @@ EOF
 
             node -e '
               const fs = require("fs");
+
               const b64 = fs.readFileSync(
                 "public/keystore_b64.txt",
                 "utf8"
@@ -252,6 +250,7 @@ EOF
 
             node -e '
               const fs = require("fs");
+
               const b64 = (
                 process.env.RELEASE_KEYSTORE_BASE64 || ""
               ).trim().replace(/\s+/g, "");
@@ -307,7 +306,7 @@ EOF
           p = Path("android/app/build.gradle")
           text = p.read_text()
 
-          signing = '''
+          signing_block = """
               signingConfigs {
                   release {
                       storeFile file("release.keystore")
@@ -316,23 +315,27 @@ EOF
                       keyPassword System.getenv("RELEASE_KEY_PASSWORD")
                   }
               }
-          '''
+          """
 
-          if "signingConfigs {" not in text:
+          if "storeFile file(\"release.keystore\")" not in text:
               text = text.replace(
                   "android {",
-                  "android {\\n" + signing,
+                  "android {" + signing_block,
                   1
               )
 
           if "signingConfig signingConfigs.release" not in text:
               text = text.replace(
                   "buildTypes {",
-                  "buildTypes {\\n        release {\\n            signingConfig signingConfigs.release\\n        }",
+                  """buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                  }""",
                   1
               )
 
           p.write_text(text)
+
           PY
 
           elif [ -f "android/app/build.gradle.kts" ]; then
@@ -343,7 +346,7 @@ EOF
           p = Path("android/app/build.gradle.kts")
           text = p.read_text()
 
-          signing = '''
+          signing_block = """
               signingConfigs {
                   create("release") {
                       storeFile = file("release.keystore")
@@ -352,18 +355,32 @@ EOF
                       keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
                   }
               }
-          '''
+          """
 
-          if "signingConfigs" not in text:
+          if 'storeFile = file("release.keystore")' not in text:
               text = text.replace(
                   "android {",
-                  "android {\\n" + signing,
+                  "android {" + signing_block,
+                  1
+              )
+
+          if "signingConfig = signingConfigs.getByName(\"release\")" not in text:
+              text = text.replace(
+                  "buildTypes {",
+                  """buildTypes {
+                  getByName("release") {
+                      signingConfig = signingConfigs.getByName("release")
+                  }""",
                   1
               )
 
           p.write_text(text)
+
           PY
 
+          else
+            echo "ERROR: Android app Gradle file not found."
+            exit 1
           fi
 
           echo "Release signing configured."
