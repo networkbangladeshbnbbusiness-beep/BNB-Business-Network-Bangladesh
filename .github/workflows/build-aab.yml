@@ -17,7 +17,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -31,7 +30,7 @@ jobs:
           gradle-version: '8.11.1'
 
       - name: Install Node Dependencies
-        run: npm ci || npm install --legacy-peer-deps
+        run: npm install --legacy-peer-deps
 
       - name: Build Web Assets
         run: npm run build
@@ -46,22 +45,27 @@ jobs:
           if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
             echo "Decoding release keystore from secrets..."
             echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
+          elif [ -f "public/keystore_b64.txt" ]; then
+            echo "Restoring original Google Play release keystore from project base64..."
+            base64 -d public/keystore_b64.txt > android/app/release.keystore
+          elif [ -f "android/app/release.keystore" ]; then
+            echo "Using existing release keystore in android/app/release.keystore..."
           else
-            echo "No RELEASE_KEYSTORE_BASE64 secret provided. Generating release keystore automatically..."
+            echo "No keystore found, generating fallback release keystore..."
             keytool -genkeypair -v \
               -keystore android/app/release.keystore \
-              -alias bnbkey \
+              -alias almayadin \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -storetype PKCS12 \
-              -storepass android -keypass android \
-              -dname "CN=BNB Bangladesh, OU=BNB, O=BNB, L=Dhaka, ST=Dhaka, C=BD"
+              -storepass almayadin123 -keypass almayadin123 \
+              -dname "CN=BNB Business Network, OU=BNB, O=BNB, L=Dhaka, ST=Dhaka, C=BD"
           fi
 
       - name: Build Release AAB
         env:
-          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD || 'android' }}
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS || 'bnbkey' }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD || 'android' }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD || 'almayadin123' }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS || 'almayadin' }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD || 'almayadin123' }}
         run: |
           cd android
           gradle bundleRelease --stacktrace
@@ -69,6 +73,6 @@ jobs:
       - name: Upload AAB Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bnb-mobile-banking-aab
+          name: bnb-business-network-v3-release-aab
           path: android/app/build/outputs/bundle/release/*.aab
           if-no-files-found: error
