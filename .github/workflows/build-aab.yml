@@ -2,7 +2,9 @@ name: Build Android App Bundle (AAB)
 
 on:
   push:
-    branches: [ main, master ]
+    branches:
+      - main
+      - master
   workflow_dispatch:
 
 jobs:
@@ -10,97 +12,330 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # ==========================================
+      # 1. Checkout
+      # ==========================================
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+
+      # ==========================================
+      # 2. Node.js
+      # ==========================================
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
+
+      # ==========================================
+      # 3. Java JDK 21
+      # ==========================================
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: '21'
+          distribution: temurin
+          java-version: "21"
 
+
+      # ==========================================
+      # 4. Android SDK
+      # ==========================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+
+      # ==========================================
+      # 5. Accept Licenses
+      # ==========================================
       - name: Accept Android SDK Licenses
         run: |
-          yes | sdkmanager --licenses || true
+          yes | sdkmanager --licenses > /dev/null || true
 
+
+      # ==========================================
+      # 6. Install Android SDK 36
+      # ==========================================
+      - name: Install Android SDK 36
+        run: |
+          sdkmanager "platform-tools"
+          sdkmanager "platforms;android-36"
+          sdkmanager "build-tools;36.0.0"
+
+
+      # ==========================================
+      # 7. Install Dependencies
+      # ==========================================
       - name: Install Node Dependencies
-        run: npm install --legacy-peer-deps
+        run: |
+          npm install --legacy-peer-deps
 
+
+      # ==========================================
+      # 8. Build Web Assets
+      # ==========================================
       - name: Build Web Assets
-        run: npm run build
+        run: |
+          npm run build
 
+
+      # ==========================================
+      # 9. Capacitor Sync
+      # ==========================================
       - name: Sync Capacitor Android
-        run: npx cap sync android
+        run: |
+          npx cap sync android
 
+
+      # ==========================================
+      # 10. Configure Android SDK 36
+      # ==========================================
+      - name: Configure Android SDK 36
+        shell: bash
+        run: |
+          set -e
+
+          echo "Configuring Android SDK 36..."
+
+          if [ -f "android/variables.gradle" ]; then
+            sed -i -E 's/compileSdkVersion[[:space:]]*=[[:space:]]*[0-9]+/compileSdkVersion = 36/g' android/variables.gradle
+            sed -i -E 's/targetSdkVersion[[:space:]]*=[[:space:]]*[0-9]+/targetSdkVersion = 36/g' android/variables.gradle
+          fi
+
+          if [ -f "android/app/build.gradle" ]; then
+            sed -i -E 's/compileSdk[[:space:]]+[0-9]+/compileSdk 36/g' android/app/build.gradle
+            sed -i -E 's/targetSdk[[:space:]]+[0-9]+/targetSdk 36/g' android/app/build.gradle
+          fi
+
+          if [ -f "android/app/build.gradle.kts" ]; then
+            sed -i -E 's/compileSdk[[:space:]]*=[[:space:]]*[0-9]+/compileSdk = 36/g' android/app/build.gradle.kts
+            sed -i -E 's/targetSdk[[:space:]]*=[[:space:]]*[0-9]+/targetSdk = 36/g' android/app/build.gradle.kts
+          fi
+
+          echo "Android SDK 36 configured."
+
+
+      # ==========================================
+      # 11. Set Software Version 3.0
+      # ==========================================
+      - name: Set Software Version 3.0
+        shell: bash
+        run: |
+          set -e
+
+          echo "Setting Version Code = 3"
+          echo "Setting Version Name = 3.0"
+
+          if [ -f "android/app/build.gradle" ]; then
+
+            sed -i -E 's/versionCode[[:space:]]+[0-9]+/versionCode 3/g' \
+              android/app/build.gradle
+
+            sed -i -E 's/versionName[[:space:]]+["'\''][^"'\'']+["'\'']/versionName "3.0"/g' \
+              android/app/build.gradle
+
+          fi
+
+          if [ -f "android/app/build.gradle.kts" ]; then
+
+            sed -i -E 's/versionCode[[:space:]]*=[[:space:]]*[0-9]+/versionCode = 3/g' \
+              android/app/build.gradle.kts
+
+            sed -i -E 's/versionName[[:space:]]*=[[:space:]]*["'\''][^"'\'']+["'\'']/versionName = "3.0"/g' \
+              android/app/build.gradle.kts
+
+          fi
+
+
+      # ==========================================
+      # 12. Fix Gradle Wrapper
+      # ==========================================
+      - name: Fix Gradle Wrapper
+        working-directory: android
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p gradle/wrapper
+
+          if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+
+            GRADLE_VERSION=$(grep "distributionUrl" \
+              gradle/wrapper/gradle-wrapper.properties \
+              | sed -E 's/.*gradle-([0-9]+\.[0-9]+(\.[0-9]+)?)-.*/\1/' \
+              | head -n 1)
+
+            if [ -z "$GRADLE_VERSION" ]; then
+              GRADLE_VERSION="8.10.2"
+            fi
+
+          else
+
+            GRADLE_VERSION="8.10.2"
+
+            cat > gradle/wrapper/gradle-wrapper.properties <<EOF
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip
+networkTimeout=10000
+validateDistributionUrl=true
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+EOF
+
+          fi
+
+          echo "Using Gradle version: $GRADLE_VERSION"
+
+          wget -q \
+            "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
+            -O /tmp/gradle.zip
+
+          mkdir -p /tmp/gradle
+
+          unzip -q /tmp/gradle.zip -d /tmp/gradle
+
+          GRADLE_HOME="/tmp/gradle/gradle-${GRADLE_VERSION}"
+
+          if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+            echo "gradle-wrapper.jar missing. Generating it..."
+
+            "$GRADLE_HOME/bin/gradle" wrapper \
+              --gradle-version "$GRADLE_VERSION" \
+              --distribution-type bin
+          fi
+
+          chmod +x gradlew
+
+          ./gradlew --version
+
+
+      # ==========================================
+      # 13. Setup Keystore
+      # ==========================================
       - name: Setup Keystore
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        shell: bash
         run: |
+          set -e
+
           mkdir -p android/app
-          if [ -f "public/keystore_b64.txt" ] && [ -s "public/keystore_b64.txt" ]; then
-            echo "Found public/keystore_b64.txt, restoring original release keystore..."
-            node -e 'const fs = require("fs"); const b64 = fs.readFileSync("public/keystore_b64.txt", "utf8").trim().replace(/\s+/g, ""); fs.writeFileSync("android/app/release.keystore", Buffer.from(b64, "base64"));'
+
+          if [ -f "public/keystore_b64.txt" ] && \
+             [ -s "public/keystore_b64.txt" ]; then
+
+            node -e '
+              const fs = require("fs");
+              const b64 = fs.readFileSync(
+                "public/keystore_b64.txt",
+                "utf8"
+              ).trim().replace(/\s+/g, "");
+
+              fs.writeFileSync(
+                "android/app/release.keystore",
+                Buffer.from(b64, "base64")
+              );
+            '
+
           elif [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
-            echo "Decoding release keystore from GitHub secrets..."
-            node -e 'const fs = require("fs"); const b64 = (process.env.RELEASE_KEYSTORE_BASE64 || "").trim().replace(/\s+/g, ""); fs.writeFileSync("android/app/release.keystore", Buffer.from(b64, "base64"));'
+
+            node -e '
+              const fs = require("fs");
+              const b64 = (
+                process.env.RELEASE_KEYSTORE_BASE64 || ""
+              ).trim().replace(/\s+/g, "");
+
+              fs.writeFileSync(
+                "android/app/release.keystore",
+                Buffer.from(b64, "base64")
+              );
+            '
+
           elif [ -f "android/app/release.keystore" ]; then
-            echo "Found existing android/app/release.keystore."
+
+            echo "Existing release keystore found."
+
           else
-            echo "Generating fallback release keystore with alias almayadin..."
+
+            echo "No release keystore found."
+            echo "Generating fallback keystore..."
+
             keytool -genkeypair -v \
               -keystore android/app/release.keystore \
               -alias almayadin \
-              -keyalg RSA -keysize 2048 -validity 10000 \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
               -storetype PKCS12 \
-              -storepass almayadin123 -keypass almayadin123 \
+              -storepass almayadin123 \
+              -keypass almayadin123 \
               -dname "CN=BNB Bangladesh, OU=BNB, O=BNB, L=Dhaka, ST=Dhaka, C=BD"
+
           fi
 
-      - name: Build Release AAB and APK
+
+      # ==========================================
+      # 14. Build ONLY AAB
+      # ==========================================
+      - name: Build Release AAB
+        working-directory: android
         env:
           RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD || 'almayadin123' }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS || 'almayadin' }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD || 'almayadin123' }}
+        shell: bash
         run: |
-          cd android
-          chmod +x gradlew || true
-          ./gradlew bundleRelease assembleRelease --no-daemon --stacktrace
+          set -e
 
-      - name: Sign AAB and APK with jarsigner
+          chmod +x gradlew
+
+          echo "======================================"
+          echo "BUILDING RELEASE AAB"
+          echo "Android SDK: 36"
+          echo "Version Code: 3"
+          echo "Version Name: 3.0"
+          echo "======================================"
+
+          ./gradlew bundleRelease \
+            --no-daemon \
+            --stacktrace
+
+
+      # ==========================================
+      # 15. Verify AAB
+      # ==========================================
+      - name: Verify AAB
+        shell: bash
         run: |
-          AAB_FILE=$(find android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
-          if [ -n "$AAB_FILE" ] && [ -f "android/app/release.keystore" ]; then
-            echo "Signing $AAB_FILE..."
-            jarsigner -verbose \
-              -sigalg SHA256withRSA \
-              -digestalg SHA-256 \
-              -keystore android/app/release.keystore \
-              -storepass "almayadin123" \
-              -keypass "almayadin123" \
-              "$AAB_FILE" "almayadin" || true
-            
-            echo "Verifying signed AAB..."
-            jarsigner -verify "$AAB_FILE" || true
+          set -e
+
+          AAB_FILE=$(find \
+            android/app/build/outputs/bundle/release \
+            -type f \
+            -name "*.aab" \
+            | head -n 1)
+
+          if [ -z "$AAB_FILE" ]; then
+            echo "ERROR: AAB was not generated."
+            exit 1
           fi
 
-      - name: Upload AAB Artifact (Play Store Bundle)
+          echo "======================================"
+          echo "AAB BUILD SUCCESSFUL"
+          echo "======================================"
+
+          ls -lh "$AAB_FILE"
+
+
+      # ==========================================
+      # 16. Upload ONLY AAB
+      # ==========================================
+      - name: Upload AAB Artifact
         uses: actions/upload-artifact@v4
         with:
           name: bnb-business-network-v3-release-aab
           path: android/app/build/outputs/bundle/release/*.aab
           if-no-files-found: error
-
-      - name: Upload APK Artifact (Direct Install)
-        uses: actions/upload-artifact@v4
-        with:
-          name: bnb-business-network-v3-release-apk
-          path: android/app/build/outputs/apk/release/*.apk
-          if-no-files-found: warn
