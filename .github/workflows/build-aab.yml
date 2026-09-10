@@ -48,9 +48,10 @@ jobs:
 
 
       # ==========================================
-      # 5. Accept Licenses
+      # 5. Accept Android Licenses
       # ==========================================
       - name: Accept Android SDK Licenses
+        shell: bash
         run: |
           yes | sdkmanager --licenses > /dev/null || true
 
@@ -59,17 +60,21 @@ jobs:
       # 6. Install Android SDK 36
       # ==========================================
       - name: Install Android SDK 36
+        shell: bash
         run: |
+          set -e
           sdkmanager "platform-tools"
           sdkmanager "platforms;android-36"
           sdkmanager "build-tools;36.0.0"
 
 
       # ==========================================
-      # 7. Install Dependencies
+      # 7. Install Node Dependencies
       # ==========================================
       - name: Install Node Dependencies
+        shell: bash
         run: |
+          set -e
           npm install --legacy-peer-deps
 
 
@@ -77,7 +82,9 @@ jobs:
       # 8. Build Web Assets
       # ==========================================
       - name: Build Web Assets
+        shell: bash
         run: |
+          set -e
           npm run build
 
 
@@ -85,7 +92,9 @@ jobs:
       # 9. Capacitor Sync
       # ==========================================
       - name: Sync Capacitor Android
+        shell: bash
         run: |
+          set -e
           npx cap sync android
 
 
@@ -224,8 +233,7 @@ EOF
 
           mkdir -p android/app
 
-          if [ -f "public/keystore_b64.txt" ] && \
-             [ -s "public/keystore_b64.txt" ]; then
+          if [ -f "public/keystore_b64.txt" ] && [ -s "public/keystore_b64.txt" ]; then
 
             node -e '
               const fs = require("fs");
@@ -276,9 +284,93 @@ EOF
 
           fi
 
+          echo "Keystore setup completed."
+
 
       # ==========================================
-      # 14. Build ONLY AAB
+      # 14. Configure Release Signing
+      # ==========================================
+      - name: Configure Release Signing
+        env:
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD || 'almayadin123' }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS || 'almayadin' }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD || 'almayadin123' }}
+        shell: bash
+        run: |
+          set -e
+
+          if [ -f "android/app/build.gradle" ]; then
+
+            python3 <<'PY'
+          from pathlib import Path
+
+          p = Path("android/app/build.gradle")
+          text = p.read_text()
+
+          signing = '''
+              signingConfigs {
+                  release {
+                      storeFile file("release.keystore")
+                      storePassword System.getenv("RELEASE_KEYSTORE_PASSWORD")
+                      keyAlias System.getenv("RELEASE_KEY_ALIAS")
+                      keyPassword System.getenv("RELEASE_KEY_PASSWORD")
+                  }
+              }
+          '''
+
+          if "signingConfigs {" not in text:
+              text = text.replace(
+                  "android {",
+                  "android {\\n" + signing,
+                  1
+              )
+
+          if "signingConfig signingConfigs.release" not in text:
+              text = text.replace(
+                  "buildTypes {",
+                  "buildTypes {\\n        release {\\n            signingConfig signingConfigs.release\\n        }",
+                  1
+              )
+
+          p.write_text(text)
+          PY
+
+          elif [ -f "android/app/build.gradle.kts" ]; then
+
+            python3 <<'PY'
+          from pathlib import Path
+
+          p = Path("android/app/build.gradle.kts")
+          text = p.read_text()
+
+          signing = '''
+              signingConfigs {
+                  create("release") {
+                      storeFile = file("release.keystore")
+                      storePassword = System.getenv("RELEASE_KEYSTORE_PASSWORD")
+                      keyAlias = System.getenv("RELEASE_KEY_ALIAS")
+                      keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+                  }
+              }
+          '''
+
+          if "signingConfigs" not in text:
+              text = text.replace(
+                  "android {",
+                  "android {\\n" + signing,
+                  1
+              )
+
+          p.write_text(text)
+          PY
+
+          fi
+
+          echo "Release signing configured."
+
+
+      # ==========================================
+      # 15. Build ONLY AAB
       # ==========================================
       - name: Build Release AAB
         working-directory: android
@@ -305,7 +397,7 @@ EOF
 
 
       # ==========================================
-      # 15. Verify AAB
+      # 16. Verify AAB
       # ==========================================
       - name: Verify AAB
         shell: bash
@@ -331,7 +423,7 @@ EOF
 
 
       # ==========================================
-      # 16. Upload ONLY AAB
+      # 17. Upload ONLY AAB
       # ==========================================
       - name: Upload AAB Artifact
         uses: actions/upload-artifact@v4
