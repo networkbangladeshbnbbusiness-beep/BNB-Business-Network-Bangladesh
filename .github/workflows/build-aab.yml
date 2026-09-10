@@ -62,7 +62,7 @@ jobs:
               -dname "CN=BNB Bangladesh, OU=BNB, O=BNB, L=Dhaka, ST=Dhaka, C=BD"
           fi
 
-      - name: Build Release AAB
+      - name: Build Release AAB and APK
         env:
           RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD || 'almayadin123' }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS || 'almayadin' }}
@@ -70,9 +70,9 @@ jobs:
         run: |
           cd android
           chmod +x gradlew || true
-          ./gradlew bundleRelease --stacktrace || gradle bundleRelease --stacktrace
+          ./gradlew bundleRelease assembleRelease --stacktrace || gradle bundleRelease assembleRelease --stacktrace
 
-      - name: Sign AAB with jarsigner
+      - name: Sign AAB and APK with jarsigner
         run: |
           AAB_FILE=$(find android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
           if [ -n "$AAB_FILE" ] && [ -f "android/app/release.keystore" ]; then
@@ -89,9 +89,16 @@ jobs:
             jarsigner -verify "$AAB_FILE" || true
           fi
 
-      - name: Upload AAB Artifact
+      - name: Upload AAB Artifact (Play Store Bundle)
         uses: actions/upload-artifact@v4
         with:
           name: bnb-business-network-v3-release-aab
           path: android/app/build/outputs/bundle/release/*.aab
           if-no-files-found: error
+
+      - name: Upload APK Artifact (Direct Install)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bnb-business-network-v3-release-apk
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
