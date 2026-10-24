@@ -1,0 +1,10 @@
+{
+  "name": "BNB Business Network Bangladesh",
+  "description": "BNB Business Network Bangladesh - সমবায়, নিরাপদ লেনদেন, সঞ্চয়, রেমিট্যান্স ও ডিজিটাল সেবা প্ল্যাটফর্ম।",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
