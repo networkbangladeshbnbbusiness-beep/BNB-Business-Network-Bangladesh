@@ -1,0 +1,13 @@
+# Firebase App Hosting configuration for BNB Business Network Bangladesh
+# Documentation: https://firebase.google.com/docs/app-hosting/configure
+
+runConfig:
+  cpu: 1
+  memoryMiB: 512
+  minInstances: 0
+  maxInstances: 5
+  concurrency: 80
+
+env:
+  - variable: NODE_ENV
+    value: production

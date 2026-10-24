@@ -2,10 +2,13 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-import { createServer as createViteServer } from 'vite';
+import { fileURLToPath } from 'url';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore, collection, onSnapshot, doc, getDocs, deleteDoc, updateDoc, addDoc, serverTimestamp, getDoc, runTransaction, setLogLevel, query, where, limit, setDoc } from 'firebase/firestore';
 import admin from 'firebase-admin';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const PAYMENT_AUTH_SECRET = process.env.PAYMENT_AUTH_SECRET || 'bnb_secure_payment_salt_2026';
 
@@ -489,7 +492,7 @@ async function processVerifiedZiniPayment(db: any, transaction_id: string, verif
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
   // Middleware for body parsing
   app.use(express.json());
@@ -4509,6 +4512,11 @@ async function startServer() {
     return res.status(404).json({ error: 'assetlinks.json not found' });
   });
 
+  // Health check endpoints for Cloud Run, load balancers, and monitoring
+  app.get(['/_health', '/healthz', '/api/health'], (req, res) => {
+    res.status(200).json({ status: 'ok', time: new Date().toISOString() });
+  });
+
   // Catch-all for unknown /api/* routes to guarantee JSON response with status 404
   app.all('/api/*', (req, res) => {
     res.status(404).json({ code: 'route_not_found', error: 'API route not found' });
@@ -4527,15 +4535,34 @@ async function startServer() {
     next();
   });
 
-  // Vite integration as middleware depending on environment
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
+  // Vite integration as middleware in development, static distribution in production
+  const isDev = process.env.NODE_ENV === 'development' || process.env.npm_lifecycle_event === 'dev';
+  const hasDist = fs.existsSync(path.join(process.cwd(), 'dist', 'index.html')) || fs.existsSync(path.join(__dirname, 'dist', 'index.html'));
+  const isProduction = process.env.NODE_ENV === 'production' || (!isDev && hasDist) || Boolean(process.env.PORT && process.env.PORT !== '3000');
+
+  if (!isProduction) {
+    try {
+      const { createServer: createViteServer } = await import('vite');
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    } catch (viteErr) {
+      console.warn('[Server] Could not initialize Vite middleware, falling back to static dist:', viteErr);
+      const distPath = fs.existsSync(path.join(process.cwd(), 'dist', 'index.html'))
+        ? path.join(process.cwd(), 'dist')
+        : path.join(__dirname, 'dist');
+      app.use(express.static(distPath));
+      app.get('*', (req, res) => {
+        res.sendFile(path.join(distPath, 'index.html'));
+      });
+    }
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = fs.existsSync(path.join(process.cwd(), 'dist', 'index.html'))
+      ? path.join(process.cwd(), 'dist')
+      : path.join(__dirname, 'dist');
+    console.log(`[Server] Serving production static files from ${distPath}`);
     // Serve raw assets out of the client build folder
     app.use(express.static(distPath));
     
@@ -4546,7 +4573,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`Server running on port ${PORT} in ${isProduction ? 'production' : 'development'} mode`);
   });
 }
 
