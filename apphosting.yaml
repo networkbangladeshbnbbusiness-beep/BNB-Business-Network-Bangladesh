@@ -11,3 +11,5 @@ runConfig:
 env:
   - variable: NODE_ENV
     value: production
+  - variable: FIRESTORE_DATABASE_ID
+    value: ai-studio-120ec6e1-2db5-45d2-b1b1-46493400c959

@@ -3,11 +3,6 @@ import { db } from './firebase';
 import { collection, addDoc } from 'firebase/firestore';
 import { apiUrl } from '../config/api';
 
-const RESEND_API_KEY = ['re', 'QSoEXg77', 'KZNPBYa9m2u9EccFAhZdDnuF'].join('_');
-const SENDER_EMAIL = 'BNB Business Network <noreply@businessnetworkbangladesh.com>';
-const FALLBACK_SENDER = 'BNB Business Network <onboarding@resend.dev>';
-const OWNER_EMAIL = 'networkbangladeshbnbbusiness@gmail.com';
-
 export interface SendOtpOptions {
   email: string;
   otp: string;
@@ -66,11 +61,10 @@ export function buildOtpEmailHtml(otp: string, userName = 'সম্মানি
 }
 
 /**
- * Dispatches an authentic 6-digit Email OTP with guaranteed multi-path delivery:
- * 1. Direct native HTTP request to api.resend.com (uses CapacitorHttp on Android, fetch on Web)
+ * Dispatches an authentic 6-digit Email OTP via secure server proxy:
+ * 1. Calls backend /api/send-email-otp with server-managed Resend credentials
  * 2. Real-time Firestore queue document in 'otp_requests'
  * 3. In-app user notification in 'user_notifications'
- * 4. Background REST API call to /api/send-otp
  */
 export async function sendEmailOtpDirect(options: SendOtpOptions): Promise<{ success: boolean; deliveredTo: string; error?: string }> {
   const { email, otp, userName = 'সম্মানিত সদস্য', phone = '', memberId = '', userId = '', reason = 'login' } = options;
@@ -80,89 +74,61 @@ export async function sendEmailOtpDirect(options: SendOtpOptions): Promise<{ suc
     return { success: false, deliveredTo: '', error: 'বৈধ ইমেইল ঠিকানা পাওয়া যায়নি।' };
   }
 
-  const emailHtml = buildOtpEmailHtml(otp, userName, reason);
-  const emailSubject = reason === 'forgot_password'
-    ? `BNB পাসওয়ার্ড রিসেট ওটিপি: ${otp}`
-    : `BNB ভেরিফিকেশন ওটিপি কোড: ${otp}`;
-  const emailText = `আপনার BNB ভেরিফিকেশন ওটিপি কোড: ${otp}\nমেয়াদ ৫ মিনিট। কারো সাথে শেয়ার করবেন না।`;
+  const payload = {
+    email: targetEmail,
+    otp,
+    userName,
+    phone,
+    accountNumber: memberId,
+    memberId,
+    userId,
+    channel: 'email',
+    reason,
+    skipEmail: false
+  };
 
-  // 1. Direct Resend Dispatch via CapacitorHttp (Android native) or fetch (Web)
-  const dispatchResendDirect = async (sender: string) => {
-    const payload = {
-      from: sender,
-      to: [targetEmail],
-      subject: emailSubject,
-      text: emailText,
-      html: emailHtml
-    };
+  // 1. Dispatch via authoritative backend server-side proxy
+  const dispatchViaBackend = async () => {
+    const endpoints = [apiUrl('/api/send-email-otp'), apiUrl('/api/send-otp')];
+    for (const url of endpoints) {
+      try {
+        if (typeof (window as any)?.Capacitor !== 'undefined' && CapacitorHttp?.post) {
+          const res = await CapacitorHttp.post({
+            url,
+            headers: { 'Content-Type': 'application/json' },
+            data: payload
+          });
+          if (res.status >= 200 && res.status < 300) {
+            console.log('[CapacitorHttp Backend OTP Success]:', res.data);
+            return true;
+          }
+        }
+      } catch (capErr) {
+        console.warn('[CapacitorHttp Backend Warning]:', capErr);
+      }
 
-    // If running in Capacitor Android/iOS, use native HTTP to bypass any browser CORS/redirect limitations
-    try {
-      if (typeof (window as any)?.Capacitor !== 'undefined' && CapacitorHttp?.post) {
-        const res = await CapacitorHttp.post({
-          url: 'https://api.resend.com/emails',
-          headers: {
-            'Authorization': `Bearer ${RESEND_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          data: payload
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
         });
-        if (res.status >= 200 && res.status < 300) {
-          console.log('[CapacitorHttp Resend Direct Success]:', res.data?.id);
+        if (res.ok) {
+          const data = await res.json().catch(() => null);
+          console.log('[Fetch Backend OTP Success]:', data);
           return true;
         }
+      } catch (fetchErr) {
+        console.warn('[Fetch Backend OTP Warning]:', fetchErr);
       }
-    } catch (capErr) {
-      console.warn('[CapacitorHttp Resend Warning]:', capErr);
-    }
-
-    // Standard fetch fallback
-    try {
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${RESEND_API_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
-      if (res.ok) {
-        const data = await res.json().catch(() => null);
-        console.log('[Fetch Resend Direct Success]:', data?.id);
-        return true;
-      } else {
-        const errJson = await res.json().catch(() => null);
-        console.warn('[Fetch Resend Error Response]:', res.status, errJson);
-      }
-    } catch (fetchErr) {
-      console.warn('[Fetch Resend Direct Warning]:', fetchErr);
     }
     return false;
   };
 
-  // 1. Lightning-fast parallel dispatch: Resend Direct + Backend API Server-side Dispatch
-  Promise.all([
-    dispatchResendDirect(SENDER_EMAIL).then(success => {
-      if (!success) return dispatchResendDirect(FALLBACK_SENDER);
-      return true;
-    }),
-    fetch(apiUrl('/api/send-otp'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: targetEmail,
-        otp,
-        userName,
-        phone,
-        accountNumber: memberId,
-        channel: 'email',
-        reason,
-        skipEmail: false
-      })
-    }).catch(() => {})
-  ]).catch(() => {});
+  // Run backend dispatch in background / parallel
+  dispatchViaBackend().catch(() => {});
 
-  // 2. Direct Firestore Queue Dispatch ('otp_requests')
+  // 2. Real-time Firestore Queue Dispatch ('otp_requests')
   if (db) {
     try {
       addDoc(collection(db, 'otp_requests'), {

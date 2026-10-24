@@ -516,7 +516,7 @@ async function startServer() {
   });
 
   // Authoritative Target Firestore Database ID
-  const TARGET_DATABASE_ID = 'ai-studio-120ec6e1-2db5-45d2-b1b1-46493400c959';
+  const TARGET_DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || 'ai-studio-120ec6e1-2db5-45d2-b1b1-46493400c959';
   let firebaseApp: any = null;
   let db: any = null;
   let adminDb: any = null;
@@ -4515,6 +4515,19 @@ async function startServer() {
   // Health check endpoints for Cloud Run, load balancers, and monitoring
   app.get(['/_health', '/healthz', '/api/health'], (req, res) => {
     res.status(200).json({ status: 'ok', time: new Date().toISOString() });
+  });
+
+  // Authoritative Version & Deployment Inspection Endpoint
+  app.get('/api/version', (req, res) => {
+    res.status(200).json({
+      name: 'BNB Business Network Bangladesh',
+      version: '3.0.0',
+      status: 'active',
+      auth: 'Email OTP & Direct User Lookup',
+      targetDatabaseId: TARGET_DATABASE_ID,
+      environment: process.env.NODE_ENV || 'production',
+      serverTime: new Date().toISOString()
+    });
   });
 
   // Catch-all for unknown /api/* routes to guarantee JSON response with status 404
