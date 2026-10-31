@@ -567,6 +567,27 @@ export const JenifyPaymentGateway: React.FC<JenifyPaymentGatewayProps> = ({
 
           {/* Embedded Sandboxed ZiniPay Checkout: Cannot trigger intent:// or bnbnetwork:// or leave the app */}
           <div className="relative flex-1 w-full bg-white overflow-hidden">
+            {/* Official BNB Company Logo over the default shop icon spot */}
+            <div
+              className="pointer-events-none select-none z-10 rounded-full bg-white flex items-center justify-center overflow-hidden"
+              style={{
+                position: 'absolute',
+                top: '72px',
+                left: 'calc(50% - 149px)',
+                width: '64px',
+                height: '64px',
+                padding: '3px',
+                boxShadow: '0 2px 8px rgba(15, 23, 42, 0.08)',
+                border: '1px solid #e2e8f0'
+              }}
+            >
+              <img
+                src="/app_icon.png"
+                alt="BNB Business Network Bangladesh"
+                className="w-full h-full rounded-full object-cover"
+              />
+            </div>
+
             <iframe
               ref={iframeRef}
               src={activeInvoice.payment_url}

@@ -1388,7 +1388,7 @@ const getTxt = (key: string, fallback: string) => {
       txListByUid = list;
       updateAllTransactionsState();
     }, (err) => {
-      console.error("Dashboard Transactions subscription error:", err);
+      console.warn("Dashboard Transactions subscription warning:", err);
     });
 
     const unsubTxMember = user.memberId ? onSnapshot(query(collection(db, 'transactions'), where('memberId', '==', user.memberId), limit(60)), (snap) => {
@@ -1459,7 +1459,7 @@ const getTxt = (key: string, fallback: string) => {
       });
       setAllNotices(listNotices);
     }, (err) => {
-      console.error("Dashboard Notices subscription error:", err);
+      console.warn("Dashboard Notices subscription warning:", err);
     });
 
     // 5. Live Ration Card real-time listener
@@ -1471,7 +1471,7 @@ const getTxt = (key: string, fallback: string) => {
         setRationCard(null);
       }
     }, (err) => {
-      console.error("Dashboard Ration Cards subscription error:", err);
+      console.warn("Dashboard Ration Cards subscription warning:", err);
     });
 
     // 9. Live Personal & Global System Notifications real-time listeners (multi-ID matching guarantees 100% receipt)
@@ -1606,7 +1606,7 @@ const getTxt = (key: string, fallback: string) => {
       });
       updateNotificationsState(true);
     }, (err) => {
-      console.error("Personal Notifications query error:", err);
+      console.warn("Personal Notifications query warning:", err);
     });
 
     const unsubNotifyMember = notifyMemberQ ? onSnapshot(notifyMemberQ, (snap) => {
@@ -1616,7 +1616,7 @@ const getTxt = (key: string, fallback: string) => {
       });
       updateNotificationsState(true);
     }, (err) => {
-      console.error("Member Notifications query error:", err);
+      console.warn("Member Notifications query warning:", err);
     }) : () => {};
 
     const unsubNotifyGlobal = onSnapshot(notifyGlobalQ, (snap) => {
@@ -1626,7 +1626,7 @@ const getTxt = (key: string, fallback: string) => {
       });
       updateNotificationsState(true);
     }, (err) => {
-      console.error("Global Notifications query error:", err);
+      console.warn("Global Notifications query warning:", err);
     });
 
     return () => {
@@ -1662,7 +1662,7 @@ const getTxt = (key: string, fallback: string) => {
       });
       setAllUsers(listMems);
     }, (err) => {
-      console.error('Users global subscription error:', err);
+      console.warn('Users global subscription warning:', err);
     });
     return () => unsubUsersGlobal();
   }, [modalType, user?.uid]);
@@ -1698,7 +1698,7 @@ const getTxt = (key: string, fallback: string) => {
         .reduce((sum, t) => sum + (t.amount || 0), 0);
       setQardActiveLoansAmount(Math.max(0, totalDisbursed - totalRepaid));
     }, (err) => {
-      console.error("Dashboard Qard subscription error:", err);
+      console.warn("Dashboard Qard subscription warning:", err);
     });
     return () => unsubQardGlobal();
   }, [modalType, user?.uid]);
@@ -1745,7 +1745,7 @@ const getTxt = (key: string, fallback: string) => {
         setSafeDeals(listSds);
       }
     }, (err) => {
-      console.error("Dashboard Safe Deals subscription error:", err);
+      console.warn("Dashboard Safe Deals subscription warning:", err);
     });
     return () => unsubDeals();
   }, [modalType, user?.uid]);
@@ -1762,7 +1762,7 @@ const getTxt = (key: string, fallback: string) => {
       });
       setAllOffers(listOffers);
     }, (err) => {
-      console.error("Dashboard Offers subscription error:", err);
+      console.warn("Dashboard Offers subscription warning:", err);
     });
     return () => unsubOffers();
   }, [modalType, user?.uid]);
@@ -1783,7 +1783,7 @@ const getTxt = (key: string, fallback: string) => {
         setAllProducts(listProds);
       }
     }, (err) => {
-      console.error("Dashboard Products subscription error:", err);
+      console.warn("Dashboard Products subscription warning:", err);
       setAllProducts(defaultProducts);
     });
     return () => unsubProducts();

@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, signInAnonymously } from 'firebase/auth';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache, getFirestore, setLogLevel, doc, getDocFromServer, enableNetwork } from 'firebase/firestore';
+import { initializeFirestore, memoryLocalCache, getFirestore, setLogLevel, doc, getDocFromServer, enableNetwork } from 'firebase/firestore';
 import 'firebase/firestore';
 import { getMessaging } from 'firebase/messaging';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -24,7 +24,8 @@ if (typeof window !== 'undefined') {
       msg.includes('RST_STREAM') ||
       msg.includes("GrpcConnection RPC 'Listen'") ||
       msg.includes('Code: 13') ||
-      msg.includes('client is offline')
+      msg.includes('client is offline') ||
+      msg.includes('Target ID already exists')
     ) {
       event.preventDefault();
     }
@@ -36,28 +37,20 @@ try {
   firestoreInstance = initializeFirestore(app, {
     experimentalAutoDetectLongPolling: true,
     ignoreUndefinedProperties: true,
-    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+    localCache: memoryLocalCache()
   }, TARGET_DATABASE_ID);
-} catch (e0) {
+} catch (e1) {
   try {
-    firestoreInstance = initializeFirestore(app, {
-      experimentalAutoDetectLongPolling: true,
-      ignoreUndefinedProperties: true,
-      localCache: memoryLocalCache()
-    }, TARGET_DATABASE_ID);
-  } catch (e1) {
+    firestoreInstance = getFirestore(app, TARGET_DATABASE_ID);
+  } catch (e2) {
     try {
-      firestoreInstance = getFirestore(app, TARGET_DATABASE_ID);
-    } catch (e2) {
-      try {
-        firestoreInstance = initializeFirestore(app, {
-          experimentalAutoDetectLongPolling: true,
-          ignoreUndefinedProperties: true,
-          localCache: memoryLocalCache()
-        });
-      } catch (e3) {
-        firestoreInstance = getFirestore(app);
-      }
+      firestoreInstance = initializeFirestore(app, {
+        experimentalAutoDetectLongPolling: true,
+        ignoreUndefinedProperties: true,
+        localCache: memoryLocalCache()
+      });
+    } catch (e3) {
+      firestoreInstance = getFirestore(app);
     }
   }
 }
