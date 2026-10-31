@@ -2262,10 +2262,10 @@ BNB Business Co-operative Welfare Fund
 
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans relative pt-[max(10px,env(safe-area-inset-top))]">
+    <div className="min-h-screen bg-[#0b6623] text-slate-800 flex flex-col font-sans relative">
       
       {/* Green Top Header Section matching Home Dashboard */}
-      <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-3.5 sm:pt-4.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-20 space-y-2.5">
+      <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-2.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-20 space-y-2.5">
         <div className="max-w-2xl mx-auto flex items-center justify-between gap-1">
           {/* Left Group: Back button + Section Name */}
           <div className="flex items-center gap-1.5 shrink-0">
@@ -2338,7 +2338,8 @@ BNB Business Co-operative Welfare Fund
 
 
       {/* Main Container */}
-      <main className="flex-1 w-full max-w-2xl mx-auto p-4 md:p-6 pb-24 h-full overflow-y-auto">
+      <main className="flex-1 w-full bg-slate-50">
+        <div className="max-w-2xl mx-auto p-4 md:p-6 pb-24">
         
         {/* Alerts messages banner */}
         {successMsg && (
@@ -4628,7 +4629,6 @@ BNB Business Co-operative Welfare Fund
             </motion.div>
           );
         })()}
-      </main>
 
       {/* ==================== PAY FOR OTHER MEMBER LOAN MODAL ==================== */}
       <AnimatePresence>
@@ -6173,7 +6173,8 @@ BNB Business Co-operative Welfare Fund
           </motion.div>
         )}
       </AnimatePresence>
-
+        </div>
+      </main>
     </div>
   );
 });

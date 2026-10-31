@@ -244,7 +244,7 @@ export default function BNBEducationCenter({ user, onBack, appConfig }: BNBEduca
     <div className="w-full min-h-screen bg-[#f3f4f6] pb-24 font-sans select-none relative" id="bnb-education-center-root">
       
       {/* Top Header with Dark Green exact replica */}
-      <div className="bg-[#0b543c] px-4 pt-3 pb-4 text-white shadow-md relative">
+      <div className="bg-[#0b543c] px-4 pt-[max(12px,env(safe-area-inset-top))] pb-4 text-white shadow-md relative">
         <div className="flex items-center justify-between max-w-4xl mx-auto">
           <div className="flex items-center gap-3">
             <button 

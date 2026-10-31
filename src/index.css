@@ -27,9 +27,18 @@
 }
 
 /* Custom supportive styles for scrollbars and active selections */
+html {
+  background-color: #0b6623 !important;
+}
+
 body {
   font-family: var(--font-sans);
-  background-color: #f8fafc;
+  background-color: #0b6623 !important;
+}
+
+#root {
+  background-color: #0b6623 !important;
+  min-height: 100vh;
 }
 
 /* Hide scrollbar for Chrome, Safari and Opera */
@@ -150,5 +159,3 @@ body {
 .animate-bnb-blink {
   animation: bnb-blink 1.2s infinite;
 }
-
-

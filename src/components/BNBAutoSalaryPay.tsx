@@ -616,7 +616,7 @@ export default function BNBAutoSalaryPay({ user, onBack, syncLiveProfile, appCon
     <div className="w-full min-h-screen bg-[#f3f4f6] pb-24 font-sans select-none relative" id="bnb-salary-pay-root">
       
       {/* Dynamic Upper Top Green Header matching Home Dashboard */}
-      <div className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] px-4 pt-3.5 sm:pt-4.5 pb-2.5 text-white rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-20 space-y-2.5">
+      <div className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] px-4 pt-[max(12px,env(safe-area-inset-top))] pb-2.5 text-white rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-20 space-y-2.5">
         <div className="flex items-center justify-between max-w-4xl mx-auto">
           <button 
             onClick={onBack}

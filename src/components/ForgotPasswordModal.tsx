@@ -3,6 +3,7 @@ import { User, AppConfig } from '../types';
 import { db } from '../lib/firebase';
 import { doc, updateDoc, collection, addDoc } from 'firebase/firestore';
 import { sendEmailOtpDirect } from '../lib/emailOtpService';
+import { apiUrl } from '../config/api';
 import { convertBengaliToEnglishDigits } from '../lib/memberUtils';
 import { BNBLogo } from './BNBLogo';
 import { 
@@ -39,9 +40,12 @@ export default function ForgotPasswordModal({
   onLoginSuccess,
   locateUser,
   appConfig,
-  darkMode,
-  appLanguage = 'en'
+  darkMode = false,
+  appLanguage = 'bn'
 }: ForgotPasswordModalProps) {
+  const isBn = appLanguage === 'bn';
+  const isDark = Boolean(darkMode);
+
   // Step: 1 = Enter Email, 2 = Verify OTP, 3 = Set New Security PIN, 4 = Complete Success
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
 
@@ -104,17 +108,25 @@ export default function ForgotPasswordModal({
     setError('');
     const raw = inputVal.trim();
     if (!raw) {
-      setError('Please enter your registered email address.');
+      setError(isBn ? 'অনুগ্রহ করে আপনার নিবন্ধিত ইমেইল অ্যাড্রেস প্রদান করুন।' : 'Please enter your registered email address.');
       return;
     }
 
     if (raw.toUpperCase().includes('BNB') || (!raw.includes('@') && /^\d+$/.test(raw))) {
-      setError('Resetting PIN using BNB member code or account number is strictly forbidden. Please enter your registered email.');
+      setError(
+        isBn
+          ? 'BNB কোড বা অ্যাকাউন্ট নম্বর দিয়ে পিন রিসেট করা সম্পূর্ণ নিষিদ্ধ। অনুগ্রহ করে আপনার নিবন্ধিত ইমেইল দিন।'
+          : 'Resetting PIN using BNB member code or account number is strictly forbidden. Please enter your registered email.'
+      );
       return;
     }
 
     if (!raw.includes('@')) {
-      setError('Please enter a valid registered email address (e.g. name@gmail.com).');
+      setError(
+        isBn
+          ? 'অনুগ্রহ করে সঠিক নিবন্ধিত ইমেইল অ্যাড্রেস দিন (যেমন: name@gmail.com)।'
+          : 'Please enter a valid registered email address (e.g. name@gmail.com).'
+      );
       return;
     }
 
@@ -123,7 +135,11 @@ export default function ForgotPasswordModal({
     try {
       const user = await locateUser(raw);
       if (!user) {
-        setError('No account found with this email. Please provide your registered email address.');
+        setError(
+          isBn
+            ? 'এই ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি। আপনার নিবন্ধিত ইমেইল দিয়ে চেষ্টা করুন।'
+            : 'No account found with this email. Please provide your registered email address.'
+        );
         setLoading(false);
         return;
       }
@@ -137,7 +153,11 @@ export default function ForgotPasswordModal({
       }
 
       if (!userEmail) {
-        setError('No email address is linked to this account. Please contact helpline or administrator for assistance.');
+        setError(
+          isBn
+            ? 'এই অ্যাকাউন্টের সাথে কোনো ইমেইল যুক্ত নেই। সহায়তার জন্য হেল্পলাইনে যোগাযোগ করুন।'
+            : 'No email address is linked to this account. Please contact helpline or administrator for assistance.'
+        );
         setLoading(false);
         return;
       }
@@ -153,7 +173,7 @@ export default function ForgotPasswordModal({
       sendEmailOtpDirect({
         email: userEmail,
         otp: code,
-        userName: user.name || 'Respected Member',
+        userName: user.name || (isBn ? 'সম্মানিত সদস্য' : 'Respected Member'),
         phone: user.phone || '',
         memberId: user.memberId || raw,
         userId: user.uid,
@@ -162,10 +182,14 @@ export default function ForgotPasswordModal({
 
       setStep(2);
       setCountdown(60);
-      setSuccessMsg(`A 6-digit OTP code has been sent to your email: ${maskEmailAddress(userEmail)}`);
+      setSuccessMsg(
+        isBn
+          ? `আপনার ইমেইলে ৬ সংখ্যার ওটিপি কোড পাঠানো হয়েছে: ${maskEmailAddress(userEmail)}`
+          : `A 6-digit OTP code has been sent to your email: ${maskEmailAddress(userEmail)}`
+      );
     } catch (err: any) {
       console.error('[Forgot PIN Error]:', err);
-      setError('Failed to send OTP code. Please try again.');
+      setError(isBn ? 'ওটিপি পাঠাতে সমস্যা হয়েছে। পুনরায় চেষ্টা করুন।' : 'Failed to send OTP code. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -178,7 +202,7 @@ export default function ForgotPasswordModal({
     const cleanOtp = convertBengaliToEnglishDigits(otpCode).trim();
 
     if (cleanOtp.length !== 6) {
-      setError('Please enter the 6-digit OTP code.');
+      setError(isBn ? 'অনুগ্রহ করে ৬ সংখ্যার ওটিপি কোড দিন।' : 'Please enter the 6-digit OTP code.');
       return;
     }
 
@@ -195,7 +219,7 @@ export default function ForgotPasswordModal({
       // 2. Authoritative server-side verification check
       if (!isVerified) {
         try {
-          const resp = await fetch('/api/verify-otp', {
+          const resp = await fetch(apiUrl('/api/verify-otp'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ identifier: resolvedEmail, otp: cleanOtp })
@@ -212,13 +236,21 @@ export default function ForgotPasswordModal({
       if (isVerified) {
         setStep(3);
         setError('');
-        setSuccessMsg('OTP verified successfully! Now please set your new security PIN.');
+        setSuccessMsg(
+          isBn
+            ? 'ওটিপি যাচাই সফল হয়েছে! এখন আপনার নতুন সিকিউরিটি পিন সেট করুন।'
+            : 'OTP verified successfully! Now please set your new security PIN.'
+        );
       } else {
-        setError('Invalid OTP code! Please check your email inbox and enter the correct 6-digit code.');
+        setError(
+          isBn
+            ? 'ভুল ওটিপি কোড! আপনার ইমেইল ইনবক্স চেক করে সঠিক ৬ সংখ্যার কোডটি দিন।'
+            : 'Invalid OTP code! Please check your email inbox and enter the correct 6-digit code.'
+        );
       }
     } catch (err) {
       console.error('[Verify OTP Error]:', err);
-      setError('Failed to verify OTP. Please try again.');
+      setError(isBn ? 'ওটিপি যাচাই করতে ব্যর্থ হয়েছে। পুনরায় চেষ্টা করুন।' : 'Failed to verify OTP. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -237,7 +269,7 @@ export default function ForgotPasswordModal({
       await sendEmailOtpDirect({
         email: resolvedEmail,
         otp: code,
-        userName: targetUser?.name || 'Respected Member',
+        userName: targetUser?.name || (isBn ? 'সম্মানিত সদস্য' : 'Respected Member'),
         phone: targetUser?.phone || '',
         memberId: targetUser?.memberId || '',
         userId: targetUser?.uid,
@@ -245,9 +277,13 @@ export default function ForgotPasswordModal({
       });
 
       setCountdown(60);
-      setSuccessMsg(`A new OTP code has been sent to: ${maskedEmail}`);
+      setSuccessMsg(
+        isBn
+          ? `নতুন ওটিপি কোড পাঠানো হয়েছে: ${maskedEmail}`
+          : `A new OTP code has been sent to: ${maskedEmail}`
+      );
     } catch (e) {
-      setError('Failed to resend OTP code. Please try again.');
+      setError(isBn ? 'পুনরায় ওটিপি পাঠাতে ব্যর্থ হয়েছে।' : 'Failed to resend OTP code. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -262,17 +298,17 @@ export default function ForgotPasswordModal({
     const cleanConfirm = convertBengaliToEnglishDigits(confirmPin).replace(/\D/g, '').trim();
 
     if (cleanPin.length < 4 || cleanPin.length > 6) {
-      setError('Security PIN must be 4 to 6 numeric digits.');
+      setError(isBn ? 'সিকিউরিটি পিন ৪ থেকে ৬ সংখ্যার হতে হবে।' : 'Security PIN must be 4 to 6 numeric digits.');
       return;
     }
 
     if (cleanPin !== cleanConfirm) {
-      setError('New PIN and Confirm PIN do not match!');
+      setError(isBn ? 'নতুন পিন এবং কনফার্ম পিন মিলছে না!' : 'New PIN and Confirm PIN do not match!');
       return;
     }
 
     if (!targetUser?.uid) {
-      setError('User information not found. Please start from Step 1.');
+      setError(isBn ? 'ইউজারের তথ্য পাওয়া যায়নি। পুনরায় চেষ্টা করুন।' : 'User information not found. Please start from Step 1.');
       return;
     }
 
@@ -293,8 +329,10 @@ export default function ForgotPasswordModal({
       // In-app activity notification
       addDoc(collection(db, 'user_notifications'), {
         userId: targetUser.uid,
-        title: '🔑 Security PIN Successfully Changed',
-        body: 'Your account security PIN has been updated and you have been logged in automatically.',
+        title: isBn ? '🔑 সিকিউরিটি পিন সফলভাবে পরিবর্তন হয়েছে' : '🔑 Security PIN Successfully Changed',
+        body: isBn
+          ? 'আপনার অ্যাকাউন্টের সিকিউরিটি পিন আপডেট করা হয়েছে এবং স্বয়ংক্রিয়ভাবে লগইন করা হয়েছে।'
+          : 'Your account security PIN has been updated and you have been logged in automatically.',
         category: 'security',
         createdAt: new Date().toISOString()
       }).catch(() => {});
@@ -308,7 +346,11 @@ export default function ForgotPasswordModal({
       };
 
       setStep(4);
-      setSuccessMsg('Security PIN set successfully! Logging into your account automatically...');
+      setSuccessMsg(
+        isBn
+          ? 'সিকিউরিটি পিন সফলভাবে সেট হয়েছে! আপনার অ্যাকাউন্টে প্রবেশ করা হচ্ছে...'
+          : 'Security PIN set successfully! Logging into your account automatically...'
+      );
 
       // Auto-login into software immediately
       setTimeout(() => {
@@ -327,16 +369,26 @@ export default function ForgotPasswordModal({
       }, 1200);
     } catch (err: any) {
       console.error('[Save PIN Error]:', err);
-      setError('Failed to update PIN. Please try again.');
+      setError(isBn ? 'পিন আপডেট করতে ব্যর্থ হয়েছে। পুনরায় চেষ্টা করুন।' : 'Failed to update PIN. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#F4F6F8] overflow-y-auto min-h-screen flex flex-col font-sans select-none">
+    <div
+      className={`fixed inset-0 z-50 overflow-y-auto min-h-screen flex flex-col font-sans select-none transition-colors ${
+        isDark ? 'bg-[#0B1120] text-slate-100' : 'bg-[#F4F6F8] text-slate-900'
+      }`}
+    >
       {/* Top BNB Branding Curved Header */}
-      <div className="bg-gradient-to-b from-[#064e3b] via-[#047857] to-[#0B532C] text-white pt-5 pb-12 px-4 relative overflow-hidden shadow-lg shrink-0">
+      <div
+        className={`bg-gradient-to-b ${
+          isDark
+            ? 'from-[#052e1a] via-[#074226] to-[#084d2b]'
+            : 'from-[#064e3b] via-[#047857] to-[#0B532C]'
+        } text-white pt-4 pb-12 px-4 relative overflow-hidden shadow-lg shrink-0`}
+      >
         {/* Subtle decorative background curves */}
         <div className="absolute inset-0 opacity-10 pointer-events-none">
           <svg className="w-full h-full object-cover" viewBox="0 0 100 100" preserveAspectRatio="none">
@@ -353,12 +405,12 @@ export default function ForgotPasswordModal({
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/15 hover:bg-white/25 active:scale-95 text-white text-xs font-black backdrop-blur-xs transition cursor-pointer border border-white/20 shadow-xs"
             >
               <ArrowLeft className="w-4 h-4" />
-              <span>Back to Login</span>
+              <span>{isBn ? 'লগইনে ফিরে যান' : 'Back to Login'}</span>
             </button>
 
             <div className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-emerald-950/40 text-emerald-200 border border-emerald-400/30 text-[11px] font-bold">
               <Shield className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Secure Recovery</span>
+              <span>{isBn ? 'নিরাপদ রিকভারি' : 'Secure Recovery'}</span>
             </div>
           </div>
 
@@ -395,7 +447,7 @@ export default function ForgotPasswordModal({
             <div className="mt-3 inline-flex items-center gap-2 px-4 py-1 rounded-full border-2 border-emerald-400/70 bg-black/40 backdrop-blur-xs shadow-md">
               <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse"></span>
               <span className="text-white text-xs font-black tracking-wide">
-                Security PIN Recovery
+                {isBn ? 'সিকিউরিটি পিন পুনরুদ্ধার' : 'Security PIN Recovery'}
               </span>
             </div>
           </div>
@@ -403,8 +455,11 @@ export default function ForgotPasswordModal({
 
         {/* Curved Wave Bottom */}
         <div className="absolute bottom-0 left-0 right-0 w-full overflow-hidden leading-none z-10 pointer-events-none">
-          <svg className="relative block w-full h-6 sm:h-8 text-[#F4F6F8]" viewBox="0 0 1200 120" preserveAspectRatio="none">
-            <path d="M0,0 C300,90 600,-20 900,60 C1050,100 1150,40 1200,60 L1200,120 L0,120 Z" fill="#F4F6F8" />
+          <svg className="relative block w-full h-6 sm:h-8" viewBox="0 0 1200 120" preserveAspectRatio="none">
+            <path
+              d="M0,0 C300,90 600,-20 900,60 C1050,100 1150,40 1200,60 L1200,120 L0,120 Z"
+              fill={isDark ? '#0B1120' : '#F4F6F8'}
+            />
           </svg>
         </div>
       </div>
@@ -412,12 +467,16 @@ export default function ForgotPasswordModal({
       {/* Main Full-Screen Body */}
       <div className="flex-1 w-full max-w-md mx-auto px-4 -mt-3 sm:-mt-4 pb-10 z-20 flex flex-col">
         {/* Step Progression Indicators */}
-        <div className="bg-white rounded-2xl p-3 shadow-md border border-slate-100 mb-4 flex items-center justify-between">
+        <div
+          className={`rounded-2xl p-3 shadow-md border mb-4 flex items-center justify-between ${
+            isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'
+          }`}
+        >
           {[
-            { num: 1, label: 'Email' },
-            { num: 2, label: 'OTP Code' },
-            { num: 3, label: 'New PIN' },
-            { num: 4, label: 'Complete' }
+            { num: 1, label: isBn ? 'ইমেইল' : 'Email' },
+            { num: 2, label: isBn ? 'ওটিপি কোড' : 'OTP Code' },
+            { num: 3, label: isBn ? 'নতুন পিন' : 'New PIN' },
+            { num: 4, label: isBn ? 'সম্পন্ন' : 'Complete' }
           ].map((item, idx) => (
             <React.Fragment key={item.num}>
               <div className="flex flex-col items-center flex-1">
@@ -426,7 +485,9 @@ export default function ForgotPasswordModal({
                     step > item.num
                       ? 'bg-emerald-600 text-white shadow-xs'
                       : step === item.num
-                      ? 'bg-[#0B532C] text-white ring-4 ring-emerald-100 shadow-md scale-105'
+                      ? 'bg-[#0B532C] text-white ring-4 ring-emerald-500/20 shadow-md scale-105'
+                      : isDark
+                      ? 'bg-slate-800 text-slate-500'
                       : 'bg-slate-100 text-slate-400'
                   }`}
                 >
@@ -434,7 +495,11 @@ export default function ForgotPasswordModal({
                 </div>
                 <span
                   className={`text-[10px] mt-1 font-bold ${
-                    step === item.num ? 'text-emerald-900 font-extrabold' : 'text-slate-400'
+                    step === item.num
+                      ? isDark
+                        ? 'text-emerald-400 font-extrabold'
+                        : 'text-emerald-900 font-extrabold'
+                      : 'text-slate-400'
                   }`}
                 >
                   {item.label}
@@ -443,7 +508,7 @@ export default function ForgotPasswordModal({
               {idx < 3 && (
                 <div
                   className={`h-0.5 flex-1 mx-1 rounded-full transition-all ${
-                    step > idx + 1 ? 'bg-emerald-500' : 'bg-slate-200'
+                    step > idx + 1 ? 'bg-emerald-500' : isDark ? 'bg-slate-800' : 'bg-slate-200'
                   }`}
                 />
               )}
@@ -452,16 +517,24 @@ export default function ForgotPasswordModal({
         </div>
 
         {/* Form Container Card */}
-        <div className="bg-white rounded-3xl p-5 sm:p-7 shadow-xl border border-slate-100 flex-1 flex flex-col justify-between">
+        <div
+          className={`rounded-3xl p-5 sm:p-7 shadow-xl border flex-1 flex flex-col justify-between ${
+            isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'
+          }`}
+        >
           <div>
             {/* Error Message */}
             {error && (
               <motion.div
                 initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="mb-4 p-3.5 bg-red-50 border border-red-200 rounded-2xl text-red-700 text-xs font-bold flex items-start gap-2.5 shadow-2xs"
+                className={`mb-4 p-3.5 border rounded-2xl text-xs font-bold flex items-start gap-2.5 shadow-2xs ${
+                  isDark
+                    ? 'bg-red-950/60 border-red-800/80 text-red-200'
+                    : 'bg-red-50 border-red-200 text-red-700'
+                }`}
               >
-                <AlertCircle className="w-4 h-4 shrink-0 text-red-600 mt-0.5" />
+                <AlertCircle className={`w-4 h-4 shrink-0 mt-0.5 ${isDark ? 'text-red-400' : 'text-red-600'}`} />
                 <span className="leading-relaxed">{error}</span>
               </motion.div>
             )}
@@ -471,9 +544,13 @@ export default function ForgotPasswordModal({
               <motion.div
                 initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="mb-4 p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs font-bold flex items-start gap-2.5 shadow-2xs"
+                className={`mb-4 p-3.5 border rounded-2xl text-xs font-bold flex items-start gap-2.5 shadow-2xs ${
+                  isDark
+                    ? 'bg-emerald-950/60 border-emerald-800/80 text-emerald-200'
+                    : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                }`}
               >
-                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 mt-0.5" />
+                <CheckCircle2 className={`w-4 h-4 shrink-0 mt-0.5 ${isDark ? 'text-emerald-400' : 'text-emerald-600'}`} />
                 <span className="leading-relaxed">{successMsg}</span>
               </motion.div>
             )}
@@ -489,22 +566,24 @@ export default function ForgotPasswordModal({
                   onSubmit={handleRequestOtp}
                   className="space-y-4 pt-1"
                 >
-                  <div className="border-b border-slate-100 pb-3">
-                    <h2 className="text-base font-black text-slate-800 flex items-center gap-2">
-                      <KeyRound className="w-4 h-4 text-emerald-700" />
-                      <span>Step 1: Enter Registered Email</span>
+                  <div className={`border-b pb-3 ${isDark ? 'border-slate-800' : 'border-slate-100'}`}>
+                    <h2 className={`text-base font-black flex items-center gap-2 ${isDark ? 'text-white' : 'text-slate-800'}`}>
+                      <KeyRound className={`w-4 h-4 ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`} />
+                      <span>{isBn ? 'ধাপ ১: নিবন্ধিত ইমেইল দিন' : 'Step 1: Enter Registered Email'}</span>
                     </h2>
-                    <p className="text-xs text-slate-500 font-medium mt-0.5">
-                      Verify your account security to reset your Security PIN
+                    <p className={`text-xs font-medium mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                      {isBn
+                        ? 'আপনার সিকিউরিটি পিন রিসেট করতে নিবন্ধিত ইমেইল যাচাই করুন'
+                        : 'Verify your account security to reset your Security PIN'}
                     </p>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-extrabold text-slate-800 mb-1.5 px-1">
-                      Registered Email Address *
+                    <label className={`block text-xs font-extrabold mb-1.5 px-1 ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
+                      {isBn ? 'নিবন্ধিত ইমেইল অ্যাড্রেস *' : 'Registered Email Address *'}
                     </label>
                     <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-emerald-700">
+                      <div className={`absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>
                         <Mail className="w-5 h-5" />
                       </div>
                       <input
@@ -512,17 +591,27 @@ export default function ForgotPasswordModal({
                         required
                         value={inputVal}
                         onChange={(e) => setInputVal(e.target.value)}
-                        placeholder="Enter your email (e.g. name@gmail.com)"
-                        className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border-2 border-slate-200 rounded-2xl text-slate-900 text-xs sm:text-sm font-bold focus:bg-white focus:outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-500/10 shadow-2xs transition"
+                        placeholder={isBn ? 'আপনার ইমেইল দিন (যেমন: name@gmail.com)' : 'Enter your email (e.g. name@gmail.com)'}
+                        className={`w-full pl-12 pr-4 py-3.5 border-2 rounded-2xl text-xs sm:text-sm font-bold focus:outline-none focus:ring-4 focus:ring-emerald-500/10 shadow-2xs transition ${
+                          isDark
+                            ? 'bg-slate-950 border-slate-700 text-white placeholder-slate-500 focus:border-emerald-500'
+                            : 'bg-slate-50 border-slate-200 text-slate-900 focus:bg-white focus:border-emerald-600'
+                        }`}
                       />
                     </div>
-                    <div className="p-3 bg-amber-50/80 border border-amber-200/70 rounded-xl mt-3 space-y-1">
-                      <p className="text-[11px] text-amber-800 font-bold flex items-center gap-1.5">
+                    <div
+                      className={`p-3 border rounded-xl mt-3 space-y-1 ${
+                        isDark ? 'bg-amber-950/50 border-amber-800/70' : 'bg-amber-50/80 border-amber-200/70'
+                      }`}
+                    >
+                      <p className={`text-[11px] font-bold flex items-center gap-1.5 ${isDark ? 'text-amber-300' : 'text-amber-800'}`}>
                         <span>⚠️</span>
-                        <span>Notice: Only Registered Email Allowed</span>
+                        <span>{isBn ? 'সতর্কতা: শুধুমাত্র নিবন্ধিত ইমেইল প্রযোজ্য' : 'Notice: Only Registered Email Allowed'}</span>
                       </p>
-                      <p className="text-[11px] text-amber-700 font-medium">
-                        Resetting PIN using BNB member code or account number is strictly prohibited.
+                      <p className={`text-[11px] font-medium ${isDark ? 'text-amber-200/90' : 'text-amber-700'}`}>
+                        {isBn
+                          ? 'BNB মেম্বার কোড বা অ্যাকাউন্ট নম্বর দিয়ে পিন রিসেট করা সম্পূর্ণ নিষিদ্ধ।'
+                          : 'Resetting PIN using BNB member code or account number is strictly prohibited.'}
                       </p>
                     </div>
                   </div>
@@ -536,7 +625,7 @@ export default function ForgotPasswordModal({
                       <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                     ) : (
                       <>
-                        <span>Send OTP Code to Email</span>
+                        <span>{isBn ? 'ইমেইলে ওটিপি কোড পাঠান' : 'Send OTP Code to Email'}</span>
                         <ArrowRight className="w-4 h-4 stroke-[2.5]" />
                       </>
                     )}
@@ -554,28 +643,33 @@ export default function ForgotPasswordModal({
                   onSubmit={handleVerifyOtp}
                   className="space-y-4 pt-1"
                 >
-                  <div className="border-b border-slate-100 pb-3">
-                    <h2 className="text-base font-black text-slate-800 flex items-center gap-2">
-                      <ShieldCheck className="w-4 h-4 text-emerald-700" />
-                      <span>Step 2: Verify OTP Code</span>
+                  <div className={`border-b pb-3 ${isDark ? 'border-slate-800' : 'border-slate-100'}`}>
+                    <h2 className={`text-base font-black flex items-center gap-2 ${isDark ? 'text-white' : 'text-slate-800'}`}>
+                      <ShieldCheck className={`w-4 h-4 ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`} />
+                      <span>{isBn ? 'ধাপ ২: ওটিপি কোড যাচাই করুন' : 'Step 2: Verify OTP Code'}</span>
                     </h2>
-                    <div className="text-xs text-slate-500 font-medium mt-1">
-                      Verification code sent to: <span className="font-mono font-bold text-emerald-800">{maskedEmail}</span>
+                    <div className={`text-xs font-medium mt-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                      {isBn ? 'ভেরিফিকেশন কোড পাঠানো হয়েছে:' : 'Verification code sent to:'}{' '}
+                      <span className={`font-mono font-bold ${isDark ? 'text-emerald-400' : 'text-emerald-800'}`}>{maskedEmail}</span>
                     </div>
                   </div>
 
                   <div>
                     <div className="flex items-center justify-between mb-1.5 px-1">
-                      <label className="text-xs font-extrabold text-slate-800">
-                        6-Digit OTP Code *
+                      <label className={`text-xs font-extrabold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
+                        {isBn ? '৬ সংখ্যার ওটিপি কোড *' : '6-Digit OTP Code *'}
                       </label>
                       <button
                         type="button"
                         onClick={handlePasteOtp}
-                        className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 inline-flex items-center gap-1 cursor-pointer bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/60"
+                        className={`text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer px-2 py-0.5 rounded-md border ${
+                          isDark
+                            ? 'text-emerald-300 bg-emerald-950/60 border-emerald-800'
+                            : 'text-emerald-700 hover:text-emerald-900 bg-emerald-50 border-emerald-200/60'
+                        }`}
                       >
                         <ClipboardPaste className="w-3 h-3" />
-                        <span>Paste</span>
+                        <span>{isBn ? 'পেস্ট' : 'Paste'}</span>
                       </button>
                     </div>
 
@@ -588,7 +682,6 @@ export default function ForgotPasswordModal({
                         const val = convertBengaliToEnglishDigits(e.target.value).replace(/\D/g, '').slice(0, 6);
                         setOtpCode(val);
                         if (val.length === 6) {
-                          // Auto check upon typing 6 digits
                           setTimeout(() => {
                             const btn = document.getElementById('btn-verify-forgot-otp');
                             if (btn) btn.click();
@@ -596,12 +689,12 @@ export default function ForgotPasswordModal({
                         }
                       }}
                       placeholder="• • • • • •"
-                      className="w-full py-3.5 px-4 bg-slate-50 border-2 border-slate-200 rounded-2xl text-slate-900 text-center font-mono text-2xl font-black tracking-widest focus:bg-white focus:outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-500/10 shadow-2xs transition"
+                      className={`w-full py-3.5 px-4 border-2 rounded-2xl text-center font-mono text-2xl font-black tracking-widest focus:outline-none focus:ring-4 focus:ring-emerald-500/10 shadow-2xs transition ${
+                        isDark
+                          ? 'bg-slate-950 border-slate-700 text-white placeholder-slate-600 focus:border-emerald-500'
+                          : 'bg-slate-50 border-slate-200 text-slate-900 focus:bg-white focus:border-emerald-600'
+                      }`}
                     />
-
-                    <p className="text-[11px] text-emerald-800 text-center mt-2 font-bold bg-emerald-50/70 p-2 rounded-xl border border-emerald-200/50">
-                      ✅ Official verified OTP code has been sent directly to your email inbox.
-                    </p>
                   </div>
 
                   <button
@@ -614,7 +707,7 @@ export default function ForgotPasswordModal({
                       <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                     ) : (
                       <>
-                        <span>Verify OTP & Proceed</span>
+                        <span>{isBn ? 'ওটিপি যাচাই করুন' : 'Verify OTP & Proceed'}</span>
                         <ArrowRight className="w-4 h-4 stroke-[2.5]" />
                       </>
                     )}
@@ -622,17 +715,30 @@ export default function ForgotPasswordModal({
 
                   <div className="text-center pt-2">
                     {countdown > 0 ? (
-                      <span className="text-xs text-slate-500 font-bold bg-slate-50 px-3 py-1.5 rounded-full border border-slate-200 inline-block">
-                        Resend code in: <span className="text-emerald-700 font-mono font-extrabold">{countdown}s</span>
+                      <span
+                        className={`text-xs font-bold px-3 py-1.5 rounded-full border inline-block ${
+                          isDark
+                            ? 'text-slate-400 bg-slate-950 border-slate-800'
+                            : 'text-slate-500 bg-slate-50 border-slate-200'
+                        }`}
+                      >
+                        {isBn ? 'পুনরায় পাঠান:' : 'Resend code in:'}{' '}
+                        <span className={`font-mono font-extrabold ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>
+                          {countdown}s
+                        </span>
                       </span>
                     ) : (
                       <button
                         type="button"
                         onClick={handleResendOtp}
-                        className="text-xs text-emerald-700 hover:text-emerald-900 font-extrabold flex items-center justify-center gap-1.5 mx-auto transition cursor-pointer bg-emerald-50 px-3.5 py-1.5 rounded-full border border-emerald-200"
+                        className={`text-xs font-extrabold flex items-center justify-center gap-1.5 mx-auto transition cursor-pointer px-3.5 py-1.5 rounded-full border ${
+                          isDark
+                            ? 'text-emerald-300 bg-emerald-950/60 border-emerald-800'
+                            : 'text-emerald-700 hover:text-emerald-900 bg-emerald-50 border-emerald-200'
+                        }`}
                       >
                         <RotateCw className="w-3.5 h-3.5" />
-                        <span>Resend OTP Code</span>
+                        <span>{isBn ? 'পুনরায় ওটিপি পাঠান' : 'Resend OTP Code'}</span>
                       </button>
                     )}
                   </div>
@@ -649,22 +755,22 @@ export default function ForgotPasswordModal({
                   onSubmit={handleSavePinAndLogin}
                   className="space-y-4 pt-1"
                 >
-                  <div className="border-b border-slate-100 pb-3">
-                    <h2 className="text-base font-black text-slate-800 flex items-center gap-2">
-                      <Lock className="w-4 h-4 text-emerald-700" />
-                      <span>Step 3: Set New Security PIN</span>
+                  <div className={`border-b pb-3 ${isDark ? 'border-slate-800' : 'border-slate-100'}`}>
+                    <h2 className={`text-base font-black flex items-center gap-2 ${isDark ? 'text-white' : 'text-slate-800'}`}>
+                      <Lock className={`w-4 h-4 ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`} />
+                      <span>{isBn ? 'ধাপ ৩: নতুন সিকিউরিটি পিন দিন' : 'Step 3: Set New Security PIN'}</span>
                     </h2>
-                    <p className="text-xs text-slate-500 font-medium mt-0.5">
-                      Enter a 4 to 6 digit numeric PIN for your account
+                    <p className={`text-xs font-medium mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                      {isBn ? 'আপনার অ্যাকাউন্টের জন্য ৪ থেকে ৬ সংখ্যার পিন দিন' : 'Enter a 4 to 6 digit numeric PIN for your account'}
                     </p>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-extrabold text-slate-800 mb-1 px-1">
-                      New Security PIN (4-6 Digits) *
+                    <label className={`block text-xs font-extrabold mb-1 px-1 ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
+                      {isBn ? 'নতুন সিকিউরিটি পিন (৪-৬ সংখ্যা) *' : 'New Security PIN (4-6 Digits) *'}
                     </label>
                     <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-emerald-700">
+                      <div className={`absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>
                         <Lock className="w-4 h-4" />
                       </div>
                       <input
@@ -677,8 +783,12 @@ export default function ForgotPasswordModal({
                           const val = convertBengaliToEnglishDigits(e.target.value).replace(/\D/g, '').slice(0, 6);
                           setNewPin(val);
                         }}
-                        placeholder="Enter 4 or 6 digit PIN"
-                        className="w-full pl-11 pr-11 py-3.5 bg-slate-50 border-2 border-slate-200 rounded-2xl text-slate-900 text-xs sm:text-sm font-bold focus:bg-white focus:outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-500/10 shadow-2xs font-mono transition"
+                        placeholder={isBn ? '৪ বা ৬ সংখ্যার পিন দিন' : 'Enter 4 or 6 digit PIN'}
+                        className={`w-full pl-11 pr-11 py-3.5 border-2 rounded-2xl text-xs sm:text-sm font-bold focus:outline-none focus:ring-4 focus:ring-emerald-500/10 shadow-2xs font-mono transition ${
+                          isDark
+                            ? 'bg-slate-950 border-slate-700 text-white placeholder-slate-500 focus:border-emerald-500'
+                            : 'bg-slate-50 border-slate-200 text-slate-900 focus:bg-white focus:border-emerald-600'
+                        }`}
                       />
                       <button
                         type="button"
@@ -691,11 +801,11 @@ export default function ForgotPasswordModal({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-extrabold text-slate-800 mb-1 px-1">
-                      Confirm Security PIN *
+                    <label className={`block text-xs font-extrabold mb-1 px-1 ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
+                      {isBn ? 'পুনরায় সিকিউরিটি পিন দিন *' : 'Confirm Security PIN *'}
                     </label>
                     <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-emerald-700">
+                      <div className={`absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>
                         <Lock className="w-4 h-4" />
                       </div>
                       <input
@@ -708,13 +818,23 @@ export default function ForgotPasswordModal({
                           const val = convertBengaliToEnglishDigits(e.target.value).replace(/\D/g, '').slice(0, 6);
                           setConfirmPin(val);
                         }}
-                        placeholder="Re-enter your new PIN"
-                        className="w-full pl-11 pr-11 py-3.5 bg-slate-50 border-2 border-slate-200 rounded-2xl text-slate-900 text-xs sm:text-sm font-bold focus:bg-white focus:outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-500/10 shadow-2xs font-mono transition"
+                        placeholder={isBn ? 'পুনরায় নতুন পিনটি লিখুন' : 'Re-enter your new PIN'}
+                        className={`w-full pl-11 pr-11 py-3.5 border-2 rounded-2xl text-xs sm:text-sm font-bold focus:outline-none focus:ring-4 focus:ring-emerald-500/10 shadow-2xs font-mono transition ${
+                          isDark
+                            ? 'bg-slate-950 border-slate-700 text-white placeholder-slate-500 focus:border-emerald-500'
+                            : 'bg-slate-50 border-slate-200 text-slate-900 focus:bg-white focus:border-emerald-600'
+                        }`}
                       />
                     </div>
                     {newPin && confirmPin && (
-                      <p className={`text-[11px] font-bold mt-1.5 px-1 ${newPin === confirmPin ? 'text-emerald-700' : 'text-red-600'}`}>
-                        {newPin === confirmPin ? '✓ Security PINs match' : '✗ PINs do not match'}
+                      <p className={`text-[11px] font-bold mt-1.5 px-1 ${newPin === confirmPin ? 'text-emerald-500' : 'text-red-500'}`}>
+                        {newPin === confirmPin
+                          ? isBn
+                            ? '✓ সিকিউরিটি পিন মিলেছে'
+                            : '✓ Security PINs match'
+                          : isBn
+                          ? '✗ পিন মিলছে না'
+                          : '✗ PINs do not match'}
                       </p>
                     )}
                   </div>
@@ -729,7 +849,7 @@ export default function ForgotPasswordModal({
                     ) : (
                       <>
                         <ShieldCheck className="w-4 h-4 stroke-[2.5]" />
-                        <span>Save PIN & Auto Login</span>
+                        <span>{isBn ? 'পিন সেভ করে লগইন করুন' : 'Save PIN & Auto Login'}</span>
                       </>
                     )}
                   </button>
@@ -744,12 +864,14 @@ export default function ForgotPasswordModal({
                   animate={{ opacity: 1, scale: 1 }}
                   className="py-10 text-center space-y-3 my-auto"
                 >
-                  <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto text-emerald-700">
+                  <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto ${isDark ? 'bg-emerald-950 text-emerald-400' : 'bg-emerald-100 text-emerald-700'}`}>
                     <CheckCircle2 className="w-10 h-10 stroke-[2.5] animate-bounce" />
                   </div>
-                  <h4 className="text-lg font-black text-slate-900">Security PIN Reset Successful!</h4>
-                  <p className="text-xs sm:text-sm text-slate-600 font-bold">
-                    Logging into your account automatically...
+                  <h4 className={`text-lg font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                    {isBn ? 'সিকিউরিটি পিন রিসেট সফল!' : 'Security PIN Reset Successful!'}
+                  </h4>
+                  <p className={`text-xs sm:text-sm font-bold ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                    {isBn ? 'স্বয়ংক্রিয়ভাবে আপনার অ্যাকাউন্টে প্রবেশ করা হচ্ছে...' : 'Logging into your account automatically...'}
                   </p>
                   <div className="w-7 h-7 border-3 border-emerald-600 border-t-transparent rounded-full animate-spin mx-auto mt-4" />
                 </motion.div>
@@ -758,14 +880,16 @@ export default function ForgotPasswordModal({
           </div>
 
           {/* Bottom Card Footer */}
-          <div className="pt-6 mt-6 border-t border-slate-100 text-center">
+          <div className={`pt-6 mt-6 border-t text-center ${isDark ? 'border-slate-800' : 'border-slate-100'}`}>
             <button
               type="button"
               onClick={onClose}
-              className="text-xs font-bold text-slate-500 hover:text-emerald-800 transition cursor-pointer inline-flex items-center gap-1.5"
+              className={`text-xs font-bold transition cursor-pointer inline-flex items-center gap-1.5 ${
+                isDark ? 'text-slate-400 hover:text-emerald-400' : 'text-slate-500 hover:text-emerald-800'
+              }`}
             >
               <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Return to Login Screen</span>
+              <span>{isBn ? 'লগইন স্ক্রিনে ফিরে যান' : 'Return to Login Screen'}</span>
             </button>
           </div>
         </div>
@@ -774,7 +898,11 @@ export default function ForgotPasswordModal({
         <div className="mt-4 text-center">
           <p className="text-[11px] text-slate-500 font-medium inline-flex items-center gap-1">
             <HelpCircle className="w-3.5 h-3.5 text-slate-400" />
-            <span>Need assistance? Contact our official support helpline.</span>
+            <span>
+              {isBn
+                ? 'সহায়তা প্রয়োজন? আমাদের অফিশিয়াল সাপোর্ট হেল্পলাইনে যোগাযোগ করুন।'
+                : 'Need assistance? Contact our official support helpline.'}
+            </span>
           </p>
         </div>
       </div>

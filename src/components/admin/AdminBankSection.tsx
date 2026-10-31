@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../../lib/firebase';
 import { SAMITY_MONTHS, SAMITY_YEARS, getUniquePaidMonthsCount, normalizePaidMonthsArray, getEffectiveBalance } from '../../types';
 import { processUserSamitySavingsAutoDeduction, processBulkSamitySavingsAutoDeduction } from '../../lib/samitySavingsEngine';
+import { apiUrl } from '../../config/api';
 console.log("AdminPanel: DB initialized:", !!db);
 import { 
   collection, 
@@ -509,7 +510,7 @@ export function AdminBankSection(props: any) {
     try {
       setTestingZiniPing(true);
       setZiniPingStatus(null);
-      const res = await fetch('/api/payment/zinipay-test');
+      const res = await fetch(apiUrl('/api/payment/zinipay-test'));
       const data = await res.json();
       setZiniPingStatus({
         success: data.success,

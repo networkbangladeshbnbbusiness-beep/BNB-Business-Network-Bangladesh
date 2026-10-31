@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from "react";
 
 interface CleanSplashProps {
   onFinish: () => void;
@@ -10,10 +10,7 @@ export default function CleanSplash({ onFinish }: CleanSplashProps) {
   onFinishRef.current = onFinish;
 
   useEffect(() => {
-    // Prevent double invocation
     let isMounted = true;
-
-    // Display official clean splash with exact logo, then smooth transition
     const timer = setTimeout(() => {
       if (!isMounted) return;
       setFading(true);
@@ -22,7 +19,6 @@ export default function CleanSplash({ onFinish }: CleanSplashProps) {
         onFinishRef.current();
       }, 180);
     }, 1100);
-
     return () => {
       isMounted = false;
       clearTimeout(timer);
@@ -32,16 +28,16 @@ export default function CleanSplash({ onFinish }: CleanSplashProps) {
   return (
     <div
       style={{
-        position: 'fixed',
+        position: "fixed",
         inset: 0,
-        backgroundColor: '#FFFFFF',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+        backgroundColor: "#FFFFFF",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
         zIndex: 999999,
-        transition: 'opacity 0.18s ease-out',
+        transition: "opacity 0.18s ease-out",
         opacity: fading ? 0 : 1,
-        pointerEvents: fading ? 'none' : 'auto',
+        pointerEvents: fading ? "none" : "auto",
       }}
     >
       <img
@@ -49,10 +45,10 @@ export default function CleanSplash({ onFinish }: CleanSplashProps) {
         alt="BNB Official Logo"
         referrerPolicy="no-referrer"
         style={{
-          width: '180px',
-          height: '180px',
-          objectFit: 'contain',
-          userSelect: 'none',
+          width: "180px",
+          height: "180px",
+          objectFit: "contain",
+          userSelect: "none",
         }}
       />
     </div>

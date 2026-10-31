@@ -285,11 +285,31 @@ const {
     ...rest
   } = props;
 
+  // 100% Guaranteed return to dashboard: Close sub-view modal on force return event
+  useEffect(() => {
+    const handleForceReturn = () => {
+      setModalType(null);
+    };
+    window.addEventListener('bnb_force_return_to_dashboard', handleForceReturn);
+    return () => {
+      window.removeEventListener('bnb_force_return_to_dashboard', handleForceReturn);
+    };
+  }, [setModalType]);
+
+  // Handle hardware / gesture / browser back when modalType is active
+  useBackHandler(() => {
+    if (modalType) {
+      setModalType(null);
+      return true;
+    }
+    return false;
+  }, !!modalType, 20);
+
   return (
     <>
               
                 {modalType === 'samity' && (
-                  <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-50 w-full h-full min-h-screen font-sans pt-[max(12px,env(safe-area-inset-top))]">
+                  <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b6623] w-full h-full min-h-screen font-sans pt-0">
                     {liveUser.memberCategory === 'regular' ? (
                       <div className="p-6 text-center mt-20">
                         <p className="text-sm font-bold text-slate-600">দুঃখিত, সাধারণ সদস্যরা এই সেকশনে প্রবেশের অনুমতি নেই।</p>
@@ -515,7 +535,7 @@ const {
                   </div>
                 )}
                 {modalType === 'telecom' && (
-                  <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-50 w-full h-full min-h-screen font-sans pt-[max(12px,env(safe-area-inset-top))]">
+                  <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b6623] w-full h-full min-h-screen font-sans pt-0">
                     <BNBTelecomScreen
                       user={liveUser}
                       allOffers={allOffers}
@@ -530,7 +550,7 @@ const {
                   </div>
                 )}
                 {modalType === 'qard' && (
-                  <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-50 w-full h-full min-h-screen font-sans pt-[max(12px,env(safe-area-inset-top))]">
+                  <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b6623] w-full h-full min-h-screen font-sans pt-0">
                     <QardScreen
                       user={liveUser}
                       onBack={() => setModalType(null)}
@@ -542,7 +562,7 @@ const {
                   </div>
                 )}
                 {modalType === 'safedeals' && (
-                  <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-50 w-full h-full min-h-screen font-sans pt-[max(12px,env(safe-area-inset-top))]">
+                  <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b6623] w-full h-full min-h-screen font-sans pt-0">
                     <SafeDealsEscrowView 
                       liveUser={liveUser} 
                       syncLiveProfile={syncLiveProfile} 
@@ -603,7 +623,7 @@ const {
                   </div>
                 )}
                 {modalType === 'bank' && (
-                  <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-50 w-full h-full min-h-screen font-sans pt-[max(12px,env(safe-area-inset-top))]">
+                  <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b6623] w-full h-full min-h-screen font-sans pt-0">
                     <div className="bg-slate-50 min-h-screen flex flex-col relative text-slate-800">
                       <header className="bg-white border-b border-slate-200 px-4 py-3.5 flex items-center justify-between sticky top-0 z-40 backdrop-blur-md shadow-xs w-full">
                         <div className="flex items-center gap-3">
@@ -645,7 +665,7 @@ const {
                   </div>
                 )}
                 {modalType === 'shop' && (
-                  <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-50 w-full h-full min-h-screen font-sans pt-[max(12px,env(safe-area-inset-top))]">
+                  <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b6623] w-full h-full min-h-screen font-sans pt-0">
                     <div className="bg-slate-50 min-h-screen flex flex-col relative text-slate-800">
                       <header className="bg-white border-b border-slate-200 px-4 py-3.5 flex items-center justify-between sticky top-0 z-40 backdrop-blur-md shadow-xs w-full">
                         <div className="flex items-center gap-3">
@@ -1357,7 +1377,7 @@ const {
                 )}
 
                 {modalType === 'ration' && (
-                  <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-50 w-full h-full min-h-screen font-sans pt-[max(12px,env(safe-area-inset-top))]">
+                  <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b6623] w-full h-full min-h-screen font-sans pt-0">
                     <RationCardView
                       liveUser={liveUser}
                       syncLiveProfile={syncLiveProfile}
@@ -1368,7 +1388,7 @@ const {
                 )}
 
                 {modalType === 'bill_pay' && (
-                  <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-50 w-full h-full min-h-screen font-sans pt-[max(12px,env(safe-area-inset-top))]">
+                  <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b6623] w-full h-full min-h-screen font-sans pt-0">
                     <BNBBillPayScreen
                       user={liveUser}
                       onBack={() => setModalType(null)}
@@ -1379,7 +1399,7 @@ const {
                 )}
 
                 {modalType === 'salary' && (
-                  <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-50 w-full h-full min-h-screen font-sans pt-[max(12px,env(safe-area-inset-top))]">
+                  <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b6623] w-full h-full min-h-screen font-sans pt-0">
                     <BNBAutoSalaryPay
                       user={liveUser}
                       onBack={() => setModalType(null)}
@@ -1390,7 +1410,7 @@ const {
                 )}
 
                 {modalType === 'auto_recharge' && (
-                  <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-50 w-full h-full min-h-screen font-sans pt-[max(12px,env(safe-area-inset-top))]">
+                  <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b6623] w-full h-full min-h-screen font-sans pt-0">
                     <BNBAutoRechargeScreen
                       user={liveUser}
                       onBack={() => setModalType(null)}
@@ -1401,7 +1421,7 @@ const {
                 )}
 
                 {modalType === 'edu' && (
-                  <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-50 w-full h-full min-h-screen font-sans pt-[max(12px,env(safe-area-inset-top))]">
+                  <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b6623] w-full h-full min-h-screen font-sans pt-0">
                     <BNBEducationCenter
                       user={liveUser}
                       onBack={() => setModalType(null)}
@@ -1411,7 +1431,7 @@ const {
                 )}
 
                 {modalType === 'safi' && (
-                  <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-50 w-full h-full min-h-screen font-sans pt-[max(12px,env(safe-area-inset-top))]">
+                  <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b6623] w-full h-full min-h-screen font-sans pt-0">
                     <SafiPremiumShop
                       user={liveUser}
                       onClose={() => setModalType(null)}
@@ -1423,7 +1443,7 @@ const {
                 )}
 
                 {modalType === 'about' && (
-                  <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-50 w-full h-full min-h-screen font-sans pt-[max(12px,env(safe-area-inset-top))]">
+                  <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b6623] w-full h-full min-h-screen font-sans pt-0">
                     <BNBCorporateGuide
                       user={liveUser}
                       onBack={() => setModalType(null)}

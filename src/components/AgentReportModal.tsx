@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
-import { motion } from 'motion/react';
-import { AlertTriangle, X, CheckCircle } from 'lucide-react';
+import React, { useState } from "react";
+import { motion } from "motion/react";
+import { AlertTriangle, X, CheckCircle } from "lucide-react";
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
 interface Agent {

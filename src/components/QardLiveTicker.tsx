@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { HeartHandshake, TrendingUp, ShieldCheck, Users2, ArrowUpRight } from 'lucide-react';
+import React, { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "motion/react";
+import { HeartHandshake, ShieldCheck } from "lucide-react";
 
 interface Transaction {
   id?: string;
-  userId?: string;
   userName?: string;
   memberId?: string;
   type?: string;

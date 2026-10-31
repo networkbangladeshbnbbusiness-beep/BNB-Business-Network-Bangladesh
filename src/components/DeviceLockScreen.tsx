@@ -1,2 +1,13 @@
 import React from "react";
-export default function DeviceLockScreen() { return null; }
+import { User, AppConfig } from "../types";
+
+interface DeviceLockScreenProps {
+  user: User;
+  appConfig?: AppConfig;
+  onLogout: () => void;
+  onUnlockSuccess?: () => void;
+}
+
+export default function DeviceLockScreen(_props: DeviceLockScreenProps) {
+  return null;
+}

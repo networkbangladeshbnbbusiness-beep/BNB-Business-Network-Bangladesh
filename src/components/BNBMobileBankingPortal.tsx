@@ -11,6 +11,7 @@ import { useBackHandler } from '../lib/navigationManager';
 import UnifiedBackButton from './UnifiedBackButton';
 // JenifyPaymentGateway imported or inlined
 import { apiUrl, getReturnOrigin } from '../config/api';
+import { verifyUserPin } from '../lib/memberUtils';
 
 interface BNBMobileBankingPortalProps {
   user: User;
@@ -113,12 +114,25 @@ export const BNBMobileBankingPortal: React.FC<BNBMobileBankingPortalProps> = ({
     setIsReceiptOpen(true);
   };
 
-// Portal internal back handler
+  // Listen for global force return to dashboard event
+  useEffect(() => {
+    const handleForceReturn = () => {
+      if (onClose) onClose();
+    };
+    window.addEventListener('bnb_force_return_to_dashboard', handleForceReturn);
+    return () => {
+      window.removeEventListener('bnb_force_return_to_dashboard', handleForceReturn);
+    };
+  }, [onClose]);
+
+  // Portal internal back handler
   useBackHandler(() => {
     if (isOtpModalOpen) { setIsOtpModalOpen(false); setPendingActionFn(null); return true; }
     if (isReceiptOpen) { setIsReceiptOpen(false); return true; }
     if (showSaveCardModal) { setShowSaveCardModal(false); return true; }
-    if (activeTab === 'auto_add_money') {
+    const currentTabStr = String(activeTab);
+    if (currentTabStr === 'auto_add_money' || currentTabStr === 'online_gateway' || currentTabStr === 'manual_deposit') {
+      window.dispatchEvent(new CustomEvent('bnb_force_return_to_dashboard'));
       if (onClose) {
         onClose();
         return true;
@@ -790,8 +804,7 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
       setErrorMsg('সঠিক ট্রানজেকশন আইডি (TrxID) লিখুন। শুধু শেষ চার সংখ্যা দিলে হবে না, সম্পূর্ণ TrxID দিন।');
       return;
     }
-    const userPin = user?.pin ? String(user.pin).trim() : '';
-    if (!userPin || securityPin.trim() !== userPin) {
+    if (!verifyUserPin(user, securityPin)) {
       setErrorMsg('ভুল সিকিউরিটি পিন! সঠিক 4 সংখ্যার ওয়ালেট পিন প্রদান করুন।');
       return;
     }
@@ -1068,8 +1081,7 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
       setErrorMsg('সঠিক ট্রানজেকশন আইডি (TrxID) লিখুন। সম্পূর্ণ TrxID প্রদান করুন।');
       return;
     }
-    const userPin = user?.pin ? String(user.pin).trim() : '';
-    if (!userPin || remitSecurityPin.trim() !== userPin) {
+    if (!verifyUserPin(user, remitSecurityPin)) {
       setErrorMsg('ভুল সিকিউরিটি পিন! সঠিক 4 সংখ্যার ওয়ালেট পিন প্রদান করুন।');
       return;
     }
@@ -1291,7 +1303,7 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
       return;
     }
 
-    if (user.pin !== ambSendPin.trim()) {
+    if (!verifyUserPin(user, ambSendPin)) {
       setErrorMsg('ভুল সিকিউরিটি পিন! সঠিক 4 সংখ্যার ওয়ালেট পিন প্রদান করুন।');
       return;
     }
@@ -1686,7 +1698,7 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
         return;
       }
 
-      if (cardOwnerData.pin !== cardAddPin.trim()) {
+      if (!verifyUserPin(cardOwnerData, cardAddPin)) {
         setErrorMsg('ভুল সিকিউরিটি পিন! সঠিক 4 সংখ্যার পিন প্রদান করুন।');
         setLoading(false);
         return;
@@ -2699,6 +2711,7 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
           <JenifyPaymentGateway 
             currentUser={user}
             onBack={() => {
+              window.dispatchEvent(new CustomEvent('bnb_force_return_to_dashboard'));
               if (onClose) {
                 onClose();
               } else {
@@ -2707,6 +2720,7 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
             }}
             onPaymentSuccess={() => {
               syncLiveProfile();
+              window.dispatchEvent(new CustomEvent('bnb_force_return_to_dashboard'));
               if (onClose) {
                 onClose();
               }
@@ -6364,7 +6378,7 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
       <div id="money-exchange-module-root" className="w-full max-w-xl mx-auto bg-[#001E17] min-h-screen text-white pb-16 relative">
         
         {/* Green Top Header Section matching Home Dashboard */}
-        <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-3.5 sm:pt-4.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-30 space-y-2.5 mb-2">
+        <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-2.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-30 space-y-2.5 mb-2">
           <div className="flex items-center justify-between gap-2.5">
             <div className="flex items-center gap-2">
               <UnifiedBackButton 

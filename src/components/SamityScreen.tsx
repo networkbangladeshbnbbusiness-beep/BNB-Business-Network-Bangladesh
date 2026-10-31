@@ -6,6 +6,7 @@ import SamityAdmin from './SamityAdmin';
 import SamityInvestmentsView from './SamityInvestmentsView';
 import UnifiedBackButton from './UnifiedBackButton';
 import { BNBPaymentReceiptModal, PaymentReceiptData } from './BNBPaymentReceiptModal';
+import { verifyUserPin } from '../lib/memberUtils';
 import { 
   collection, 
   query, 
@@ -1030,13 +1031,8 @@ export const SamityScreen = React.memo(function SamityScreen({
       setCustomAlert({ title: "⚠️ কারণ প্রয়োজন", message: "কেন আপনি সমবায় সমিতি সঞ্চয় বন্ধ/লিভ নিতে চান তা বিস্তারিত লিখুন।" });
       return;
     }
-    const userPin = String(user?.pin || (user as any)?.pinCode || (user as any)?.securityPin || '').trim();
-    if (userPin && switchSecurityPin.trim() !== userPin) {
+    if (!verifyUserPin(user, switchSecurityPin)) {
       setCustomAlert({ title: "❌ ভুল পিন কোড", message: "আপনার 4 ডিজিটের সিকিউরিটি পিন কোডটি সঠিক নয়!" });
-      return;
-    }
-    if (!userPin && switchSecurityPin.trim().length !== 4) {
-      setCustomAlert({ title: "❌ 4 ডিজিটের পিন আবশ্যক", message: "অনুগ্রহ করে আপনার 4 ডিজিটের সিকিউরিটি পিন কোড দিন।" });
       return;
     }
 
@@ -1168,13 +1164,8 @@ export const SamityScreen = React.memo(function SamityScreen({
       setCustomAlert({ title: "⚠️ কারণ আবশ্যক", message: "সঞ্চয় পুনরায় চালু (ON) করার কারণ উল্লেখ করুন।" });
       return;
     }
-    const userPin = String(user?.pin || (user as any)?.pinCode || (user as any)?.securityPin || '').trim();
-    if (userPin && switchSecurityPin.trim() !== userPin) {
+    if (!verifyUserPin(user, switchSecurityPin)) {
       setCustomAlert({ title: "❌ ভুল পিন কোড", message: "আপনার 4 ডিজিটের সিকিউরিটি পিন কোডটি সঠিক নয়!" });
-      return;
-    }
-    if (!userPin && switchSecurityPin.trim().length !== 4) {
-      setCustomAlert({ title: "❌ 4 ডিজিটের পিন আবশ্যক", message: "অনুগ্রহ করে আপনার 4 ডিজিটের সিকিউরিটি পিন কোড দিন।" });
       return;
     }
 
@@ -1275,13 +1266,8 @@ export const SamityScreen = React.memo(function SamityScreen({
       });
       return;
     }
-    const userPin = String(user?.pin || (user as any)?.pinCode || (user as any)?.securityPin || '').trim();
-    if (userPin && ownerUpgradePin.trim() !== userPin) {
+    if (!verifyUserPin(user, ownerUpgradePin)) {
       setCustomAlert({ title: "❌ ভুল পিন কোড", message: "আপনার 4 ডিজিটের সিকিউরিটি পিন কোডটি সঠিক নয়!" });
-      return;
-    }
-    if (!userPin && ownerUpgradePin.trim().length !== 4) {
-      setCustomAlert({ title: "❌ 4 ডিজিটের পিন আবশ্যক", message: "অনুগ্রহ করে আপনার 4 ডিজিটের সিকিউরিটি পিন কোড দিন।" });
       return;
     }
 
@@ -3293,10 +3279,10 @@ export const SamityScreen = React.memo(function SamityScreen({
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col relative pt-0" id="samity-screen-root">
+    <div className="min-h-screen bg-[#0b6623] text-slate-800 font-sans flex flex-col relative" id="samity-screen-root">
       
-      {/* 1. Header (1. হেডার) styled matching top green header - Generous top empty green space, ending right after announcement */}
-      <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-3.5 sm:pt-4.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-20 space-y-2.5">
+      {/* 1. Header (1. হেডার) styled matching top green header */}
+      <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-2.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-20 space-y-2.5">
         {/* Decorative subtle header glows */}
         <div className="absolute -top-10 -right-10 w-28 h-28 bg-teal-500/10 rounded-full blur-xl pointer-events-none" />
         <div className="absolute -bottom-10 -left-10 w-28 h-28 bg-emerald-500/15 rounded-full blur-xl pointer-events-none" />

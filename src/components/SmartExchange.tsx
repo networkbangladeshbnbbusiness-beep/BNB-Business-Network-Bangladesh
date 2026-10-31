@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { User, Transaction, AppConfig } from '../types';
+import React from "react";
+import { motion, AnimatePresence } from "motion/react";
+import { User, Transaction, AppConfig } from "../types";
 
 interface SmartExchangeProps {
   user: User;

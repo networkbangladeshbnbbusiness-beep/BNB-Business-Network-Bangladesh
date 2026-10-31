@@ -843,7 +843,7 @@ export const SafiPremiumShop = React.memo(function SafiPremiumShop({
   return (
     <div className="fixed inset-0 z-50 bg-[#f8fafc] w-full h-full min-h-screen font-sans flex flex-col text-slate-800">
       {/* 1. Header Area - Green Top Header matching Home Dashboard */}
-      <div className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-3.5 sm:pt-4.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden shrink-0 space-y-2.5">
+      <div className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-2.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden shrink-0 space-y-2.5">
         <div className="flex items-center justify-between gap-1">
           <div className="flex items-center gap-2">
             <button 

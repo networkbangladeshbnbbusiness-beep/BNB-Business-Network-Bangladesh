@@ -731,15 +731,37 @@ const getTxt = (key: string, fallback: string) => {
   const [triggerPortalAmount, setTriggerPortalAmount] = useState(0);
   const balanceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  const handleTapBalance = () => {
+  const handleTapBalance = (durationMs: number | React.SyntheticEvent = 5000) => {
+    const finalDuration = (typeof durationMs === 'number' && !isNaN(durationMs)) ? durationMs : 5000;
     if (balanceTimerRef.current) {
       clearTimeout(balanceTimerRef.current);
+      balanceTimerRef.current = null;
+    }
+    if (showBalance) {
+      setShowBalance(false);
+      return;
     }
     setShowBalance(true);
     balanceTimerRef.current = setTimeout(() => {
       setShowBalance(false);
-    }, 3000);
+      balanceTimerRef.current = null;
+    }, finalDuration);
   };
+
+  // 100% Guaranteed return to dashboard: Listen for bnb_force_return_to_dashboard
+  useEffect(() => {
+    const handleForceReturn = () => {
+      setActiveTab('home');
+      if (setSelectedAction) setSelectedAction(null);
+      try {
+        handleTapBalance(6000);
+      } catch (e) {}
+    };
+    window.addEventListener('bnb_force_return_to_dashboard', handleForceReturn);
+    return () => {
+      window.removeEventListener('bnb_force_return_to_dashboard', handleForceReturn);
+    };
+  }, [setSelectedAction]);
 
   // Advertisement slider states
   const defaultAdSlides = [
@@ -781,6 +803,25 @@ const getTxt = (key: string, fallback: string) => {
 
   // Core Account details loaded live in real-time
   const [liveUser, setLiveUser] = useState<User>(user);
+
+  // Keep liveUser synchronized whenever parent user prop updates (e.g. session restore or payment balance sync)
+  useEffect(() => {
+    if (user && user.uid) {
+      const incomingBal = getEffectiveBalance(user);
+      setLiveUser(prev => {
+        if (!prev || prev.uid !== user.uid) {
+          return { ...user, balance: incomingBal, mainBalance: incomingBal };
+        }
+        const bestBal = incomingBal > 0 ? incomingBal : getEffectiveBalance(prev);
+        return {
+          ...prev,
+          ...user,
+          balance: bestBal,
+          mainBalance: bestBal
+        };
+      });
+    }
+  }, [user, user?.uid, user?.balance, (user as any)?.mainBalance]);
   const [allTransactions, setAllTransactions] = useState<Transaction[]>(() => {
     try {
       const cacheKey = `amb_tx_cache_${user.memberId || user.phone || user.uid}`;
@@ -1274,19 +1315,7 @@ const getTxt = (key: string, fallback: string) => {
       console.error("Dashboard User subscription error:", err);
     });
 
-    // 2. Live Transactions real-time listener (Permanent, Immutable Lifetime Records)
-    // Main Live Users listener for transaction lookups
-    const usersListenerQ = query(collection(db, 'users'), limit(300));
-    const unsubUsersGlobal = onSnapshot(usersListenerQ, (snap) => {
-      const listMems: User[] = [];
-      snap.forEach((d) => {
-        listMems.push({ uid: d.id, ...d.data() } as User);
-      });
-      setAllUsers(listMems);
-    }, (err) => {
-      console.error('Users global subscription error:', err);
-    });
-
+    // 2. Live Transactions real-time listener (Permanent, Immutable Lifetime Records - Bounded & Debounced for 0ms UI)
     const rawPhoneDigits = user.phone ? String(user.phone).replace(/[০-৯]/g, (d) => String('০১২৩৪৫৬৭৮৯'.indexOf(d))).replace(/\D/g, '') : '';
     const phoneVariants = Array.from(new Set([
       user.phone,
@@ -1313,34 +1342,38 @@ const getTxt = (key: string, fallback: string) => {
     let txListByReceiverPhone: Transaction[] = [];
     let txListByReceiverUid: Transaction[] = [];
     let txListByReceiverId: Transaction[] = [];
+    let txDebounceTimer: any = null;
 
     const updateAllTransactionsState = () => {
-      const mergedMap = new Map<string, Transaction>();
-      [
-        ...txListByUid,
-        ...txListByMember,
-        ...txListByUserPhone,
-        ...txListByPhone,
-        ...txListByReceiverPhone,
-        ...txListByReceiverUid,
-        ...txListByReceiverId
-      ].forEach((tx) => {
-        const idKey = tx.id || (tx as any).docId || (tx as any).transactionId || Math.random().toString();
-        if (!mergedMap.has(idKey)) {
-          mergedMap.set(idKey, tx);
-        }
-      });
-      const combined = sortTransactionsNewestFirst(Array.from(mergedMap.values()));
-      setAllTransactions(combined);
-      try {
-        const cacheKey = `amb_tx_cache_${user.memberId || user.phone || user.uid}`;
-        localStorage.setItem(cacheKey, JSON.stringify(combined.slice(0, 150)));
-      } catch (e) {}
+      if (txDebounceTimer) clearTimeout(txDebounceTimer);
+      txDebounceTimer = setTimeout(() => {
+        const mergedMap = new Map<string, Transaction>();
+        [
+          ...txListByUid,
+          ...txListByMember,
+          ...txListByUserPhone,
+          ...txListByPhone,
+          ...txListByReceiverPhone,
+          ...txListByReceiverUid,
+          ...txListByReceiverId
+        ].forEach((tx) => {
+          const idKey = tx.id || (tx as any).docId || (tx as any).transactionId || Math.random().toString();
+          if (!mergedMap.has(idKey)) {
+            mergedMap.set(idKey, tx);
+          }
+        });
+        const combined = sortTransactionsNewestFirst(Array.from(mergedMap.values()));
+        setAllTransactions(combined);
+        try {
+          const cacheKey = `amb_tx_cache_${user.memberId || user.phone || user.uid}`;
+          localStorage.setItem(cacheKey, JSON.stringify(combined.slice(0, 150)));
+        } catch (e) {}
+      }, 25);
     };
 
     const tQ = txTargetIds.length > 0
-      ? query(collection(db, 'transactions'), where('userId', 'in', txTargetIds.slice(0, 10)))
-      : query(collection(db, 'transactions'), where('userId', '==', user.uid));
+      ? query(collection(db, 'transactions'), where('userId', 'in', txTargetIds.slice(0, 10)), limit(60))
+      : query(collection(db, 'transactions'), where('userId', '==', user.uid), limit(60));
 
     const unsubTx = onSnapshot(tQ, (snap) => {
       const list: Transaction[] = [];
@@ -1353,7 +1386,7 @@ const getTxt = (key: string, fallback: string) => {
       console.error("Dashboard Transactions subscription error:", err);
     });
 
-    const unsubTxMember = user.memberId ? onSnapshot(query(collection(db, 'transactions'), where('memberId', '==', user.memberId)), (snap) => {
+    const unsubTxMember = user.memberId ? onSnapshot(query(collection(db, 'transactions'), where('memberId', '==', user.memberId), limit(60)), (snap) => {
       const list: Transaction[] = [];
       snap.forEach((d) => {
         list.push({ id: d.id, ...d.data() } as Transaction);
@@ -1362,7 +1395,7 @@ const getTxt = (key: string, fallback: string) => {
       updateAllTransactionsState();
     }, () => {}) : () => {};
 
-    const unsubTxUserPhone = phoneVariants.length > 0 ? onSnapshot(query(collection(db, 'transactions'), where('userPhone', 'in', phoneVariants.slice(0, 10))), (snap) => {
+    const unsubTxUserPhone = phoneVariants.length > 0 ? onSnapshot(query(collection(db, 'transactions'), where('userPhone', 'in', phoneVariants.slice(0, 10)), limit(60)), (snap) => {
       const list: Transaction[] = [];
       snap.forEach((d) => {
         list.push({ id: d.id, ...d.data() } as Transaction);
@@ -1371,7 +1404,7 @@ const getTxt = (key: string, fallback: string) => {
       updateAllTransactionsState();
     }, () => {}) : () => {};
 
-    const unsubTxPhone = phoneVariants.length > 0 ? onSnapshot(query(collection(db, 'transactions'), where('phone', 'in', phoneVariants.slice(0, 10))), (snap) => {
+    const unsubTxPhone = phoneVariants.length > 0 ? onSnapshot(query(collection(db, 'transactions'), where('phone', 'in', phoneVariants.slice(0, 10)), limit(60)), (snap) => {
       const list: Transaction[] = [];
       snap.forEach((d) => {
         list.push({ id: d.id, ...d.data() } as Transaction);
@@ -1380,7 +1413,7 @@ const getTxt = (key: string, fallback: string) => {
       updateAllTransactionsState();
     }, () => {}) : () => {};
 
-    const unsubTxReceiverPhone = phoneVariants.length > 0 ? onSnapshot(query(collection(db, 'transactions'), where('receiverPhone', 'in', phoneVariants.slice(0, 10))), (snap) => {
+    const unsubTxReceiverPhone = phoneVariants.length > 0 ? onSnapshot(query(collection(db, 'transactions'), where('receiverPhone', 'in', phoneVariants.slice(0, 10)), limit(60)), (snap) => {
       const list: Transaction[] = [];
       snap.forEach((d) => {
         list.push({ id: d.id, ...d.data() } as Transaction);
@@ -1389,7 +1422,7 @@ const getTxt = (key: string, fallback: string) => {
       updateAllTransactionsState();
     }, () => {}) : () => {};
 
-    const unsubTxReceiverUid = txTargetIds.length > 0 ? onSnapshot(query(collection(db, 'transactions'), where('receiverUid', 'in', txTargetIds.slice(0, 10))), (snap) => {
+    const unsubTxReceiverUid = txTargetIds.length > 0 ? onSnapshot(query(collection(db, 'transactions'), where('receiverUid', 'in', txTargetIds.slice(0, 10)), limit(60)), (snap) => {
       const list: Transaction[] = [];
       snap.forEach((d) => {
         list.push({ id: d.id, ...d.data() } as Transaction);
@@ -1398,7 +1431,7 @@ const getTxt = (key: string, fallback: string) => {
       updateAllTransactionsState();
     }, () => {}) : () => {};
 
-    const unsubTxReceiverId = user.memberId ? onSnapshot(query(collection(db, 'transactions'), where('receiverId', '==', user.memberId)), (snap) => {
+    const unsubTxReceiverId = user.memberId ? onSnapshot(query(collection(db, 'transactions'), where('receiverId', '==', user.memberId), limit(60)), (snap) => {
       const list: Transaction[] = [];
       snap.forEach((d) => {
         list.push({ id: d.id, ...d.data() } as Transaction);
@@ -1408,7 +1441,7 @@ const getTxt = (key: string, fallback: string) => {
     }, () => {}) : () => {};
 
     // 3. Live Notices real-time listener (Index-safe client-side sort)
-    const nQ = query(collection(db, 'notices'), limit(40));
+    const nQ = query(collection(db, 'notices'), limit(25));
     const unsubNotices = onSnapshot(nQ, (snap) => {
       const listNotices: Notice[] = [];
       snap.forEach((d) => {
@@ -1424,26 +1457,8 @@ const getTxt = (key: string, fallback: string) => {
       console.error("Dashboard Notices subscription error:", err);
     });
 
-    // 4. Live Products real-time listener
-    const unsubProducts = onSnapshot(collection(db, 'products'), (snap) => {
-      const list: Product[] = [];
-      snap.forEach((d) => {
-        list.push({ id: d.id, ...d.data() } as Product);
-      });
-      setAllProducts(list);
-    }, (err) => console.error("Error fetching products:", err));
-
-    // 5. Live Offers real-time listener
-    const unsubOffers = onSnapshot(collection(db, 'offers'), (snap) => {
-      const list: Offer[] = [];
-      snap.forEach((d) => {
-        list.push({ id: d.id, ...d.data() } as Offer);
-      });
-      setAllOffers(list);
-    }, (err) => console.error("Error fetching offers:", err));
-
     // 5. Live Ration Card real-time listener
-    const rcQ = query(collection(db, 'ration_cards'), where('userId', '==', user.uid));
+    const rcQ = query(collection(db, 'ration_cards'), where('userId', '==', user.uid), limit(1));
     const unsubRation = onSnapshot(rcQ, (snap) => {
       if (!snap.empty) {
         setRationCard({ id: snap.docs[0].id, ...snap.docs[0].data() });
@@ -1464,14 +1479,14 @@ const getTxt = (key: string, fallback: string) => {
     ].filter((x): x is string => typeof x === 'string' && Boolean(x.trim()))));
 
     const notifyPersonalQ = userTargetIds.length > 0
-      ? query(collection(db, 'user_notifications'), where('userId', 'in', userTargetIds.slice(0, 10)))
-      : query(collection(db, 'user_notifications'), where('userId', '==', user.uid));
+      ? query(collection(db, 'user_notifications'), where('userId', 'in', userTargetIds.slice(0, 10)), limit(40))
+      : query(collection(db, 'user_notifications'), where('userId', '==', user.uid), limit(40));
 
     const notifyMemberQ = user.memberId
-      ? query(collection(db, 'user_notifications'), where('memberId', '==', user.memberId))
+      ? query(collection(db, 'user_notifications'), where('memberId', '==', user.memberId), limit(40))
       : null;
 
-    const notifyGlobalQ = query(collection(db, 'user_notifications'), where('userId', '==', 'all'));
+    const notifyGlobalQ = query(collection(db, 'user_notifications'), where('userId', '==', 'all'), limit(30));
 
     let personalList: UserNotification[] = [];
     let memberList: UserNotification[] = [];
@@ -1610,7 +1625,7 @@ const getTxt = (key: string, fallback: string) => {
     });
 
     return () => {
-      unsubUsersGlobal();
+      if (txDebounceTimer) clearTimeout(txDebounceTimer);
       unsubUser();
       unsubTx();
       unsubTxMember();
@@ -1620,8 +1635,6 @@ const getTxt = (key: string, fallback: string) => {
       unsubTxReceiverUid();
       unsubTxReceiverId();
       unsubNotices();
-      unsubProducts();
-      unsubOffers();
       unsubRation();
       unsubNotifyPersonal();
       unsubNotifyMember();
@@ -1631,7 +1644,23 @@ const getTxt = (key: string, fallback: string) => {
 
   // ON-DEMAND / CONDITIONAL REAL-TIME LISTENERS TO RADICALLY REDUCE FIRESTORE READ UNITS
 
-  // A. Members Directory (Handled centrally by global users listener)
+  // A. Members Directory (Only active when Members Directory or Send Money / Exchange lookup is open)
+  useEffect(() => {
+    if (!user?.uid || !['members', 'send', 'exchange'].includes(modalType)) {
+      return;
+    }
+    const usersListenerQ = query(collection(db, 'users'), limit(150));
+    const unsubUsersGlobal = onSnapshot(usersListenerQ, (snap) => {
+      const listMems: User[] = [];
+      snap.forEach((d) => {
+        listMems.push({ uid: d.id, ...d.data() } as User);
+      });
+      setAllUsers(listMems);
+    }, (err) => {
+      console.error('Users global subscription error:', err);
+    });
+    return () => unsubUsersGlobal();
+  }, [modalType, user?.uid]);
 
   // B. Live Qard Hasana global real-time listener (Only active when Qard Screen is open)
   useEffect(() => {
@@ -1763,11 +1792,21 @@ const getTxt = (key: string, fallback: string) => {
     };
   }, []);
 
-  // Auto-reconcile pending ZiniPay payments when user focuses window or returns to Dashboard
+  // Auto-reconcile pending ZiniPay payments and reveal balance when user returns to Dashboard from payment method
   useEffect(() => {
-    const handleReconcile = () => {
+    const handleReconcile = (ev?: any) => {
+      const detail = ev?.detail || {};
+      if (typeof detail.newBalance === 'number' && detail.newBalance > 0) {
+        setLiveUser(prev => prev ? ({
+          ...prev,
+          balance: detail.newBalance,
+          mainBalance: detail.newBalance
+        }) : prev);
+        handleTapBalance(6000);
+      }
       const uId = liveUser?.uid || user?.uid;
       if (uId) {
+        syncLiveProfile();
         fetch(apiUrl('/api/payment/reconcile-pending'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1775,17 +1814,25 @@ const getTxt = (key: string, fallback: string) => {
         }).then(r => r.json()).then(res => {
           if (res?.reconciledCount > 0) {
             syncLiveProfile();
+            handleTapBalance(6000);
           }
         }).catch(() => {});
       }
     };
 
+    const handleRevealOnReturn = () => {
+      syncLiveProfile();
+      handleTapBalance(6000);
+    };
+
     handleReconcile();
     window.addEventListener('focus', handleReconcile);
     window.addEventListener('bnb_balance_updated', handleReconcile);
+    window.addEventListener('bnb_reveal_dashboard_balance', handleRevealOnReturn);
     return () => {
       window.removeEventListener('focus', handleReconcile);
       window.removeEventListener('bnb_balance_updated', handleReconcile);
+      window.removeEventListener('bnb_reveal_dashboard_balance', handleRevealOnReturn);
     };
   }, [liveUser?.uid, user?.uid]);
 
@@ -3861,9 +3908,9 @@ const getTxt = (key: string, fallback: string) => {
   return (
     <div className="bg-slate-50 min-h-screen flex flex-col relative text-slate-800 font-sans" id="dashboard-root">
       {/* 1. Unified Deep Green Header containing Header controls + Announcement Ticker seamlessly */}
-      <header className="bg-[#0b6623] text-white sticky top-0 z-40 shadow-md font-sans select-none w-full max-w-full overflow-x-hidden box-border pt-[max(38px,env(safe-area-inset-top))]">
+      <header className="bg-[#0b6623] text-white sticky top-0 z-40 shadow-md font-sans select-none w-full max-w-full overflow-x-hidden box-border">
         {/* Top Row: Navigation, Title, Balance/Due Pills, Tools */}
-        <div className="px-2 xs:px-3 pt-2 pb-1 flex items-center justify-between gap-1 xs:gap-1.5 min-h-[60px] w-full max-w-full overflow-x-hidden box-border">
+        <div className="px-2 xs:px-3 pt-1.5 pb-1 flex items-center justify-between gap-1 xs:gap-1.5 min-h-[54px] w-full max-w-full overflow-x-hidden box-border">
           {/* Left: Menu & Name */}
           <div className="flex items-center gap-1 xs:gap-1.5 shrink-0 max-w-[120px] xs:max-w-[145px]">
             <button 
@@ -3889,17 +3936,17 @@ const getTxt = (key: string, fallback: string) => {
 
           {/* Center: Dual Pill Buttons Container - Prominent & Large Matching Reference Screenshot Exactly */}
           <div className="flex items-center rounded-full overflow-hidden shadow-xl shrink-0 mx-auto border-0 bg-transparent">
-            {/* Yellow Main Balance Pill (Displays 'Balance' in English, Tap reveals amount for 3 seconds) */}
+            {/* Yellow Main Balance Pill (Displays 'Balance' / 'ব্যালেন্স', Tap reveals amount for 5 seconds) */}
             <button
               type="button"
-              onClick={handleTapBalance}
-              title="Tap to view main balance for 3 seconds"
-              className="bg-amber-400 hover:bg-amber-500 px-4 xs:px-5 sm:px-6 py-2.5 flex items-center justify-center text-slate-950 font-black text-[15px] xs:text-[17px] sm:text-[19px] transition-all cursor-pointer min-w-[95px] xs:min-w-[120px] sm:min-w-[140px] h-10.5 xs:h-12 rounded-l-full active:scale-98 shadow-sm border-0"
+              onClick={() => handleTapBalance(5000)}
+              title="ব্যালেন্স দেখতে ট্যাপ করুন"
+              className="bg-amber-400 hover:bg-amber-500 active:scale-95 px-4 xs:px-5 sm:px-6 py-2.5 flex items-center justify-center text-slate-950 font-black text-[15px] xs:text-[17px] sm:text-[19px] transition-all cursor-pointer min-w-[95px] xs:min-w-[120px] sm:min-w-[140px] h-10.5 xs:h-12 rounded-l-full shadow-sm border-0 select-none"
             >
               <span className="whitespace-nowrap tracking-tight font-black font-sans">
                 {showBalance 
-                  ? '৳' + (liveUser?.balance || 0).toLocaleString('bn-BD', { minimumFractionDigits: 2 }) 
-                  : 'Balance'}
+                  ? '৳' + Number(liveUser?.balance ?? user?.balance ?? 0).toLocaleString('bn-BD', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) 
+                  : (appLanguage === 'en' ? 'Balance' : 'ব্যালেন্স')}
               </span>
             </button>
 
@@ -4745,13 +4792,21 @@ const getTxt = (key: string, fallback: string) => {
               currentUser={liveUser || user}
               onBack={() => {
                 syncLiveProfile();
+                try {
+                  window.dispatchEvent(new CustomEvent('bnb_force_return_to_dashboard'));
+                } catch (e) {}
                 setActiveTab('home');
                 if (setSelectedAction) setSelectedAction(null);
+                handleTapBalance(6000);
               }}
               onPaymentSuccess={(amount, newBal, trxId) => {
+                if (typeof newBal === 'number' && newBal > 0) {
+                  setLiveUser(prev => prev ? ({ ...prev, balance: newBal, mainBalance: newBal }) : prev);
+                }
                 syncLiveProfile();
                 setActiveTab('home');
                 if (setSelectedAction) setSelectedAction(null);
+                handleTapBalance(6000);
               }}
             />
           </motion.div>

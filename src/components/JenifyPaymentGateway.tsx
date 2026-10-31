@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ChevronRight, ShieldCheck, AlertCircle, RefreshCw, ExternalLink, ArrowLeft, Loader2, Check, Smartphone, Lock } from 'lucide-react';
-import { apiUrl, getReturnOrigin } from '../config/api';
+import { apiUrl, getReturnOrigin, isStrictNative } from '../config/api';
 import { useBackHandler } from '../lib/navigationManager';
 import UnifiedBackButton from './UnifiedBackButton';
 import { Browser } from '@capacitor/browser';
@@ -41,6 +41,8 @@ export const JenifyPaymentGateway: React.FC<JenifyPaymentGatewayProps> = ({
 
   const quickAmounts = [50, 100, 200, 500, 1000, 2000, 5000];
   const pollIntervalRef = useRef<any>(null);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const iframeLoadCountRef = useRef<number>(0);
 
   // Return to Dashboard cleanly on Back button or hardware/gesture back
   const handleReturnToDashboard = () => {
@@ -48,8 +50,50 @@ export const JenifyPaymentGateway: React.FC<JenifyPaymentGatewayProps> = ({
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
     }
+
+    // If there was a pending invoice when pressing Back, verify once in background so if payment succeeded, the user sees it on Dashboard
+    try {
+      const pendingRaw = localStorage.getItem('amb_pending_zinipay_invoice');
+      const invToCheck = activeInvoice || (pendingRaw ? JSON.parse(pendingRaw) : null);
+      localStorage.removeItem('amb_zinipay_redirect_active');
+      if (invToCheck && (invToCheck.val_id || invToCheck.invoice_id)) {
+        const targetUid = getUserUid();
+        fetch(apiUrl('/api/payment/check-status'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            val_id: invToCheck.val_id,
+            invoice_id: invToCheck.invoice_id,
+            userId: targetUid
+          })
+        })
+          .then(r => r.json())
+          .then(data => {
+            if (data && data.success && data.status === 'completed') {
+              try { localStorage.removeItem('amb_pending_zinipay_invoice'); } catch (e) {}
+              const confirmedAmount = Number(data.amount || invToCheck.amount || 0);
+              const newBal = Number(data.newBalance || 0);
+              const trxId = data.trxId || invToCheck.invoice_id || invToCheck.val_id;
+              window.dispatchEvent(new CustomEvent('bnb_payment_completed_on_return', {
+                detail: { amount: confirmedAmount, newBalance: newBal, trxId }
+              }));
+            } else {
+              try { localStorage.removeItem('amb_pending_zinipay_invoice'); } catch (e) {}
+            }
+          })
+          .catch(() => {});
+      }
+    } catch (e) {}
+
     setStep('input');
     setActiveInvoice(null);
+    try {
+      window.dispatchEvent(new CustomEvent('bnb_force_return_to_dashboard'));
+      window.dispatchEvent(new CustomEvent('bnb_reveal_dashboard_balance'));
+      if (typeof window !== 'undefined') {
+        window.history.replaceState({ amb_root: true }, '', '/dashboard');
+      }
+    } catch (e) {}
     if (onBack) {
       onBack();
     }
@@ -59,20 +103,32 @@ export const JenifyPaymentGateway: React.FC<JenifyPaymentGatewayProps> = ({
   useBackHandler(() => {
     handleReturnToDashboard();
     return true;
-  }, true, 35);
+  }, true, 50);
 
-  // Helper to resolve user ID safely across all object formats, Firebase auth, and local storage
+  // Helper to resolve user ID safely across all object formats and local storage (never prioritizing anonymous Firebase auth UID over stored user UID)
   const getUserUid = (): string => {
-    if (currentUser?.uid) return String(currentUser.uid).trim();
-    if (currentUser?.id) return String(currentUser.id).trim();
-    if (currentUser?.userId) return String(currentUser.userId).trim();
-    if (auth.currentUser?.uid) return auth.currentUser.uid;
+    const isValidRealUid = (id?: any) => {
+      if (!id || typeof id !== 'string') return false;
+      const trimmed = id.trim();
+      return trimmed.length > 0 && !trimmed.startsWith('user_member_') && !trimmed.startsWith('user_fallback_');
+    };
+    if (isValidRealUid(currentUser?.uid)) return String(currentUser.uid).trim();
+    if (isValidRealUid(currentUser?.id)) return String(currentUser.id).trim();
+    if (isValidRealUid(currentUser?.userId)) return String(currentUser.userId).trim();
     if (typeof window !== 'undefined') {
+      try {
+        const lastRaw = localStorage.getItem('amb_last_user') || localStorage.getItem('bnb_last_user');
+        if (lastRaw) {
+          const parsed = JSON.parse(lastRaw);
+          if (isValidRealUid(parsed?.uid)) return String(parsed.uid).trim();
+        }
+      } catch (e) {}
       const ambUid = localStorage.getItem('amb_user_uid');
-      if (ambUid && ambUid.trim()) return ambUid.trim();
+      if (isValidRealUid(ambUid)) return ambUid!.trim();
       const bnbUid = localStorage.getItem('bnb_user_uid');
-      if (bnbUid && bnbUid.trim()) return bnbUid.trim();
+      if (isValidRealUid(bnbUid)) return bnbUid!.trim();
     }
+    if (auth.currentUser?.uid) return auth.currentUser.uid;
     return '';
   };
 
@@ -81,11 +137,18 @@ export const JenifyPaymentGateway: React.FC<JenifyPaymentGatewayProps> = ({
     if (currentUser?.phone) return String(currentUser.phone).trim();
     if (currentUser?.userPhone) return String(currentUser.userPhone).trim();
     if (currentUser?.phoneNumber) return String(currentUser.phoneNumber).trim();
-    if (auth.currentUser?.phoneNumber) return auth.currentUser.phoneNumber;
     if (typeof window !== 'undefined') {
+      try {
+        const lastRaw = localStorage.getItem('amb_last_user') || localStorage.getItem('bnb_last_user');
+        if (lastRaw) {
+          const parsed = JSON.parse(lastRaw);
+          if (parsed?.phone) return String(parsed.phone).trim();
+        }
+      } catch (e) {}
       const ambPhone = localStorage.getItem('amb_user_phone');
       if (ambPhone && ambPhone.trim()) return ambPhone.trim();
     }
+    if (auth.currentUser?.phoneNumber) return auth.currentUser.phoneNumber;
     return '';
   };
 
@@ -146,6 +209,12 @@ export const JenifyPaymentGateway: React.FC<JenifyPaymentGatewayProps> = ({
           if (onPaymentSuccess) {
             onPaymentSuccess(confirmedAmount, newBal, trxId);
           }
+          try {
+            window.dispatchEvent(new CustomEvent('bnb_payment_completed_on_return', {
+              detail: { amount: confirmedAmount, newBalance: newBal, trxId }
+            }));
+            window.dispatchEvent(new CustomEvent('bnb_reveal_dashboard_balance'));
+          } catch (e) {}
           return;
         }
 
@@ -159,6 +228,14 @@ export const JenifyPaymentGateway: React.FC<JenifyPaymentGatewayProps> = ({
           } catch (e) {}
           try {
             localStorage.removeItem('amb_pending_zinipay_invoice');
+          } catch (e) {}
+          try {
+            window.dispatchEvent(new CustomEvent('bnb_payment_cancelled_or_failed', {
+              detail: {
+                status: data.status,
+                message: data.message || (data.status === 'cancelled' ? 'পেমেন্ট বাতিল করা হয়েছে।' : 'পেমেন্ট সম্পন্ন হতে পারেনি।')
+              }
+            }));
           } catch (e) {}
           setActiveInvoice(null);
           setStep('input');
@@ -203,6 +280,9 @@ export const JenifyPaymentGateway: React.FC<JenifyPaymentGatewayProps> = ({
               if (onPaymentSuccess) {
                 onPaymentSuccess(confirmedAmount, newBal, trxId);
               }
+            } else if (data && (data.status === 'cancelled' || data.status === 'failed')) {
+              localStorage.removeItem('amb_pending_zinipay_invoice');
+              setActiveInvoice(null);
             }
           }).catch(() => {});
         }
@@ -217,11 +297,46 @@ export const JenifyPaymentGateway: React.FC<JenifyPaymentGatewayProps> = ({
         checkPaymentStatusSilently();
       }, 800);
 
+      let browserFinishedSub: any = null;
+      try {
+        Browser.addListener('browserFinished', () => {
+          handleReturnToDashboard();
+        }).then(sub => { browserFinishedSub = sub; }).catch(() => {});
+      } catch (e) {}
+
+      // Listen for postMessage from callback/cancel/dashboard inside iframe
+      const handleIframeMessage = (ev: MessageEvent) => {
+        const msg = ev?.data;
+        if (!msg || typeof msg !== 'object' || msg.type !== 'BNB_PAYMENT_IFRAME_RESULT') return;
+        const st = String(msg.status || '').toLowerCase();
+        if (st === 'cancelled' || st === 'cancel' || st === 'failed') {
+          try {
+            localStorage.removeItem('amb_pending_zinipay_invoice');
+            localStorage.removeItem('amb_zinipay_redirect_active');
+            window.dispatchEvent(new CustomEvent('bnb_payment_cancelled_or_failed', {
+              detail: {
+                status: st === 'failed' ? 'failed' : 'cancelled',
+                message: st === 'failed' ? 'পেমেন্ট সম্পন্ন হতে পারেনি।' : 'পেমেন্ট বাতিল করা হয়েছে।'
+              }
+            }));
+          } catch (e) {}
+          handleReturnToDashboard();
+        } else if (st === 'success' || st === 'completed') {
+          checkPaymentStatusSilently();
+        }
+      };
+
+      window.addEventListener('message', handleIframeMessage);
+
       return () => {
         if (pollIntervalRef.current) {
           clearInterval(pollIntervalRef.current);
           pollIntervalRef.current = null;
         }
+        if (browserFinishedSub && typeof browserFinishedSub.remove === 'function') {
+          browserFinishedSub.remove();
+        }
+        window.removeEventListener('message', handleIframeMessage);
       };
     }
   }, [step, activeInvoice]);
@@ -251,35 +366,41 @@ export const JenifyPaymentGateway: React.FC<JenifyPaymentGatewayProps> = ({
     setLocalLoading(true);
 
     try {
-      const currentUserObj = auth.currentUser;
-      const idToken = currentUserObj ? await currentUserObj.getIdToken() : '';
-      
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
 
-      const res = await fetch(apiUrl('/api/payment/create'), {
+      const endpoint = apiUrl('/api/payment/create');
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          ...(idToken ? { 'Authorization': `Bearer ${idToken}` } : {})
+          'Accept': 'application/json'
         },
-        credentials: 'include',
         signal: controller.signal,
         body: JSON.stringify({
           amount: numAmount,
           userId: targetUserId,
           phone: targetPhone,
+          email: currentUser?.email || '',
+          memberId: currentUser?.memberId || '',
+          name: currentUser?.name || '',
           return_origin: typeof window !== 'undefined' ? getReturnOrigin() : undefined
         })
       });
       clearTimeout(timeoutId);
 
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error || 'পেমেন্ট তৈরি করতে ব্যর্থ হয়েছে।');
+      const responseText = await res.text();
+      let data: any = null;
+      try {
+        data = JSON.parse(responseText);
+      } catch (parseErr) {
+        throw new Error('পেমেন্ট সার্ভার থেকে সঠিক উত্তর পাওয়া যায়নি। অনুগ্রহ করে ইন্টারনেট সংযোগ চেক করে আবার চেষ্টা করুন।');
       }
 
-      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || data?.message || 'পেমেন্ট তৈরি করতে ব্যর্থ হয়েছে।');
+      }
+
       if (data && data.success && data.payment_url) {
         const activeInv = {
           invoice_id: data.invoice_id,
@@ -287,40 +408,34 @@ export const JenifyPaymentGateway: React.FC<JenifyPaymentGatewayProps> = ({
           amount: numAmount,
           payment_url: data.payment_url
         };
+        iframeLoadCountRef.current = 0;
         setActiveInvoice(activeInv);
+        setStep('redirecting');
         try {
           localStorage.setItem('amb_pending_zinipay_invoice', JSON.stringify(activeInv));
+          localStorage.setItem('amb_zinipay_redirect_active', String(Date.now()));
         } catch (e) {}
 
-        // Save current user explicitly to localStorage so session survives redirect
-        if (currentUser) {
+        // Save current user explicitly to localStorage so session survives any state transition
+        if (currentUser && currentUser.uid && !String(currentUser.uid).startsWith('user_member_') && !String(currentUser.uid).startsWith('user_fallback_')) {
           try {
             localStorage.setItem('amb_last_user', JSON.stringify(currentUser));
-            if (currentUser.uid) localStorage.setItem('amb_user_uid', currentUser.uid);
+            localStorage.setItem('amb_user_uid', currentUser.uid);
             if (currentUser.phone) localStorage.setItem('amb_user_phone', currentUser.phone);
             if (currentUser.name) localStorage.setItem('amb_user_name', currentUser.name);
             if (currentUser.role) localStorage.setItem('amb_user_role', currentUser.role);
             if (currentUser.memberId) localStorage.setItem('bnb_user_member_id', currentUser.memberId);
+            if (currentUser.balance !== undefined) localStorage.setItem('amb_user_balance', String(currentUser.balance));
             sessionStorage.setItem('amb_session_unlocked', 'true');
           } catch (e) {}
         }
 
-        // On native Android/Capacitor, open via in-app Browser so native app session remains intact in background
-        const isCapacitorNative = typeof window !== 'undefined' && Boolean((window as any).Capacitor?.isNativePlatform?.());
-        if (isCapacitorNative) {
-          try {
-            await Browser.open({ url: data.payment_url, windowName: '_blank' });
-          } catch (browserErr) {
-            window.location.href = data.payment_url;
-          }
-        } else {
-          // Open the returned payment_url in the same tab/WebView
-          setTimeout(() => {
-            window.location.href = data.payment_url;
-          }, 150);
-        }
+        // Push a history entry so pressing Hardware/Browser Back returns directly to Dashboard without leaving the app
+        try {
+          window.history.pushState({ amb_zinipay_modal: true }, '');
+        } catch (e) {}
       } else {
-        setErrorMsg('পেমেন্ট গেটওয়ে থেকে সঠিক লিংক পাওয়া যায়নি।');
+        setErrorMsg(data?.error || 'পেমেন্ট গেটওয়ে থেকে সঠিক লিংক পাওয়া যায়নি।');
       }
     } catch (serverErr: any) {
       if (serverErr.name === 'AbortError') {
@@ -417,21 +532,24 @@ export const JenifyPaymentGateway: React.FC<JenifyPaymentGatewayProps> = ({
         </div>
       )}
 
-      {step === 'redirecting' && (
-        <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl p-6 sm:p-8 text-center border border-slate-100 dark:border-slate-800 space-y-4">
-          <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto mb-2 animate-pulse">
-            <Loader2 className="w-8 h-8 animate-spin" />
-          </div>
-          <h3 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white">পেমেন্ট গেটওয়েতে সংযুক্ত হচ্ছে...</h3>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-            বিকাশ, নগদ বা ব্যাংকের মাধ্যমে পেমেন্ট সম্পন্ন করুন। পেমেন্ট সম্পন্ন হলে আপনার ওয়ালেটে স্বয়ংক্রিয়ভাবে ব্যালেন্স যোগ হবে।
-          </p>
+      {step === 'redirecting' && activeInvoice && (
+        <div className="fixed inset-0 z-[9999] bg-slate-900/95 flex flex-col">
+          {/* Top Bar: Always visible in-app header so user can go back to Dashboard anytime with 1 tap */}
+          <div className="bg-emerald-800 text-white px-3 py-2.5 flex items-center justify-between shadow-md shrink-0">
+            <button
+              type="button"
+              onClick={handleReturnToDashboard}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-white/15 hover:bg-white/25 active:scale-95 rounded-xl text-xs font-extrabold text-white transition cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>ড্যাশবোর্ডে ফিরে যান</span>
+            </button>
 
-          <div className="p-3 bg-amber-50 dark:bg-amber-950/30 rounded-xl text-amber-800 dark:text-amber-300 text-xs font-medium">
-            💡 পেমেন্ট শেষ হলে অথবা কোনো কারণে উইন্ডো বন্ধ হলে নিচের বাটন দিয়ে স্ট্যাটাস যাচাই করতে পারেন।
-          </div>
+            <div className="flex items-center gap-1.5 text-xs sm:text-sm font-bold truncate px-2">
+              <Lock className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+              <span>নিরাপদ পেমেন্ট (৳{activeInvoice.amount})</span>
+            </div>
 
-          <div className="flex flex-col gap-2.5 pt-2">
             <button
               type="button"
               onClick={async () => {
@@ -440,33 +558,70 @@ export const JenifyPaymentGateway: React.FC<JenifyPaymentGatewayProps> = ({
                 setLocalLoading(false);
               }}
               disabled={localLoading}
-              className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm shadow flex items-center justify-center gap-2 transition cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-xl text-xs font-extrabold transition cursor-pointer shrink-0"
             >
-              {localLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-              <span>পেমেন্ট স্ট্যাটাস যাচাই করুন</span>
+              {localLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              <span>যাচাই</span>
             </button>
+          </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                if (activeInvoice?.payment_url) {
-                  window.open(activeInvoice.payment_url, '_blank');
+          {/* Embedded Sandboxed ZiniPay Checkout: Cannot trigger intent:// or bnbnetwork:// or leave the app */}
+          <div className="relative flex-1 w-full bg-white overflow-hidden">
+            <iframe
+              ref={iframeRef}
+              src={activeInvoice.payment_url}
+              title="ZiniPay Secure Checkout"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+              allow="clipboard-read; clipboard-write"
+              onLoad={() => {
+                iframeLoadCountRef.current += 1;
+                // First load is secure.zinipay.com itself; any subsequent load means ZiniPay redirected to redirect_url or cancel_url
+                if (iframeLoadCountRef.current >= 2) {
+                  try {
+                    const href = iframeRef.current?.contentWindow?.location?.href || '';
+                    if (href.includes('payment_status=cancelled') || href.includes('status=cancelled') || href.includes('zinipay-cancel')) {
+                      localStorage.removeItem('amb_pending_zinipay_invoice');
+                      localStorage.removeItem('amb_zinipay_redirect_active');
+                      window.dispatchEvent(new CustomEvent('bnb_payment_cancelled_or_failed', {
+                        detail: { status: 'cancelled', message: 'পেমেন্ট বাতিল করা হয়েছে।' }
+                      }));
+                      handleReturnToDashboard();
+                      return;
+                    }
+                  } catch (e) {}
+                  // Check status with server immediately on redirect load; if not completed, return to Dashboard
+                  const targetUid = getUserUid();
+                  fetch(apiUrl('/api/payment/check-status'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      val_id: activeInvoice.val_id,
+                      invoice_id: activeInvoice.invoice_id,
+                      userId: targetUid
+                    })
+                  })
+                    .then(r => r.json())
+                    .then(data => {
+                      if (data && data.success && data.status === 'completed') {
+                        checkPaymentStatusSilently();
+                      } else {
+                        try {
+                          localStorage.removeItem('amb_pending_zinipay_invoice');
+                          localStorage.removeItem('amb_zinipay_redirect_active');
+                          window.dispatchEvent(new CustomEvent('bnb_payment_cancelled_or_failed', {
+                            detail: { status: 'cancelled', message: 'পেমেন্ট বাতিল করা হয়েছে।' }
+                          }));
+                        } catch (e) {}
+                        handleReturnToDashboard();
+                      }
+                    })
+                    .catch(() => {
+                      handleReturnToDashboard();
+                    });
                 }
               }}
-              className="w-full py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl font-bold text-xs hover:bg-slate-200 transition cursor-pointer flex items-center justify-center gap-1.5"
-            >
-              <ExternalLink className="w-4 h-4" />
-              <span>পেমেন্ট পেজ পুনরায় খুলুন</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleReturnToDashboard}
-              className="w-full py-2.5 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900/50 rounded-xl font-bold text-xs hover:bg-rose-100 transition cursor-pointer flex items-center justify-center gap-1.5"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              <span>বাতিল করে ড্যাশবোর্ডে ফিরে যান</span>
-            </button>
+              className="w-full h-full border-0 bg-white"
+            />
           </div>
         </div>
       )}

@@ -55,13 +55,25 @@ export default function SetAppLockModal({
       try {
         const userRef = doc(db, 'users', user.uid);
         await updateDoc(userRef, {
-          password: cleanCode,
+          pin: cleanCode,
           appLockCode: cleanCode,
+          password: cleanCode,
+          pinSet: true,
           isAppLocked: true,
           appLockResetRequested: false,
           appLockResetStatus: '',
           appLockUpdatedAt: new Date().toISOString()
         });
+        if (user) {
+          user.pin = cleanCode;
+          user.appLockCode = cleanCode;
+          user.password = cleanCode;
+          user.pinSet = true;
+        }
+        try {
+          localStorage.setItem('amb_user_pin', cleanCode);
+          localStorage.setItem('bnb_user_pin', cleanCode);
+        } catch (e) {}
       } catch (err) {
         console.error("Failed to save app lock code to Firestore:", err);
       }

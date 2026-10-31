@@ -853,11 +853,10 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
   };
 
   return (
-    <div className="bg-slate-50 min-h-screen text-slate-800 font-sans">
-      <div className="max-w-2xl mx-auto p-3.5 sm:p-4 space-y-4 sm:space-y-5 pb-28">
-        
-        {/* Green Top Header Section matching Home Dashboard - Generous top empty green space, ending right below announcement */}
-        <div className="-mx-3.5 -mt-3.5 sm:-mx-4 sm:-mt-4 bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] px-3.5 sm:px-4 pt-3.5 sm:pt-4.5 pb-2.5 text-white shadow-sm space-y-2.5 rounded-b-[28px] border-b border-emerald-700/60">
+    <div className="bg-[#0b6623] min-h-screen text-slate-800 font-sans flex flex-col">
+      {/* Green Top Header Section matching Home Dashboard */}
+      <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] px-3.5 sm:px-4 pt-2.5 pb-3 text-white shadow-sm space-y-2.5 rounded-b-[28px] border-b border-emerald-700/60 w-full z-20">
+        <div className="max-w-2xl mx-auto space-y-2.5">
           {/* Top Bar Controls */}
           <div className="flex items-center justify-between gap-1 w-full flex-nowrap">
             <div className="flex items-center gap-1.5">
@@ -945,8 +944,9 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
             </div>
           </div>
         </div>
+      </header>
 
-        {/* Section Specific Notices (Green Background, White Text) */}
+      <main className="flex-grow bg-slate-50 w-full max-w-2xl mx-auto p-3.5 sm:p-4 space-y-4 sm:space-y-5 pb-28">
         {(() => {
           const dealNotices = allNotices.filter(n => n.section === 'safe_deal');
           if (dealNotices.length === 0) return null;
@@ -1235,8 +1235,6 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
             </div>
           )}
         </div>
-
-      </div>
 
       {/* MODAL I: টাকা পাঠান (Send secure money form) */}
       <AnimatePresence>
@@ -2585,6 +2583,7 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
             </motion.div>
           </div>
         )}
+      </AnimatePresence>
 
         {/* ================= LOCALIZED ESCROW TRANSACTION HISTORY MODAL ================= */}
         {showSectionTxHistory && (
@@ -2707,8 +2706,7 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
-
+      </main>
     </div>
   );
 });

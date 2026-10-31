@@ -40,29 +40,71 @@ if (typeof window !== 'undefined') {
   }
 }
 
+function isFakeOrTemporaryUid(uid?: string | null): boolean {
+  if (!uid) return true;
+  const trimmed = String(uid).trim();
+  return !trimmed || trimmed.startsWith('user_member_') || trimmed.startsWith('user_fallback_');
+}
+
+function isCorruptedFallbackUser(u: any): boolean {
+  if (!u || typeof u !== 'object') return true;
+  if (isFakeOrTemporaryUid(u.uid)) return true;
+  if (u.name === 'BNB Member' && (!u.phone || String(u.phone).trim().length < 5)) return true;
+  const hasIdentity = Boolean(
+    (u.phone && String(u.phone).trim().length >= 5) ||
+    (u.email && String(u.email).includes('@')) ||
+    u.role === 'admin' ||
+    u.uid === 'admin_master' ||
+    (u.memberId && u.memberId !== 'BNB00000000' && u.memberId !== 'BNB000000' && u.memberId !== 'N/A')
+  );
+  return !hasIdentity;
+}
+
 function getStoredLocalUser(): User | null {
   if (typeof window === 'undefined') return null;
-  const rememberedUid = localStorage.getItem('amb_user_uid');
+  const rawRememberedUid = localStorage.getItem('amb_user_uid');
+  const rememberedUid = !isFakeOrTemporaryUid(rawRememberedUid) ? rawRememberedUid : null;
+
+  // Clean up any previously corrupted fake UID in localStorage
+  if (rawRememberedUid && isFakeOrTemporaryUid(rawRememberedUid)) {
+    try { localStorage.removeItem('amb_user_uid'); } catch (e) {}
+  }
+
   const lastUserRaw = localStorage.getItem('amb_last_user') || localStorage.getItem('bnb_last_user');
   if (lastUserRaw) {
     try {
       const parsed = JSON.parse(lastUserRaw);
-      if (parsed && (parsed.uid || rememberedUid)) {
-        return { ...parsed, uid: rememberedUid || parsed.uid };
+      if (parsed && !isCorruptedFallbackUser(parsed)) {
+        const effectiveUid = !isFakeOrTemporaryUid(parsed.uid) ? parsed.uid : rememberedUid;
+        if (effectiveUid) {
+          const storedBal = Number(localStorage.getItem('amb_user_balance') || '0');
+          const parsedBal = getEffectiveBalance(parsed);
+          const finalBal = parsedBal > 0 ? parsedBal : (storedBal > 0 ? storedBal : 0);
+          return {
+            ...parsed,
+            uid: effectiveUid,
+            balance: finalBal,
+            mainBalance: finalBal
+          };
+        }
+      } else if (parsed && isCorruptedFallbackUser(parsed)) {
+        try { localStorage.removeItem('amb_last_user'); } catch (e) {}
       }
     } catch (e) {}
   }
+
   const rememberedPhone = localStorage.getItem('amb_user_phone');
-  if (rememberedPhone) {
+  if (rememberedPhone && rememberedPhone.trim().length >= 5) {
     const finalUid = rememberedUid || ('user_' + rememberedPhone.replace(/\D/g, ''));
+    const storedBal = Number(localStorage.getItem('amb_user_balance') || '0');
     return {
       uid: finalUid,
       name: localStorage.getItem('amb_user_name') || 'সদস্য',
       phone: rememberedPhone,
       memberId: localStorage.getItem('bnb_user_member_id') || localStorage.getItem('amb_user_member_id') || 'BNB00000000',
       role: (localStorage.getItem('amb_user_role') as any) || 'user',
-      balance: Number(localStorage.getItem('amb_user_balance') || '0'),
-      mainBalance: Number(localStorage.getItem('amb_user_balance') || '0'),
+      balance: storedBal,
+      mainBalance: storedBal,
       savings: Number(localStorage.getItem('amb_user_savings') || '0'),
       telecomBalance: Number(localStorage.getItem('amb_user_telecom_balance') || '0'),
       superShopBalance: Number(localStorage.getItem('amb_user_super_shop_balance') || '0'),
@@ -74,7 +116,7 @@ function getStoredLocalUser(): User | null {
     };
   }
 
-  // Check server-issued session cookies (for cross-context return from payment gateways)
+  // Check server-issued session cookies ONLY if they contain a real UID or phone
   try {
     const rawCookies = typeof document !== 'undefined' ? (document.cookie || '') : '';
     if (rawCookies) {
@@ -84,32 +126,25 @@ function getStoredLocalUser(): User | null {
       };
       const cookieUid = getCookieVal('bnb_active_uid');
       const cookiePhone = getCookieVal('bnb_active_phone');
-      const cookieName = getCookieVal('bnb_active_name') || 'সদস্য';
-      const cookieMemberId = getCookieVal('bnb_active_member_id') || 'BNB00000000';
-      const hasPaymentCookie = rawCookies.includes('bnb_payment_in_progress');
+      const cookieName = getCookieVal('bnb_active_name') || localStorage.getItem('amb_user_name') || 'সদস্য';
+      const cookieMemberId = getCookieVal('bnb_active_member_id') || localStorage.getItem('bnb_user_member_id') || 'BNB00000000';
 
-      if (cookieUid || cookiePhone || hasPaymentCookie) {
-        const resolvedUid = cookieUid || (cookiePhone ? 'user_' + cookiePhone.replace(/\D/g, '') : ('user_member_' + Date.now().toString().slice(-6)));
-        try {
-          localStorage.setItem('amb_user_uid', resolvedUid);
-          if (cookiePhone) localStorage.setItem('amb_user_phone', cookiePhone);
-          localStorage.setItem('amb_user_name', cookieName);
-          localStorage.setItem('bnb_user_member_id', cookieMemberId);
-          sessionStorage.setItem('amb_session_unlocked', 'true');
-        } catch (e) {}
+      if ((!isFakeOrTemporaryUid(cookieUid) && cookieUid && cookiePhone && cookiePhone.trim().length >= 5) || (cookiePhone && cookiePhone.trim().length >= 5)) {
+        const resolvedUid = (!isFakeOrTemporaryUid(cookieUid) && cookieUid) ? cookieUid : ('user_' + cookiePhone.replace(/\D/g, ''));
+        const storedBal = Number(localStorage.getItem('amb_user_balance') || '0');
         return {
           uid: resolvedUid,
           name: cookieName,
           phone: cookiePhone || '',
           memberId: cookieMemberId,
           role: 'user',
-          balance: Number(localStorage.getItem('amb_user_balance') || '0'),
-          mainBalance: Number(localStorage.getItem('amb_user_balance') || '0'),
+          balance: storedBal,
+          mainBalance: storedBal,
           savings: Number(localStorage.getItem('amb_user_savings') || '0'),
           telecomBalance: 0,
           superShopBalance: 0,
           dueLoan: 0,
-          pin: '0000',
+          pin: localStorage.getItem('amb_user_pin') || '0000',
           createdAt: new Date().toISOString(),
           status: 'active',
           samityStatus: 'none'
@@ -118,33 +153,6 @@ function getStoredLocalUser(): User | null {
     }
   } catch (e) {}
 
-  // Check if returning from online payment or deep link
-  try {
-    const search = window.location.search || '';
-    const path = window.location.pathname.toLowerCase();
-    const hasPendingPaymentInvoice = Boolean(localStorage.getItem('amb_pending_zinipay_invoice'));
-    const isPaymentUrl = path.includes('/payment') || path.includes('/dashboard') || path.includes('/wallet') || search.includes('status=') || search.includes('val_id=') || search.includes('payment_status=') || hasPendingPaymentInvoice;
-    if (isPaymentUrl) {
-      const urlParams = new URLSearchParams(search);
-      const urlUid = urlParams.get('uid') || urlParams.get('userId') || urlParams.get('customer_id') || '';
-      const fallbackUid = urlUid || rememberedUid || ('user_member_' + Date.now().toString().slice(-6));
-      return {
-        uid: fallbackUid,
-        name: localStorage.getItem('amb_user_name') || 'সদস্য',
-        phone: localStorage.getItem('amb_user_phone') || '',
-        memberId: localStorage.getItem('bnb_user_member_id') || 'BNB00000000',
-        role: 'user',
-        balance: Number(localStorage.getItem('amb_user_balance') || '0'),
-        mainBalance: Number(localStorage.getItem('amb_user_balance') || '0'),
-        pin: localStorage.getItem('amb_user_pin') || '0000',
-        savings: Number(localStorage.getItem('amb_user_savings') || '0'),
-        dueLoan: Number(localStorage.getItem('amb_user_due_loan') || '0'),
-        createdAt: new Date().toISOString(),
-        status: 'active',
-        samityStatus: 'none'
-      };
-    }
-  } catch (e) {}
   return null;
 }
 
@@ -156,13 +164,13 @@ export default function App() {
       if (typeof window !== 'undefined') {
         const path = window.location.pathname.toLowerCase();
         const search = window.location.search.toLowerCase();
+        const hasPendingInvoice = Boolean(localStorage.getItem('amb_pending_zinipay_invoice'));
         if (
           search.includes('status=') ||
           search.includes('payment_status=') ||
           search.includes('val_id=') ||
           path.includes('/payment/result') ||
-          path.includes('/dashboard') ||
-          path.includes('/wallet')
+          hasPendingInvoice
         ) {
           sessionStorage.setItem('amb_session_unlocked', 'true');
           return false;
@@ -187,9 +195,15 @@ export default function App() {
       if (typeof window !== 'undefined') {
         const path = window.location.pathname.toLowerCase();
         const search = window.location.search.toLowerCase();
-        const isPaymentRedirect = path.includes('/payment/result') || path.includes('/dashboard') || search.includes('status=') || search.includes('val_id=') || search.includes('payment_status=');
+        const hasPendingInvoice = Boolean(localStorage.getItem('amb_pending_zinipay_invoice'));
+        const isPaymentRedirect =
+          path.includes('/payment') ||
+          search.includes('status=') ||
+          search.includes('val_id=') ||
+          search.includes('payment_status=') ||
+          hasPendingInvoice;
         const existingUser = getStoredLocalUser();
-        return Boolean(isPaymentRedirect && (!existingUser || !existingUser.phone));
+        return Boolean(isPaymentRedirect && !existingUser);
       }
     } catch (e) {}
     return false;
@@ -199,28 +213,14 @@ export default function App() {
       const timer = setTimeout(() => {
         setIsRestoringPaymentSession(false);
         setCurrentUser(prev => {
-          if (prev) return prev;
+          if (prev && !isCorruptedFallbackUser(prev)) return prev;
           const u = getStoredLocalUser();
-          if (u) return u;
-          return {
-            uid: localStorage.getItem('amb_user_uid') || ('user_member_' + Date.now().toString().slice(-6)),
-            name: localStorage.getItem('amb_user_name') || 'সদস্য',
-            phone: localStorage.getItem('amb_user_phone') || '',
-            memberId: localStorage.getItem('bnb_user_member_id') || 'BNB00000000',
-            role: 'user',
-            balance: 0,
-            mainBalance: 0,
-            pin: '0000',
-            savings: 0,
-            dueLoan: 0,
-            createdAt: new Date().toISOString(),
-            status: 'active',
-            samityStatus: 'none'
-          };
+          if (u && !isCorruptedFallbackUser(u)) return u;
+          return prev;
         });
         setActiveTab('home');
         setTabHistory(['home']);
-      }, 1500);
+      }, 3500);
       return () => clearTimeout(timer);
     }
   }, [isRestoringPaymentSession]);
@@ -283,22 +283,146 @@ export default function App() {
   // Authoritative live balance refresher from Firestore
   const syncFreshUserBalance = useCallback(async (pAmount?: number, pTrxId?: string) => {
     const storedUid = localStorage.getItem('amb_user_uid');
-    if (!storedUid) return;
+    if (!storedUid || isFakeOrTemporaryUid(storedUid)) return;
     try {
       const snap = await getDoc(doc(db, 'users', storedUid));
       if (snap.exists()) {
-        const uData = snap.data() as User;
+        const uData = { ...(snap.data() as User), uid: snap.id };
         const effectiveBal = getEffectiveBalance(uData);
         uData.balance = effectiveBal;
         (uData as any).mainBalance = effectiveBal;
-        setCurrentUser((prev) => prev ? { ...prev, ...uData, balance: effectiveBal, mainBalance: effectiveBal } : null);
+        setCurrentUser((prev) => prev ? { ...prev, ...uData, balance: effectiveBal, mainBalance: effectiveBal } : uData);
         localStorage.setItem('amb_user_balance', String(effectiveBal));
+        localStorage.setItem('amb_last_user', JSON.stringify(uData));
+        saveUserToLocalBackup(uData);
         window.dispatchEvent(new CustomEvent('amb_admin_sync_tick', { detail: { time: Date.now() } }));
         window.dispatchEvent(new CustomEvent('bnb_balance_updated', { detail: { amount: pAmount || 0, newBalance: effectiveBal } }));
       }
     } catch (e) {
       console.warn('Live balance refresh error:', e);
     }
+  }, []);
+
+  // Authoritative User Session Restorer from Server + Firestore (by valId, uid, phone, or device backup)
+  const restoreRealUserSession = useCallback(async (valId?: string, urlUid?: string, urlToken?: string): Promise<User | null> => {
+    let targetValId = valId || '';
+    let targetUid = (!isFakeOrTemporaryUid(urlUid) ? urlUid : '') || '';
+    let targetPhone = localStorage.getItem('amb_user_phone') || '';
+
+    try {
+      const pendingRaw = localStorage.getItem('amb_pending_zinipay_invoice');
+      if (pendingRaw) {
+        const pendingParsed = JSON.parse(pendingRaw);
+        if (!targetValId && pendingParsed?.val_id) targetValId = pendingParsed.val_id;
+        if (!targetUid && pendingParsed?.userId && !isFakeOrTemporaryUid(pendingParsed.userId)) {
+          targetUid = pendingParsed.userId;
+        }
+        if (!targetPhone && pendingParsed?.phone) targetPhone = pendingParsed.phone;
+      }
+    } catch (e) {}
+
+    if (!targetUid) {
+      const remUid = localStorage.getItem('amb_user_uid');
+      if (remUid && !isFakeOrTemporaryUid(remUid)) targetUid = remUid;
+    }
+
+    const persistAndReturnUser = (rawUser: any): User => {
+      const effectiveBal = getEffectiveBalance(rawUser);
+      const normalizedUser: User = {
+        ...rawUser,
+        uid: rawUser.uid || targetUid,
+        balance: effectiveBal,
+        mainBalance: effectiveBal
+      };
+      try {
+        localStorage.setItem('amb_user_uid', normalizedUser.uid);
+        if (normalizedUser.phone) localStorage.setItem('amb_user_phone', normalizedUser.phone);
+        if (normalizedUser.name) localStorage.setItem('amb_user_name', normalizedUser.name);
+        if (normalizedUser.role) localStorage.setItem('amb_user_role', normalizedUser.role);
+        if (normalizedUser.memberId) {
+          localStorage.setItem('bnb_user_member_id', normalizedUser.memberId);
+          localStorage.setItem('amb_user_member_id', normalizedUser.memberId);
+        }
+        localStorage.setItem('amb_user_balance', String(effectiveBal));
+        localStorage.setItem('amb_last_user', JSON.stringify(normalizedUser));
+        saveUserToLocalBackup(normalizedUser);
+      } catch (e) {}
+      return normalizedUser;
+    };
+
+    // 1. Try server-side /api/payment/restore-session first
+    if (targetValId || targetUid || urlToken) {
+      try {
+        const res = await fetch(apiUrl('/api/payment/restore-session'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ val_id: targetValId, uid: targetUid, token: urlToken || '' })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.success && data.user && !isCorruptedFallbackUser(data.user)) {
+            return persistAndReturnUser(data.user);
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 2. Direct client-side Firestore lookup by targetUid
+    try {
+      await ensureAuth().catch(() => {});
+      if (targetUid && !isFakeOrTemporaryUid(targetUid)) {
+        const uSnap = await getDoc(doc(db, 'users', targetUid));
+        if (uSnap.exists()) {
+          return persistAndReturnUser({ ...uSnap.data(), uid: uSnap.id });
+        }
+      }
+
+      // 3. Direct client-side Firestore lookup via deposits/{targetValId} or zinipay_invoices/{targetValId}
+      if (targetValId) {
+        let depData: any = null;
+        const depSnap = await getDoc(doc(db, 'deposits', targetValId));
+        if (depSnap.exists()) {
+          depData = depSnap.data();
+        } else {
+          const invSnap = await getDoc(doc(db, 'zinipay_invoices', targetValId));
+          if (invSnap.exists()) depData = invSnap.data();
+        }
+
+        if (depData) {
+          const depUid = depData.userId || depData.uid || '';
+          const depPhone = depData.userPhone || depData.phone || '';
+          if (depUid && !isFakeOrTemporaryUid(depUid)) {
+            const uSnap = await getDoc(doc(db, 'users', depUid));
+            if (uSnap.exists()) {
+              return persistAndReturnUser({ ...uSnap.data(), uid: uSnap.id });
+            }
+          }
+          if (depPhone) {
+            const foundByPhone = await findUserInFirestoreByPhone(db, depPhone);
+            if (foundByPhone && foundByPhone.data) {
+              return persistAndReturnUser({ ...foundByPhone.data, uid: foundByPhone.id });
+            }
+          }
+        }
+      }
+
+      // 4. Lookup by phone if available
+      if (targetPhone && targetPhone.trim().length >= 5) {
+        const foundByPhone = await findUserInFirestoreByPhone(db, targetPhone);
+        if (foundByPhone && foundByPhone.data) {
+          return persistAndReturnUser({ ...foundByPhone.data, uid: foundByPhone.id });
+        }
+      }
+    } catch (e) {
+      console.warn('Client-side restoreRealUserSession fallback error:', e);
+    }
+
+    // 5. Final fallback to stored local user or device-bound backup (never a fake user)
+    const local = getStoredLocalUser();
+    if (local && !isCorruptedFallbackUser(local)) {
+      return local;
+    }
+    return null;
   }, []);
 
   // Polling Engine: Poll backend every 3 seconds up to 2 minutes (40 attempts)
@@ -392,34 +516,212 @@ export default function App() {
 
   // Multi-platform Payment Handshake: Supports Web URL (/payment/result?status=..., /wallet?status=...), Android App Links & App Resume
   useEffect(() => {
+    // Handle in-app silent cancellation/failure event from JenifyPaymentGateway
+    const handleInAppPaymentCancelledOrFailed = (e: any) => {
+      const detail = e?.detail || {};
+      const status = detail.status === 'cancelled' ? 'cancelled' : 'failed';
+      try {
+        localStorage.removeItem('amb_pending_zinipay_invoice');
+        localStorage.removeItem('amb_zinipay_redirect_active');
+      } catch (err) {}
+      setSelectedAction(null);
+      setActiveTab('home');
+      setTabHistory(['home']);
+      setPaymentNotice({
+        status,
+        gateway: 'ZiniPay',
+        error: status === 'cancelled' ? undefined : 'পেমেন্ট সম্পন্ন হতে পারেনি।'
+      });
+      setPaymentToast({
+        message: status === 'cancelled'
+          ? 'পেমেন্ট বাতিল করা হয়েছে। আপনার কোনো টাকা কাটা হয়নি।'
+          : 'পেমেন্ট সম্পন্ন হতে পারেনি। অনুগ্রহ করে আবার চেষ্টা করুন।',
+        type: status === 'cancelled' ? 'cancel' : 'error'
+      });
+      syncFreshUserBalance();
+      try {
+        window.dispatchEvent(new CustomEvent('bnb_reveal_dashboard_balance'));
+      } catch (err) {}
+    };
+    window.addEventListener('bnb_payment_cancelled_or_failed', handleInAppPaymentCancelledOrFailed);
+
+    // Handle payment discovered as completed upon returning to Dashboard via Back button
+    const handlePaymentCompletedOnReturn = (e: any) => {
+      const detail = e?.detail || {};
+      const confirmedAmount = Number(detail.amount || 0);
+      const confirmedTrx = detail.trxId || '';
+      try {
+        localStorage.removeItem('amb_pending_zinipay_invoice');
+        localStorage.removeItem('amb_zinipay_redirect_active');
+      } catch (err) {}
+      setSelectedAction(null);
+      setActiveTab('home');
+      setTabHistory(['home']);
+      setPaymentNotice({
+        status: 'success',
+        amount: confirmedAmount,
+        trxId: confirmedTrx,
+        gateway: 'ZiniPay'
+      });
+      setPaymentToast({
+        message: 'আপনার অনলাইন পেমেন্ট সফল হয়েছে এবং ওয়ালেট ব্যালেন্সে যোগ হয়েছে!',
+        type: 'success'
+      });
+      syncFreshUserBalance(confirmedAmount, confirmedTrx);
+      try {
+        window.dispatchEvent(new CustomEvent('bnb_reveal_dashboard_balance'));
+      } catch (err) {}
+    };
+    window.addEventListener('bnb_payment_completed_on_return', handlePaymentCompletedOnReturn);
+
+    // Global listener: 100% Guaranteed return to dashboard from payment or website back
+    const handleForceReturnToDashboard = () => {
+      try {
+        localStorage.removeItem('amb_zinipay_redirect_active');
+        localStorage.removeItem('amb_pending_zinipay_invoice');
+      } catch (e) {}
+      sessionStorage.setItem('amb_session_unlocked', 'true');
+      setIsLocked(false);
+      setShowSplash(false);
+      setIsRestoringPaymentSession(false);
+      setActiveTab('home');
+      setTabHistory(['home']);
+      setSelectedAction(null);
+      setDrawerOpen(false);
+      if (typeof window !== 'undefined') {
+        try {
+          window.history.replaceState({ amb_root: true }, '', '/dashboard');
+        } catch (e) {}
+      }
+      try {
+        window.dispatchEvent(new CustomEvent('bnb_reveal_dashboard_balance'));
+      } catch (e) {}
+    };
+    window.addEventListener('bnb_force_return_to_dashboard', handleForceReturnToDashboard);
+
+    // Helper to reconcile when user presses Back from external ZiniPay payment method page without ?status= params
+    const checkBackFromGatewayWithoutParams = () => {
+      try {
+        const redirectTs = Number(localStorage.getItem('amb_zinipay_redirect_active') || '0');
+        const pendingRaw = localStorage.getItem('amb_pending_zinipay_invoice');
+        if (!redirectTs && !pendingRaw) return;
+        if (redirectTs > 0 && Date.now() - redirectTs < 600) return;
+
+        localStorage.removeItem('amb_zinipay_redirect_active');
+        sessionStorage.setItem('amb_session_unlocked', 'true');
+        setIsLocked(false);
+        setShowSplash(false);
+        setActiveTab('home');
+        setTabHistory(['home']);
+        setSelectedAction(null);
+
+        const pendingInv = pendingRaw ? JSON.parse(pendingRaw) : null;
+        const pValId = pendingInv?.val_id || pendingInv?.invoice_id || '';
+        const storedUid = localStorage.getItem('amb_user_uid') || '';
+
+        restoreRealUserSession(pValId, storedUid).then(freshUser => {
+          if (freshUser && !isCorruptedFallbackUser(freshUser)) {
+            setCurrentUser(freshUser);
+          } else {
+            syncFreshUserBalance();
+          }
+          try {
+            window.dispatchEvent(new CustomEvent('bnb_reveal_dashboard_balance'));
+          } catch (err) {}
+        }).catch(() => {});
+
+        if (pValId) {
+          fetch(apiUrl('/api/payment/check-status'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              val_id: pendingInv?.val_id || pValId,
+              invoice_id: pendingInv?.invoice_id || pValId,
+              userId: storedUid
+            })
+          })
+            .then(r => r.json())
+            .then(data => {
+              if (data && data.success && data.status === 'completed') {
+                try { localStorage.removeItem('amb_pending_zinipay_invoice'); } catch (e) {}
+                const confirmedAmount = Number(data.amount || pendingInv?.amount || 0);
+                const confirmedTrx = data.trxId || pValId;
+                setPaymentNotice({
+                  status: 'success',
+                  amount: confirmedAmount,
+                  trxId: confirmedTrx,
+                  gateway: 'ZiniPay'
+                });
+                setPaymentToast({
+                  message: 'আপনার অনলাইন পেমেন্ট সফল হয়েছে এবং ওয়ালেট ব্যালেন্সে যোগ হয়েছে!',
+                  type: 'success'
+                });
+                syncFreshUserBalance(confirmedAmount, confirmedTrx);
+              } else {
+                try { localStorage.removeItem('amb_pending_zinipay_invoice'); } catch (e) {}
+              }
+              try {
+                window.dispatchEvent(new CustomEvent('bnb_reveal_dashboard_balance'));
+              } catch (err) {}
+            })
+            .catch(() => {});
+        }
+      } catch (e) {}
+    };
+
+    const handlePageShowFromGateway = (ev?: PageTransitionEvent) => {
+      const hasStatusParam = window.location.search.includes('status=') || window.location.search.includes('payment_status=');
+      if (!hasStatusParam) {
+        checkBackFromGatewayWithoutParams();
+      }
+    };
+    window.addEventListener('pageshow', handlePageShowFromGateway);
+
     // 1. Web return & App Link URL handler
     if (typeof window !== 'undefined') {
       const search = window.location.search;
       const pathname = window.location.pathname.toLowerCase();
+      const hasPaymentSearchParams =
+        search.includes('status=') ||
+        search.includes('payment_status=') ||
+        search.includes('val_id=');
 
-      if (
+      if (!hasPaymentSearchParams && !pathname.includes('/payment/result')) {
+        // User returned to / or /dashboard via Browser Back button from ZiniPay payment method page
+        checkBackFromGatewayWithoutParams();
+      } else if (
         pathname.includes('/payment/result') ||
         pathname.includes('/wallet') ||
         pathname.includes('/dashboard') ||
-        search.includes('status=') ||
-        search.includes('payment_status=') ||
-        search.includes('val_id=')
+        hasPaymentSearchParams
       ) {
         try {
-          const urlParams = new URLSearchParams(search);
+          const cleanSearch = search.startsWith('?') ? '?' + search.slice(1).replace(/\?/g, '&') : search;
+          const urlParams = new URLSearchParams(cleanSearch);
           const rawStatus = (urlParams.get('status') || urlParams.get('payment_status') || '').toLowerCase();
-          const valId = urlParams.get('val_id') || urlParams.get('valId') || urlParams.get('invoice_id') || '';
+          const valId = urlParams.get('val_id') || urlParams.get('valId') || urlParams.get('invoice_id') || urlParams.get('invoiceId') || '';
           const urlUid = urlParams.get('uid') || '';
           const urlToken = urlParams.get('token') || '';
           const targetOrigin = urlParams.get('origin') || '';
+
+          if (hasPaymentSearchParams && window.parent && window.parent !== window) {
+            try {
+              window.parent.postMessage({
+                type: 'BNB_PAYMENT_IFRAME_RESULT',
+                status: rawStatus || 'cancelled',
+                val_id: valId,
+                uid: urlUid
+              }, '*');
+            } catch (e) {}
+          }
 
           if (targetOrigin && targetOrigin.startsWith('http') && typeof window !== 'undefined') {
             try {
               const currentHost = window.location.hostname;
               const targetUrl = new URL(targetOrigin);
-              if (targetUrl.hostname !== currentHost && !currentHost.includes('localhost') && !targetUrl.hostname.includes('businessnetworkbangladesh.com')) {
-                const newSearch = search.replace(/[?&]origin=[^&]+/, '');
-                const targetFull = `${targetOrigin.replace(/\/$/, '')}/payment/result${newSearch ? (newSearch.startsWith('?') ? newSearch : `?${newSearch}`) : ''}`;
+              if (targetUrl.hostname !== currentHost) {
+                const newSearch = cleanSearch.replace(/[?&]origin=[^&]+/, '');
+                const targetFull = `${targetOrigin.replace(/\/$/, '')}/dashboard${newSearch ? (newSearch.startsWith('?') ? newSearch : `?${newSearch}`) : ''}`;
                 window.location.replace(targetFull);
                 return;
               }
@@ -431,28 +733,14 @@ export default function App() {
           setIsLocked(false);
           setShowSplash(false);
 
-          const applyUserAndNavigate = (user: User | null) => {
-            const finalUser: User = user || localUser || {
-              uid: urlUid || valId || ('user_member_' + Date.now().toString().slice(-6)),
-              name: localStorage.getItem('amb_user_name') || 'সদস্য',
-              phone: localStorage.getItem('amb_user_phone') || '',
-              memberId: localStorage.getItem('bnb_user_member_id') || 'BNB00000000',
-              role: 'user',
-              balance: Number(localStorage.getItem('amb_user_balance') || '0'),
-              mainBalance: Number(localStorage.getItem('amb_user_balance') || '0'),
-              pin: localStorage.getItem('amb_user_pin') || '0000',
-              savings: Number(localStorage.getItem('amb_user_savings') || '0'),
-              dueLoan: Number(localStorage.getItem('amb_user_due_loan') || '0'),
-              createdAt: new Date().toISOString(),
-              status: 'active',
-              samityStatus: 'none'
-            };
-
-            setCurrentUser(finalUser);
-            setIsRestoringPaymentSession(false);
+          const applyPaymentStatusNotices = () => {
             setActiveTab('home');
             setTabHistory(['home']);
             setSelectedAction(null);
+            try {
+              localStorage.removeItem('amb_zinipay_redirect_active');
+              window.dispatchEvent(new CustomEvent('bnb_reveal_dashboard_balance'));
+            } catch (e) {}
 
             if (rawStatus === 'success') {
               startPaymentPolling(valId);
@@ -466,7 +754,26 @@ export default function App() {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ val_id: valId, status: 'cancelled' })
-                }).catch(() => {});
+                })
+                  .then(r => r.json())
+                  .then(data => {
+                    if (data && data.success && data.status === 'completed') {
+                      const confirmedAmount = Number(data.amount || 0);
+                      const confirmedTrx = data.trxId || valId;
+                      setPaymentNotice({
+                        status: 'success',
+                        amount: confirmedAmount,
+                        trxId: confirmedTrx,
+                        gateway: 'ZiniPay'
+                      });
+                      setPaymentToast({
+                        message: 'আপনার অনলাইন পেমেন্ট সফল হয়েছে এবং ওয়ালেট ব্যালেন্সে যোগ হয়েছে!',
+                        type: 'success'
+                      });
+                      syncFreshUserBalance(confirmedAmount, confirmedTrx);
+                    }
+                  })
+                  .catch(() => {});
               }
               try { localStorage.removeItem('amb_pending_zinipay_invoice'); } catch (e) {}
               setPaymentNotice({
@@ -478,6 +785,7 @@ export default function App() {
                 type: 'cancel'
               });
             } else if (rawStatus === 'failed') {
+              try { localStorage.removeItem('amb_pending_zinipay_invoice'); } catch (e) {}
               setPaymentNotice({
                 status: 'failed',
                 error: urlParams.get('error') || 'পেমেন্ট সম্পন্ন হতে পারেনি।',
@@ -494,53 +802,36 @@ export default function App() {
             window.history.pushState({ amb_active: true }, '');
           };
 
-          // Check if user is already available in localStorage with full profile
-          const localUser = currentUser || getStoredLocalUser();
-          if (localUser && localUser.phone && localUser.phone.length > 5) {
-            applyUserAndNavigate(localUser);
-          } else {
-            // Restore user session from server via val_id, uid, or pending invoice
-            let targetRestoreUid = urlUid;
-            let targetRestoreValId = valId;
-            try {
-              const pendingRaw = localStorage.getItem('amb_pending_zinipay_invoice');
-              if (pendingRaw) {
-                const pendingParsed = JSON.parse(pendingRaw);
-                if (!targetRestoreValId && pendingParsed?.val_id) targetRestoreValId = pendingParsed.val_id;
-                if (!targetRestoreUid && pendingParsed?.userId) targetRestoreUid = pendingParsed.userId;
-              }
-            } catch (e) {}
-            if (!targetRestoreUid) {
-              targetRestoreUid = localStorage.getItem('amb_user_uid') || '';
-            }
+          const existingLocalUser = (currentUser && !isCorruptedFallbackUser(currentUser))
+            ? currentUser
+            : getStoredLocalUser();
 
-            if (targetRestoreValId || targetRestoreUid) {
-              fetch(apiUrl('/api/payment/restore-session'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ val_id: targetRestoreValId, uid: targetRestoreUid, token: urlToken })
-              })
-              .then(r => r.json())
-              .then(data => {
-                if (data && data.success && data.user) {
-                  const u = data.user;
-                  localStorage.setItem('amb_user_uid', u.uid);
-                  if (u.phone) localStorage.setItem('amb_user_phone', u.phone);
-                  if (u.name) localStorage.setItem('amb_user_name', u.name);
-                  if (u.role) localStorage.setItem('amb_user_role', u.role);
-                  if (u.memberId) localStorage.setItem('bnb_user_member_id', u.memberId);
-                  localStorage.setItem('amb_last_user', JSON.stringify(u));
-                  applyUserAndNavigate(u);
-                } else {
-                  applyUserAndNavigate(localUser);
+          if (existingLocalUser && !isCorruptedFallbackUser(existingLocalUser)) {
+            setCurrentUser(existingLocalUser);
+            setIsRestoringPaymentSession(false);
+            applyPaymentStatusNotices();
+            // Also refresh authoritative balance from Firestore / server in background
+            restoreRealUserSession(valId, urlUid || existingLocalUser.uid, urlToken).then(freshUser => {
+              if (freshUser && !isCorruptedFallbackUser(freshUser)) {
+                setCurrentUser(freshUser);
+              } else {
+                syncFreshUserBalance();
+              }
+            }).catch(() => {});
+          } else {
+            // No valid local user in memory yet: hold in restoring state (never flash LoginScreen or fake 0 balance)
+            setIsRestoringPaymentSession(true);
+            applyPaymentStatusNotices();
+            restoreRealUserSession(valId, urlUid, urlToken)
+              .then(restored => {
+                if (restored && !isCorruptedFallbackUser(restored)) {
+                  setCurrentUser(restored);
                 }
+                setIsRestoringPaymentSession(false);
               })
               .catch(() => {
-                applyUserAndNavigate(localUser);
+                setIsRestoringPaymentSession(false);
               });
-            } else {
-              applyUserAndNavigate(localUser);
-            }
           }
         } catch (e) {
           console.warn('Error reading payment status params:', e);
@@ -557,7 +848,13 @@ export default function App() {
       CapApp.addListener('appUrlOpen', (event) => {
         try {
           const rawUrl = event?.url || '';
-          if (rawUrl.includes('status=') || rawUrl.includes('payment') || rawUrl.includes('wallet') || rawUrl.includes('dashboard')) {
+          if (
+            rawUrl.includes('status=') ||
+            rawUrl.includes('payment') ||
+            rawUrl.includes('zinipay') ||
+            rawUrl.includes('wallet') ||
+            rawUrl.includes('dashboard')
+          ) {
             const cleanUrl = rawUrl.replace('bnbnetwork://', 'https://businessnetworkbangladesh.com/');
             const parsed = new URL(cleanUrl);
             const rawStatus = (parsed.searchParams.get('status') || parsed.searchParams.get('payment_status') || '').toLowerCase();
@@ -569,32 +866,18 @@ export default function App() {
             setIsLocked(false);
             setShowSplash(false);
 
-            const applyNativeUserAndNavigate = (user: User | null) => {
-              const finalUser: User = user || localUser || {
-                uid: urlUid || valId || ('user_member_' + Date.now().toString().slice(-6)),
-                name: localStorage.getItem('amb_user_name') || 'সদস্য',
-                phone: localStorage.getItem('amb_user_phone') || '',
-                memberId: localStorage.getItem('bnb_user_member_id') || 'BNB00000000',
-                role: 'user',
-                balance: Number(localStorage.getItem('amb_user_balance') || '0'),
-                mainBalance: Number(localStorage.getItem('amb_user_balance') || '0'),
-                pin: localStorage.getItem('amb_user_pin') || '0000',
-                savings: Number(localStorage.getItem('amb_user_savings') || '0'),
-                dueLoan: Number(localStorage.getItem('amb_user_due_loan') || '0'),
-                createdAt: new Date().toISOString(),
-                status: 'active',
-                samityStatus: 'none'
-              };
+            try {
+              Browser.close().catch(() => {});
+            } catch (e) {}
 
-              setCurrentUser(finalUser);
-              setIsRestoringPaymentSession(false);
+            const applyNativePaymentNotices = () => {
               setActiveTab('home');
               setTabHistory(['home']);
               setSelectedAction(null);
 
               if (rawStatus === 'success' || cleanUrl.includes('payment-success')) {
                 startPaymentPolling(valId);
-              } else if (rawStatus === 'cancel' || rawStatus === 'cancelled' || cleanUrl.includes('payment-cancel')) {
+              } else if (rawStatus === 'cancel' || rawStatus === 'cancelled' || cleanUrl.includes('payment-cancel') || cleanUrl.includes('zinipay-cancel')) {
                 if (valId) {
                   fetch(apiUrl('/api/payment/check-status'), {
                     method: 'POST',
@@ -608,6 +891,7 @@ export default function App() {
                   gateway: 'ZiniPay'
                 });
               } else if (rawStatus === 'failed' || cleanUrl.includes('payment-failed')) {
+                try { localStorage.removeItem('amb_pending_zinipay_invoice'); } catch (e) {}
                 setPaymentNotice({
                   status: 'failed',
                   error: 'পেমেন্ট গেটওয়েতে লেনদেনটি সম্পন্ন হয়নি।',
@@ -618,39 +902,34 @@ export default function App() {
               window.history.replaceState({ amb_root: true }, '', '/dashboard');
             };
 
-            try {
-              Browser.close().catch(() => {});
-            } catch (e) {}
+            const existingLocalUser = (currentUser && !isCorruptedFallbackUser(currentUser))
+              ? currentUser
+              : getStoredLocalUser();
 
-            const localUser = currentUser || getStoredLocalUser();
-            if (localUser && localUser.phone && localUser.phone.length > 5) {
-              applyNativeUserAndNavigate(localUser);
-            } else if (valId || urlUid) {
-              fetch(apiUrl('/api/payment/restore-session'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ val_id: valId, uid: urlUid, token: urlToken })
-              })
-              .then(r => r.json())
-              .then(data => {
-                if (data && data.success && data.user) {
-                  const u = data.user;
-                  localStorage.setItem('amb_user_uid', u.uid);
-                  if (u.phone) localStorage.setItem('amb_user_phone', u.phone);
-                  if (u.name) localStorage.setItem('amb_user_name', u.name);
-                  if (u.role) localStorage.setItem('amb_user_role', u.role);
-                  if (u.memberId) localStorage.setItem('bnb_user_member_id', u.memberId);
-                  localStorage.setItem('amb_last_user', JSON.stringify(u));
-                  applyNativeUserAndNavigate(u);
+            if (existingLocalUser && !isCorruptedFallbackUser(existingLocalUser)) {
+              setCurrentUser(existingLocalUser);
+              setIsRestoringPaymentSession(false);
+              applyNativePaymentNotices();
+              restoreRealUserSession(valId, urlUid || existingLocalUser.uid, urlToken).then(freshUser => {
+                if (freshUser && !isCorruptedFallbackUser(freshUser)) {
+                  setCurrentUser(freshUser);
                 } else {
-                  applyNativeUserAndNavigate(localUser);
+                  syncFreshUserBalance();
                 }
-              })
-              .catch(() => {
-                applyNativeUserAndNavigate(localUser);
-              });
+              }).catch(() => {});
             } else {
-              applyNativeUserAndNavigate(localUser);
+              setIsRestoringPaymentSession(true);
+              applyNativePaymentNotices();
+              restoreRealUserSession(valId, urlUid, urlToken)
+                .then(restored => {
+                  if (restored && !isCorruptedFallbackUser(restored)) {
+                    setCurrentUser(restored);
+                  }
+                  setIsRestoringPaymentSession(false);
+                })
+                .catch(() => {
+                  setIsRestoringPaymentSession(false);
+                });
             }
           }
         } catch (deepLinkErr) {
@@ -678,6 +957,10 @@ export default function App() {
     } catch (capErr) {}
 
     return () => {
+      window.removeEventListener('bnb_payment_cancelled_or_failed', handleInAppPaymentCancelledOrFailed);
+      window.removeEventListener('bnb_payment_completed_on_return', handlePaymentCompletedOnReturn);
+      window.removeEventListener('bnb_force_return_to_dashboard', handleForceReturnToDashboard);
+      window.removeEventListener('pageshow', handlePageShowFromGateway);
       if (paymentPollingRef.current) {
         clearInterval(paymentPollingRef.current);
         paymentPollingRef.current = null;
@@ -689,7 +972,7 @@ export default function App() {
         stateListenerSub.remove();
       }
     };
-  }, [syncFreshUserBalance, startPaymentPolling]);
+  }, [syncFreshUserBalance, startPaymentPolling, restoreRealUserSession]);
 
 
   // Real-time synchronization of the app configuration settings
@@ -1315,8 +1598,12 @@ export default function App() {
   useEffect(() => {
     async function initSession() {
       try {
-        // Load dynamic configuration settings
-        const config = await loadAppConfig();
+        // Run config fetch and anonymous auth in parallel for fastest possible boot
+        const [config, authUser] = await Promise.all([
+          loadAppConfig(),
+          ensureAuth()
+        ]);
+
         setAppConfig(config);
         try {
           localStorage.setItem('amb_app_config', JSON.stringify(config));
@@ -1324,29 +1611,28 @@ export default function App() {
           console.error("Failed to cache appConfig", e);
         }
 
-        // 1. Ensure authenticated user uid exists anonymously
-        const authUser = await ensureAuth();
         if (authUser) {
           setAuthUid(authUser.uid);
 
           // 2. Check for locally remembered session details or auto-login the first available profile
           const rememberedPhone = localStorage.getItem('amb_user_phone');
-          const rememberedUid = localStorage.getItem('amb_user_uid');
+          const rawRememberedUid = localStorage.getItem('amb_user_uid');
+          const rememberedUid = !isFakeOrTemporaryUid(rawRememberedUid) ? rawRememberedUid : '';
           const searchParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-          const urlUid = searchParams?.get('uid') || searchParams?.get('userId') || '';
+          const rawUrlUid = searchParams?.get('uid') || searchParams?.get('userId') || '';
+          const urlUid = !isFakeOrTemporaryUid(rawUrlUid) ? rawUrlUid : '';
           let invoiceUid = '';
           try {
             const invRaw = localStorage.getItem('amb_pending_zinipay_invoice');
             if (invRaw) {
               const inv = JSON.parse(invRaw);
-              if (inv?.userId) invoiceUid = inv.userId;
+              if (inv?.userId && !isFakeOrTemporaryUid(inv.userId)) invoiceUid = inv.userId;
             }
           } catch (e) {}
 
           const effectiveUid = rememberedUid || urlUid || invoiceUid;
           
           if (rememberedPhone || effectiveUid) {
-            // Retrieve actual details from Firestore under saved UID first, or fall back to authUID
             const targetUid = effectiveUid || authUser.uid;
             const userRef = doc(db, 'users', targetUid);
             let userSnap;
@@ -1360,21 +1646,24 @@ export default function App() {
               }
             }
 
+            let resolvedUserData: User | null = null;
             if (userSnap && userSnap.exists()) {
-              const userData = userSnap.data() as User;
-              const finalUserData = await autoPromoteAndReturnUser(userData);
+              resolvedUserData = { ...(userSnap.data() as User), uid: userSnap.id };
+            } else if (rememberedPhone && rememberedPhone.trim().length >= 5) {
+              try {
+                const foundByPhone = await findUserInFirestoreByPhone(db, rememberedPhone);
+                if (foundByPhone && foundByPhone.data) {
+                  resolvedUserData = { ...(foundByPhone.data as User), uid: foundByPhone.id };
+                }
+              } catch (e) {}
+            }
 
-              // Single Active Device Session check on app initialization
-              const localSessionToken = localStorage.getItem('amb_active_session_token');
-              const remoteSessionToken = finalUserData.activeSessionToken;
+            if (resolvedUserData) {
+              const finalUserData = await autoPromoteAndReturnUser(resolvedUserData);
 
-              if (!localSessionToken && remoteSessionToken) {
-                localStorage.setItem('amb_active_session_token', remoteSessionToken);
-              } else if (localSessionToken && remoteSessionToken && localSessionToken !== remoteSessionToken && finalUserData.role !== 'admin') {
-                console.warn("[Session Security] Token mismatch on startup: another device logged in.");
-                alert("আপনার অ্যাকাউন্টটি অন্য একটি ডিভাইসে নতুন করে লগইন করা হয়েছে। নিরাপত্তা স্বার্থে এই ডিভাইসটি লগআউট করা হলো।");
-                handleDirectLogout();
-                return;
+              // Multi-environment session support (Website Chrome Browser + Play Store App can run simultaneously)
+              if (finalUserData.activeSessionToken) {
+                localStorage.setItem('amb_active_session_token', finalUserData.activeSessionToken);
               }
 
               if (finalUserData.pin) {
@@ -1382,9 +1671,8 @@ export default function App() {
               }
               localStorage.setItem('amb_user_uid', finalUserData.uid);
               localStorage.setItem('amb_last_user', JSON.stringify(finalUserData));
+              saveUserToLocalBackup(finalUserData);
               setCurrentUser(finalUserData);
-              // Always lock so the user is asked for their PIN every single time they enter the software,
-              // EXCEPT when returning from online payment or unlocked session
               const isReturningFromPayment = 
                 window.location.pathname.toLowerCase().includes('/payment/result') ||
                 window.location.pathname.toLowerCase().includes('/dashboard') ||
@@ -1404,13 +1692,10 @@ export default function App() {
                 }
               }
             } else {
-              // If offline or doc missing temporarily, keep local user profile from localStorage
-              const lastUserRaw = localStorage.getItem('amb_last_user');
-              if (lastUserRaw) {
-                try {
-                  const parsed = JSON.parse(lastUserRaw);
-                  if (parsed) setCurrentUser(parsed);
-                } catch (e) {}
+              // If offline or doc missing temporarily, keep valid local user profile from localStorage
+              const localFallback = getStoredLocalUser();
+              if (localFallback && !isCorruptedFallbackUser(localFallback)) {
+                setCurrentUser(localFallback);
               }
             }
           }
@@ -1424,7 +1709,7 @@ export default function App() {
     initSession();
   }, []);
 
-  // Real-time synchronization of the active logged-in user profile document & single active device takeover check
+  // Real-time synchronization of the active logged-in user profile document across Website & Play Store App
   useEffect(() => {
     if (!currentUser?.uid) return;
     
@@ -1443,15 +1728,8 @@ export default function App() {
           uData.memberId = normalized;
         }
 
-        // ⚡ Real-time Single Device Session Enforcement (< 1s instant takeover detection)
-        const remoteToken = uData.activeSessionToken;
-        const localToken = localStorage.getItem('amb_active_session_token');
-
-        if (remoteToken && localToken && remoteToken !== localToken && uData.role !== 'admin') {
-          console.warn("[Single Device Security] Remote session takeover detected.");
-          alert("আপনার অ্যাকাউন্টটি অন্য একটি ফোনে/ডিভাইসে ওটিপি দিয়ে লগইন করা হয়েছে। নিরাপত্তা স্বার্থে এই ফোনটি অটোমেটিক লগআউট করা হলো।");
-          handleDirectLogout();
-          return;
+        if (uData.activeSessionToken) {
+          localStorage.setItem('amb_active_session_token', uData.activeSessionToken);
         }
 
         const effectiveBal = getEffectiveBalance(uData);
@@ -1463,6 +1741,22 @@ export default function App() {
 
         setCurrentUser((prev) => {
           if (!prev) return null;
+          // Skip redundant full-app re-render if core profile/balance fields are identical
+          if (
+            prev.balance === uData.balance &&
+            prev.savings === uData.savings &&
+            prev.dueLoan === uData.dueLoan &&
+            prev.telecomBalance === uData.telecomBalance &&
+            prev.superShopBalance === uData.superShopBalance &&
+            prev.role === uData.role &&
+            prev.status === uData.status &&
+            prev.samityStatus === uData.samityStatus &&
+            prev.pin === uData.pin &&
+            prev.name === uData.name &&
+            prev.avatarUrl === uData.avatarUrl
+          ) {
+            return prev;
+          }
           return { ...prev, ...uData, uid: snap.id };
         });
       }
@@ -1473,18 +1767,22 @@ export default function App() {
     return () => unsub();
   }, [currentUser?.uid]);
 
-  // Real-time Agent Live Geolocation Auto-Update
+  // Real-time Agent Live Geolocation Auto-Update (Throttled to at most once every 3 minutes to prevent UI & Firestore lag)
   useEffect(() => {
     if (!currentUser?.uid) return;
 
     let watchId: number | null = null;
+    let lastLocationSyncTime = 0;
 
     const startLocationTracking = () => {
       if (!navigator.geolocation) return;
 
-      // watchPosition tracks real-time location updates automatically for all app users
       watchId = navigator.geolocation.watchPosition(
         async (position) => {
+          const now = Date.now();
+          if (now - lastLocationSyncTime < 180000) return;
+          lastLocationSyncTime = now;
+
           const { latitude, longitude } = position.coords;
           try {
             const updateObj = {
@@ -1501,20 +1799,14 @@ export default function App() {
             };
 
             const userRef = doc(db, 'users', currentUser.uid);
-            await updateDoc(userRef, updateObj).catch(() => {});
+            updateDoc(userRef, updateObj).catch(() => {});
 
-            // Also update in 'agents' collection
-            const agentRef = doc(db, 'agents', currentUser.uid);
-            await updateDoc(agentRef, updateObj).catch(() => {});
-
-            // Also update in 'bap_agents'
-            const bapAgentRef = doc(db, 'bap_agents', currentUser.uid);
-            await updateDoc(bapAgentRef, updateObj).catch(() => {});
-
-            // Also update in 'agent_requests'
-            const reqRef = doc(db, 'agent_requests', currentUser.uid);
-            await updateDoc(reqRef, updateObj).catch(() => {});
-
+            if (currentUser.role === 'agent' || (currentUser as any).isAgent) {
+              const agentRef = doc(db, 'agents', currentUser.uid);
+              updateDoc(agentRef, updateObj).catch(() => {});
+              const bapAgentRef = doc(db, 'bap_agents', currentUser.uid);
+              updateDoc(bapAgentRef, updateObj).catch(() => {});
+            }
           } catch (e) {
             console.error("Error auto-updating live location:", e);
           }
@@ -1522,7 +1814,7 @@ export default function App() {
         (error) => {
           console.warn("Continuous geolocation tracking failed:", error);
         },
-        { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
+        { enableHighAccuracy: false, maximumAge: 60000, timeout: 15000 }
       );
     };
 
@@ -1535,10 +1827,6 @@ export default function App() {
       }
       const userRef = doc(db, 'users', currentUser.uid);
       updateDoc(userRef, { isOnline: false }).catch(() => {});
-      const agentRef = doc(db, 'agents', currentUser.uid);
-      updateDoc(agentRef, { lastSeen: 'Offline', isOnline: false }).catch(() => {});
-      const bapAgentRef = doc(db, 'bap_agents', currentUser.uid);
-      updateDoc(bapAgentRef, { lastSeen: 'Offline', isOnline: false }).catch(() => {});
     };
   }, [currentUser?.uid, currentUser?.role]);
 
@@ -1634,13 +1922,23 @@ export default function App() {
 
   // Handle caching of current user properties reactively to prevent any flicker/white screen on entry
   useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem('amb_user_phone', currentUser.phone || '');
-      localStorage.setItem('amb_user_uid', currentUser.uid || '');
-      localStorage.setItem('amb_user_name', currentUser.name || '');
+    if (currentUser && !isCorruptedFallbackUser(currentUser)) {
+      if (currentUser.phone) {
+        localStorage.setItem('amb_user_phone', currentUser.phone);
+      }
+      if (currentUser.uid && !isFakeOrTemporaryUid(currentUser.uid)) {
+        localStorage.setItem('amb_user_uid', currentUser.uid);
+      }
+      if (currentUser.name) {
+        localStorage.setItem('amb_user_name', currentUser.name);
+      }
       localStorage.setItem('amb_user_role', currentUser.role || 'user');
-      localStorage.setItem('amb_user_member_id', currentUser.memberId || '');
-      localStorage.setItem('amb_user_balance', String(currentUser.balance || 0));
+      if (currentUser.memberId && currentUser.memberId !== 'BNB00000000') {
+        localStorage.setItem('amb_user_member_id', currentUser.memberId);
+        localStorage.setItem('bnb_user_member_id', currentUser.memberId);
+      }
+      const effectiveBal = getEffectiveBalance(currentUser);
+      localStorage.setItem('amb_user_balance', String(effectiveBal));
       localStorage.setItem('amb_user_savings', String(currentUser.savings || 0));
       localStorage.setItem('amb_user_telecom_balance', String(currentUser.telecomBalance || 0));
       localStorage.setItem('amb_user_super_shop_balance', String(currentUser.superShopBalance || 0));
@@ -1648,6 +1946,8 @@ export default function App() {
       if (currentUser.pin) {
         localStorage.setItem('amb_user_pin', String(currentUser.pin));
       }
+      localStorage.setItem('amb_last_user', JSON.stringify({ ...currentUser, balance: effectiveBal, mainBalance: effectiveBal }));
+      saveUserToLocalBackup({ ...currentUser, balance: effectiveBal, mainBalance: effectiveBal });
     }
   }, [currentUser]);
 
@@ -2003,73 +2303,73 @@ export default function App() {
                 />
               )}
             </div>
-          ) : (isRestoringPaymentSession || (typeof window !== 'undefined' && (window.location.pathname.toLowerCase().includes('/dashboard') || window.location.pathname.toLowerCase().includes('/payment') || window.location.search.toLowerCase().includes('status=') || window.location.search.toLowerCase().includes('val_id=')))) ? (
+          ) : (isRestoringPaymentSession || (typeof window !== 'undefined' && (window.location.pathname.toLowerCase().includes('/payment') || window.location.search.toLowerCase().includes('status=') || window.location.search.toLowerCase().includes('val_id=')))) ? (
             (() => {
-              // Auto-settle restoring payment session instantly without requiring button click
-              const restoredUser = currentUser || getStoredLocalUser() || {
-                uid: localStorage.getItem('amb_user_uid') || ('user_fallback_' + Date.now().toString().slice(-6)),
-                name: localStorage.getItem('amb_user_name') || 'সদস্য',
-                phone: localStorage.getItem('amb_user_phone') || '',
-                memberId: localStorage.getItem('bnb_user_member_id') || 'BNB00000000',
-                role: 'user',
-                balance: Number(localStorage.getItem('amb_user_balance') || '0'),
-                mainBalance: Number(localStorage.getItem('amb_user_balance') || '0'),
-                pin: localStorage.getItem('amb_user_pin') || '0000',
-                savings: Number(localStorage.getItem('amb_user_savings') || '0'),
-                dueLoan: Number(localStorage.getItem('amb_user_due_loan') || '0'),
-                createdAt: new Date().toISOString(),
-                status: 'active',
-                samityStatus: 'none'
-              };
-              if (!currentUser) {
-                setTimeout(() => setCurrentUser(restoredUser), 10);
+              const restoredUser = (currentUser && !isCorruptedFallbackUser(currentUser))
+                ? currentUser
+                : getStoredLocalUser();
+
+              if (restoredUser && !isCorruptedFallbackUser(restoredUser)) {
+                if (!currentUser) {
+                  setTimeout(() => setCurrentUser(restoredUser), 10);
+                }
+                return (
+                  <div key="dashboard-auto-mode" className="min-h-screen">
+                    <Dashboard 
+                      user={restoredUser} 
+                      onLogout={handleLogout} 
+                      onOpenDrawer={handleOpenDrawer}
+                      onTriggerAdmin={handleOpenAdmin}
+                      onTriggerBap={() => {}}
+                      activeTab={activeTab}
+                      setActiveTab={setActiveTab}
+                      selectedAction={selectedAction}
+                      setSelectedAction={setSelectedAction}
+                      appConfig={appConfig}
+                      onTriggerDemoAuth={() => setShowDemoAuthPrompt(true)}
+                      appLanguage={appLanguage}
+                      onLanguageChange={handleLanguageChange}
+                      darkMode={darkMode}
+                      onThemeToggle={handleThemeToggle}
+                    />
+                    <DrawerMenu 
+                      isOpen={drawerOpen}
+                      onClose={handleCloseDrawer}
+                      user={restoredUser}
+                      onLogout={handleLogout}
+                      onOpenAdmin={() => { setDrawerOpen(false); setTimeout(handleOpenAdmin, 150); }}
+                      onSelectTab={(tab) => { setActiveTab(tab); }}
+                      onSelectAction={(actionName) => setSelectedAction(actionName)}
+                      onTriggerDemoAuth={() => setShowDemoAuthPrompt(true)}
+                      onLock={() => {
+                        if (restoredUser?.isAppLocked) {
+                          setIsLocked(true);
+                        } else {
+                          setShowSetLockModal(true);
+                        }
+                      }}
+                      appLanguage={appLanguage}
+                      onLanguageChange={handleLanguageChange}
+                      darkMode={darkMode}
+                      onThemeToggle={handleThemeToggle}
+                      appConfig={appConfig}
+                    />
+                  </div>
+                );
               }
+
               return (
-                <div key="dashboard-auto-mode" className="min-h-screen">
-                  <Dashboard 
-                    user={restoredUser} 
-                    onLogout={handleLogout} 
-                    onOpenDrawer={handleOpenDrawer}
-                    onTriggerAdmin={handleOpenAdmin}
-                    onTriggerBap={() => {}}
-                    activeTab={activeTab}
-                    setActiveTab={setActiveTab}
-                    selectedAction={selectedAction}
-                    setSelectedAction={setSelectedAction}
-                    appConfig={appConfig}
-                    onTriggerDemoAuth={() => setShowDemoAuthPrompt(true)}
-                    appLanguage={appLanguage}
-                    onLanguageChange={handleLanguageChange}
-                    darkMode={darkMode}
-                    onThemeToggle={handleThemeToggle}
-                  />
-                  <DrawerMenu 
-                    isOpen={drawerOpen}
-                    onClose={handleCloseDrawer}
-                    user={restoredUser}
-                    onLogout={handleLogout}
-                    onOpenAdmin={() => { setDrawerOpen(false); setTimeout(handleOpenAdmin, 150); }}
-                    onSelectTab={(tab) => { setActiveTab(tab); }}
-                    onSelectAction={(actionName) => setSelectedAction(actionName)}
-                    onTriggerDemoAuth={() => setShowDemoAuthPrompt(true)}
-                    onLock={() => {
-                      if (restoredUser?.isAppLocked) {
-                        setIsLocked(true);
-                      } else {
-                        setShowSetLockModal(true);
-                      }
-                    }}
-                    appLanguage={appLanguage}
-                    onLanguageChange={handleLanguageChange}
-                    darkMode={darkMode}
-                    onThemeToggle={handleThemeToggle}
-                    appConfig={appConfig}
-                  />
+                <div key="restoring-payment-session" className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
+                  <div className="w-16 h-16 rounded-2xl bg-indigo-600/10 flex items-center justify-center mb-4">
+                    <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin" />
+                  </div>
+                  <h3 className="text-base font-black text-slate-800 mb-1">আপনার অ্যাকাউন্টে ফিরে যাওয়া হচ্ছে...</h3>
+                  <p className="text-xs font-bold text-slate-500">অনুগ্রহ করে ১ সেকেন্ড অপেক্ষা করুন</p>
                 </div>
               );
             })()
           ) : (
-            <div key="login-mode" className="bg-white min-h-screen">
+            <div key="login-mode" className={`min-h-screen ${darkMode ? 'bg-[#0B1120] text-slate-100' : 'bg-white text-slate-900'}`}>
               <LoginScreen 
                 authUid={authUid} 
                 onLoginSuccess={handleLoginSuccess} 
@@ -2079,11 +2379,6 @@ export default function App() {
                 onLanguageChange={handleLanguageChange}
                 darkMode={darkMode}
                 onThemeToggle={handleThemeToggle}
-                onOpenAdminPin={() => {
-                  setAdminError('');
-                  setAdminPinInput('');
-                  setShowAdminPinModal(true);
-                }}
               />
             </div>
           )}
@@ -2372,8 +2667,10 @@ export default function App() {
                         setPaymentNotice(null);
                         setActiveTab('home');
                         setSelectedAction(null);
+                        syncFreshUserBalance();
                         if (typeof window !== 'undefined') {
                           window.history.replaceState({ amb_root: true }, '', '/dashboard');
+                          window.dispatchEvent(new CustomEvent('bnb_reveal_dashboard_balance'));
                         }
                       }}
                       className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-black text-xs rounded-xl shadow-lg cursor-pointer transition active:scale-95 flex items-center justify-center gap-2"
@@ -2402,8 +2699,10 @@ export default function App() {
                         setPaymentNotice(null);
                         setActiveTab('home');
                         setSelectedAction(null);
+                        syncFreshUserBalance();
                         if (typeof window !== 'undefined') {
                           window.history.replaceState({ amb_root: true }, '', '/dashboard');
+                          window.dispatchEvent(new CustomEvent('bnb_reveal_dashboard_balance'));
                         }
                       }}
                       className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl transition cursor-pointer flex items-center justify-center gap-2"
@@ -2432,8 +2731,10 @@ export default function App() {
                           setPaymentNotice(null);
                           setActiveTab('home');
                           setSelectedAction(null);
+                          syncFreshUserBalance();
                           if (typeof window !== 'undefined') {
                             window.history.replaceState({ amb_root: true }, '', '/dashboard');
+                            window.dispatchEvent(new CustomEvent('bnb_reveal_dashboard_balance'));
                           }
                         }}
                         className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl transition cursor-pointer flex items-center justify-center gap-2"

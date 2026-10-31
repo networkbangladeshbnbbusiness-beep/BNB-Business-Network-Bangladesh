@@ -66,53 +66,7 @@ export async function restoreAndSeedDatabase() {
       // ignore write error
     }
 
-    // 2. Sanitize existing user documents in Firestore: clean up "বেনামী সদস্য" or empty name/phone records, and prevent non-admin accounts from having admin name/role
-    try {
-      const usersSnap = await getDocs(collection(db, 'users'));
-      for (const uDoc of usersSnap.docs) {
-        if (uDoc.id === 'admin_master') continue;
-        const uData = uDoc.data() as User;
-        const uName = (uData.name || '').trim();
-        const uPhone = (uData.phone || '').trim();
-        const normP = normalizePhoneNumber(uPhone);
-
-        const updatesToApply: Partial<User> = {};
-
-        // Ensure non-admin users do not hold admin name, role, or MAIN_ADMIN memberId
-        if (uDoc.id !== 'admin_master' && uPhone !== '+8800011112222') {
-          if (uData.role === 'admin') {
-            updatesToApply.role = 'user';
-          }
-          if (uData.memberId === 'MAIN_ADMIN') {
-            // Assign real sequential ID instead of hardcoded duplicate
-            updatesToApply.memberId = `BNB${String(Math.floor(1000 + Math.random() * 9000)).padStart(8, '0')}`;
-          }
-          if (uName === 'BNB National Admin' || uName === 'Bangladesh BNB Administrator' || (uPhone === '01618599077' && uName === 'BNB National Admin')) {
-            updatesToApply.name = 'সম্মানিত সদস্য';
-          }
-        }
-
-        if (!uName || uName === 'বেনামী সদস্য' || uName === 'অজ্ঞাত মেম্বার') {
-          if (!uPhone && !uData.memberId) {
-            // Delete completely invalid phoneless/nameless document
-            await deleteDoc(doc(db, 'users', uDoc.id));
-            continue;
-          } else {
-            updatesToApply.name = 'সম্মানিত সদস্য';
-          }
-        }
-
-        if (!uData.normalizedPhone && normP) {
-          updatesToApply.normalizedPhone = normP;
-        }
-
-        if (Object.keys(updatesToApply).length > 0) {
-          await setDoc(doc(db, 'users', uDoc.id), updatesToApply, { merge: true });
-        }
-      }
-    } catch (cleanErr) {
-      console.warn("[DatabaseSeeder] User sanitization warning:", cleanErr);
-    }
+    // 2. Skip client-side full users collection scan to guarantee instant startup for 500k+ users
 
     // 3. Ensure App Config settings are seeded
     const configRef = doc(db, 'system_settings', 'app_config');

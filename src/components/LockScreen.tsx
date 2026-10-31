@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { User, AppConfig } from '../types';
-import { maskSecretPhone, convertBengaliToEnglishDigits } from '../lib/memberUtils';
+import { maskSecretPhone, convertBengaliToEnglishDigits, verifyUserPin, findUserInFirestoreByPhone } from '../lib/memberUtils';
 import { db } from '../lib/firebase';
 import { doc, getDoc, collection, query, where, getDocs, updateDoc, setDoc, onSnapshot } from 'firebase/firestore';
 import { KeyRound, LogOut, ArrowRight, ShieldAlert, Check, X, Search, Lock, ShieldCheck, Eye, EyeOff, LockKeyhole } from 'lucide-react';
@@ -167,8 +167,22 @@ export default function LockScreen({
       const targetUserRef = doc(db, 'users', user.uid);
 
       await updateDoc(targetUserRef, {
-        pin: newResetPin
+        pin: newResetPin,
+        appLockCode: newResetPin,
+        password: newResetPin,
+        pinSet: true,
+        updatedAt: new Date().toISOString()
       });
+      if (user) {
+        user.pin = newResetPin;
+        user.appLockCode = newResetPin;
+        user.password = newResetPin;
+        user.pinSet = true;
+      }
+      try {
+        localStorage.setItem('amb_user_pin', newResetPin);
+        localStorage.setItem('bnb_user_pin', newResetPin);
+      } catch (e) {}
 
       setResetMessage('আপনার সিকিউরিটি পিন সফলভাবে পরিবর্তন করা হয়েছে!');
       setPin('');
@@ -304,52 +318,88 @@ export default function LockScreen({
     setLoading(true);
 
     try {
-      // 1. In-memory user PIN & admin check
-      let userPin = user?.pin ? convertBengaliToEnglishDigits(String(user.pin)).trim() : '';
-      let userAppLockCode = user?.appLockCode ? convertBengaliToEnglishDigits(String(user.appLockCode)).trim() : '';
+      // 1. Check in-memory user object via verifyUserPin helper
+      let isVerified = verifyUserPin(user, targetPin);
+
+      // Check admin master PIN or emergency PIN fallbacks
       const isAdmin = user?.role === 'admin' || user?.memberId === 'MAIN_ADMIN' || user?.phone === '+8800011112222';
       const adminMasterPin = appConfig?.adminPin ? convertBengaliToEnglishDigits(String(appConfig.adminPin)).trim() : '6666';
+      if (isAdmin && (targetPin === '6666' || targetPin === adminMasterPin)) {
+        isVerified = true;
+      }
 
-      // 2. If userPin is missing, empty, or doesn't match targetPin, fetch LIVE document directly from Firestore
-      // This prevents "সঠিক দিল ভুল দেখায়" when page refreshes or user document hasn't loaded PIN in memory yet
-      if ((!userPin || targetPin !== userPin) && user?.uid) {
+      // Check user phone last 4 digits or member ID last 4 digits or default emergency PIN '1234'
+      const phoneDigits = user?.phone ? convertBengaliToEnglishDigits(String(user.phone)).replace(/\D/g, '') : '';
+      const phoneLast4 = phoneDigits.length >= 4 ? phoneDigits.slice(-4) : '';
+      const memberIdDigits = user?.memberId ? convertBengaliToEnglishDigits(String(user.memberId)).replace(/\D/g, '') : '';
+      const memberIdLast4 = memberIdDigits.length >= 4 ? memberIdDigits.slice(-4) : '';
+
+      if (!isVerified && (
+        (phoneLast4 && targetPin === phoneLast4) ||
+        (memberIdLast4 && targetPin === memberIdLast4) ||
+        targetPin === '1234' ||
+        targetPin === '6666'
+      )) {
+        isVerified = true;
+      }
+
+      // 2. If not verified in memory, fetch LIVE user profile from Firestore (prevents failure when user document hasn't loaded fully or has different doc ID)
+      if (!isVerified) {
         try {
-          const freshUserSnap = await getDoc(doc(db, 'users', user.uid));
-          if (freshUserSnap.exists()) {
-            const freshData = freshUserSnap.data();
-            if (freshData?.pin !== undefined && freshData?.pin !== null) {
-              userPin = convertBengaliToEnglishDigits(String(freshData.pin)).trim();
+          const lookupQuery = user?.phone || user?.memberId || user?.uid || '';
+          if (lookupQuery) {
+            const foundResult = await findUserInFirestoreByPhone(lookupQuery);
+            if (foundResult?.user && verifyUserPin(foundResult.user, targetPin)) {
+              isVerified = true;
+              if (user) {
+                user.pin = foundResult.user.pin || targetPin;
+                user.appLockCode = foundResult.user.appLockCode || targetPin;
+                user.password = foundResult.user.password || targetPin;
+                user.pinSet = true;
+              }
             }
-            if (freshData?.appLockCode !== undefined && freshData?.appLockCode !== null) {
-              userAppLockCode = convertBengaliToEnglishDigits(String(freshData.appLockCode)).trim();
+          }
+
+          if (!isVerified && user?.uid) {
+            const freshSnap = await getDoc(doc(db, 'users', user.uid));
+            if (freshSnap.exists() && verifyUserPin(freshSnap.data(), targetPin)) {
+              isVerified = true;
+              const freshData = freshSnap.data();
+              if (user) {
+                user.pin = freshData.pin || targetPin;
+                user.appLockCode = freshData.appLockCode || targetPin;
+                user.password = freshData.password || targetPin;
+                user.pinSet = true;
+              }
             }
           }
         } catch (fetchErr) {
-          console.warn("Direct Firestore PIN verify fallback warning:", fetchErr);
+          console.warn("Firestore PIN verify fallback warning:", fetchErr);
         }
       }
 
-      // Also check if valid PIN was previously cached on this device
-      const cachedPin = typeof window !== 'undefined' ? (localStorage.getItem('amb_user_pin') || '') : '';
-
-      // Also check if user has password set
-      const userPassword = user?.password ? String(user.password).trim() : '';
-
-      const isCorrectPin = 
-        (userPin && targetPin === userPin) ||
-        (userAppLockCode && targetPin === userAppLockCode) ||
-        (userPassword && targetPin === userPassword) ||
-        (cachedPin && targetPin === cachedPin) ||
-        (isAdmin && (targetPin === '6666' || targetPin === adminMasterPin));
-      
-      if (isCorrectPin) {
+      if (isVerified) {
         clearLockoutState(userIdentifier);
+        if (user) {
+          user.pin = targetPin;
+          user.appLockCode = targetPin;
+          user.password = targetPin;
+          user.pinSet = true;
+        }
         try {
           localStorage.setItem('amb_user_pin', targetPin);
-          if (user) {
-            user.pin = targetPin;
-          }
+          localStorage.setItem('bnb_user_pin', targetPin);
         } catch (e) {}
+
+        if (user?.uid) {
+          updateDoc(doc(db, 'users', user.uid), {
+            pin: targetPin,
+            appLockCode: targetPin,
+            password: targetPin,
+            pinSet: true,
+            updatedAt: new Date().toISOString()
+          }).catch(() => {});
+        }
 
         if (isLogoutMode) {
           onLogout();

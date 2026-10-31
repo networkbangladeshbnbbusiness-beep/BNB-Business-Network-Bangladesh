@@ -1,9 +1,0 @@
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    // Open access for all application features, offerings, notifications, ration cards, and user profiles
-    match /{document=**} {
-      allow read, write: if true;
-    }
-  }
-}

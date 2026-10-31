@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { User, Transaction, Offer, AppConfig, generateBNBTrxId, formatShortTrxId } from '../types';
 import { db } from '../lib/firebase';
 import UnifiedBackButton from './UnifiedBackButton';
+import { verifyUserPin } from '../lib/memberUtils';
 import { collection, addDoc, doc, updateDoc, setDoc, query, where, getDocs } from 'firebase/firestore';
 import { 
   ChevronLeft, 
@@ -356,7 +357,7 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
       return;
     }
 
-    if (inputPin !== user.pin) {
+    if (!verifyUserPin(user, inputPin)) {
       setPurchaseError('ভুল সিকিউরিটি পিন নম্বর! পুনরায় সঠিক পিন দিন।');
       return;
     }
@@ -485,7 +486,7 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
       return;
     }
 
-    if (cashRechargePin !== user.pin) {
+    if (!verifyUserPin(user, cashRechargePin)) {
       setPurchaseError('ভুল সিকিউরিটি পিন নম্বর! পুনরায় সঠিক পিন দিন।');
       return;
     }
@@ -643,10 +644,10 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-850 font-sans flex flex-col relative pt-[max(10px,env(safe-area-inset-top))]" id="telecom-screen-root">
+    <div className="min-h-screen bg-[#0b6623] text-slate-850 font-sans flex flex-col relative" id="telecom-screen-root">
       
       {/* Dynamic Green Top Header */}
-      <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-3.5 sm:pt-4.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-20 space-y-2.5">
+      <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-2.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-20 space-y-2.5">
         <div className="flex items-center justify-between gap-1">
           <div className="flex items-center gap-2">
             <UnifiedBackButton

@@ -175,7 +175,7 @@ export default function BNBCorporateGuide({
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-800 pb-12">
       {/* Green Top Header Section matching Home Dashboard */}
-      <div className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-3.5 sm:pt-4.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-30 space-y-2.5">
+      <div className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-2.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-30 space-y-2.5">
         <div className="max-w-2xl mx-auto flex items-center justify-between gap-1">
           <button 
             onClick={onBack}

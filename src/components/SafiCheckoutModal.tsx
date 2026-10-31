@@ -10,6 +10,7 @@ import { User as UserType } from '../types';
 import { SafiProduct } from './SafiPremiumShop';
 import { LiveLocationData } from './SafiLiveLocationWidget';
 import { BANGLADESH_DISTRICTS, findDistrictByName } from '../data/bangladeshDistricts';
+import { verifyUserPin } from '../lib/memberUtils';
 
 export interface CartCheckoutItem {
   id: string;
@@ -327,7 +328,7 @@ export default function SafiCheckoutModal({
       setPinError('অনুগ্রহ করে আপনার ৪ সংখ্যার সিকিউরিটি পিন দিন।');
       return;
     }
-    if (pinNumber !== user?.pin) {
+    if (!verifyUserPin(user, pinNumber)) {
       setPinError('ভুল পিন নাম্বার প্রদান করেছেন। আবার চেষ্টা করুন।');
       return;
     }
