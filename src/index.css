@@ -28,16 +28,16 @@
 
 /* Custom supportive styles for scrollbars and active selections */
 html {
-  background-color: #0b6623 !important;
+  background-color: #f8fafc;
 }
 
 body {
   font-family: var(--font-sans);
-  background-color: #0b6623 !important;
+  background-color: #f8fafc;
 }
 
 #root {
-  background-color: #0b6623 !important;
+  background-color: #f8fafc;
   min-height: 100vh;
 }
 

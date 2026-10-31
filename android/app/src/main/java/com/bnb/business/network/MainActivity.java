@@ -16,6 +16,16 @@ public class MainActivity extends BridgeActivity {
 
         // Native Android Status Bar & System Navigation Bar setup
         setupDarkGreenSystemBars();
+
+        try {
+            int lightBg = Color.parseColor("#F8FAFC");
+            if (getWindow() != null && getWindow().getDecorView() != null) {
+                getWindow().getDecorView().setBackgroundColor(lightBg);
+            }
+            if (getBridge() != null && getBridge().getWebView() != null) {
+                getBridge().getWebView().setBackgroundColor(lightBg);
+            }
+        } catch (Exception ignored) {}
     }
 
     private void setupDarkGreenSystemBars() {

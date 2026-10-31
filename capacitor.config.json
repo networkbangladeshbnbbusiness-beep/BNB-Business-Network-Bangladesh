@@ -2,6 +2,7 @@
   "appId": "com.bnb.business.network",
   "appName": "BNB BUSINESS Network Bangladesh",
   "webDir": "dist",
+  "backgroundColor": "#f8fafc",
   "server": {
     "androidScheme": "https",
     "allowNavigation": [
@@ -17,7 +18,7 @@
     "SplashScreen": {
       "launchShowDuration": 0,
       "launchAutoHide": true,
-      "backgroundColor": "#ffffff",
+      "backgroundColor": "#f8fafc",
       "androidSplashResourceName": "splash",
       "androidScaleType": "CENTER_INSIDE",
       "showSpinner": false,
