@@ -4609,6 +4609,40 @@ async function startServer() {
     };
   };
 
+  // Self-cleaning service worker endpoints in case any browser registered a legacy SW
+  app.get(['/sw.js', '/service-worker.js'], (req, res) => {
+    res.setHeader('Content-Type', 'application/javascript; charset=UTF-8');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    return res.status(200).send(`
+      self.addEventListener('install', () => self.skipWaiting());
+      self.addEventListener('activate', (event) => {
+        event.waitUntil(
+          caches.keys().then((names) => Promise.all(names.map((n) => caches.delete(n))))
+            .then(() => self.registration.unregister())
+        );
+      });
+    `);
+  });
+
+  const sendFreshIndexHtml = (distDir: string, req: express.Request, res: express.Response) => {
+    delete req.headers['if-none-match'];
+    delete req.headers['if-modified-since'];
+    res.removeHeader('ETag');
+    res.removeHeader('Last-Modified');
+    res.setHeader('Content-Type', 'text/html; charset=UTF-8');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0');
+    res.setHeader('CDN-Cache-Control', 'no-store');
+    res.setHeader('Surrogate-Control', 'no-store');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    const indexPath = path.join(distDir, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      const htmlContent = fs.readFileSync(indexPath, 'utf-8');
+      return res.status(200).send(htmlContent);
+    }
+    return res.status(404).send('index.html not found');
+  };
+
   if (!isProduction) {
     try {
       const { createServer: createViteServer } = await import('vite');
@@ -4626,9 +4660,9 @@ async function startServer() {
         ? path.join(process.cwd(), 'dist')
         : path.join(__dirname, 'dist');
       app.use(serveCompressedAssets(distPath));
-      app.use(express.static(distPath));
+      app.use(express.static(distPath, { index: false, etag: false, lastModified: false }));
       app.get('*', (req, res) => {
-        res.sendFile(path.join(distPath, 'index.html'));
+        sendFreshIndexHtml(distPath, req, res);
       });
     }
   } else {
@@ -4637,12 +4671,12 @@ async function startServer() {
       : path.join(__dirname, 'dist');
     console.log(`[Server] Serving production static files from ${distPath}`);
     app.use(serveCompressedAssets(distPath));
-    // Serve raw assets out of the client build folder
-    app.use(express.static(distPath));
+    // Serve raw assets out of the client build folder, but NEVER let express.static serve index.html with 1980 ETag
+    app.use(express.static(distPath, { index: false, etag: false, lastModified: false }));
     
-    // Catch-all route: Send any index requests or custom deep-links
+    // Catch-all route: Always serve fresh index.html with no-store headers (prevents 304 stale cache)
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      sendFreshIndexHtml(distPath, req, res);
     });
   }
 

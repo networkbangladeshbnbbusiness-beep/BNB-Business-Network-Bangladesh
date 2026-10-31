@@ -1,0 +1,36 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Ignore bun.lock so Google Cloud Buildpacks / Firebase App Hosting uses package-lock.json cleanly
+bun.lock
+bun.lockb
+
+# AI Studio chat attachments and recordings (too large for GitHub sync)
+public/assets/aistudio/*.mp4
+public/assets/aistudio/*.jpg
+public/assets/aistudio/*.png
+.aistudio/
+tmp/
+
+# Temporary diagnostic scripts
+*.py
+fix_admin.sh
+fix_admin_2.sh
+fix_db.ts
+bnb-deploy.zip
+
+# Android & Capacitor build output artifacts (NOTE: .gradle files MUST NOT be ignored!)
+android/app/src/main/assets/public/
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+android/.idea/
+android/*.iml
+android/app/*.iml
