@@ -12,6 +12,7 @@ workflows:
           npm install
       - name: Build Web Assets (Vite)
         script: |
+          node scripts/generate-official-icons.mjs
           npm run build
       - name: Sync Capacitor Android Project
         script: |

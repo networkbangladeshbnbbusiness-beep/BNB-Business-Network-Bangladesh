@@ -33,6 +33,9 @@ jobs:
       - name: Install Node Dependencies
         run: npm install --legacy-peer-deps
 
+      - name: Generate Official Green BNB App Icons
+        run: node scripts/generate-official-icons.mjs
+
       - name: Build Web Production Bundle
         run: npm run build
 
