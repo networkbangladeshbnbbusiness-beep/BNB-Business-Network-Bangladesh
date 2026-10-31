@@ -272,8 +272,7 @@ export default function LoginScreen({
       step === 'info' &&
       candidate.length >= 6 &&
       candidate.includes('@') &&
-      candidate.includes('.') &&
-      !candidate.toUpperCase().includes('BNB')
+      candidate.includes('.')
     ) {
       const timer = setTimeout(() => {
         fetchUserFast(candidate, true).catch(() => {});
@@ -288,7 +287,7 @@ export default function LoginScreen({
     if (!trimmedInput) return null;
 
     // Strict Rule: BNB member codes or non-email queries are directly forbidden
-    if (trimmedInput.toUpperCase().includes('BNB') || (!trimmedInput.includes('@') && /^\d+$/.test(trimmedInput))) {
+    if (!trimmedInput.includes('@') && (trimmedInput.toUpperCase().includes('BNB') || /^\d+$/.test(trimmedInput))) {
       setError(
         isBn
           ? 'BNB কোড বা অ্যাকাউন্ট নম্বর দিয়ে একাউন্ট খোলা বা লগইন করা সম্পূর্ণ নিষিদ্ধ! একাউন্ট খোলা এবং লগইন শুধুমাত্র আপনার নিবন্ধিত বৈধ ইমেইলের মাধ্যমে করতে হবে।'
@@ -325,7 +324,7 @@ export default function LoginScreen({
     }
 
     // Strict Rule: BNB member codes or numeric IDs are forbidden
-    if (rawInput.toUpperCase().includes('BNB') || (!rawInput.includes('@') && /^\d+$/.test(rawInput))) {
+    if (!rawInput.includes('@') && (rawInput.toUpperCase().includes('BNB') || /^\d+$/.test(rawInput))) {
       setError(
         isBn
           ? 'BNB কোড বা অ্যাকাউন্ট নম্বর দিয়ে অ্যাকাউন্ট খোলা বা লগইন করা সম্পূর্ণ নিষিদ্ধ! অ্যাকাউন্ট খোলা এবং লগইন শুধুমাত্র আপনার নিবন্ধিত বৈধ ইমেইল অ্যাড্রেসের মাধ্যমে করতে হবে।'
@@ -640,7 +639,7 @@ export default function LoginScreen({
     }
 
     const cleanRegEmail = email.trim().toLowerCase();
-    if (cleanRegEmail.toUpperCase().includes('BNB')) {
+    if (!cleanRegEmail.includes('@') && cleanRegEmail.toUpperCase().includes('BNB')) {
       setError(
         isBn
           ? 'BNB কোড দিয়ে একাউন্ট খোলা সম্পূর্ণ নিষিদ্ধ! শুধুমাত্র আপনার ব্যক্তিগত বৈধ ইমেইল অ্যাড্রেস দিয়ে একাউন্ট খুলুন।'

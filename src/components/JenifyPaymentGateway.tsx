@@ -575,49 +575,32 @@ export const JenifyPaymentGateway: React.FC<JenifyPaymentGatewayProps> = ({
               allow="clipboard-read; clipboard-write"
               onLoad={() => {
                 iframeLoadCountRef.current += 1;
-                // First load is secure.zinipay.com itself; any subsequent load means ZiniPay redirected to redirect_url or cancel_url
+                // First load is secure.zinipay.com itself; subsequent loads may be operator selection (bKash/Nagad) OR final redirect_url / cancel_url
                 if (iframeLoadCountRef.current >= 2) {
+                  let isExplicitCancelRedirect = false;
                   try {
                     const href = iframeRef.current?.contentWindow?.location?.href || '';
                     if (href.includes('payment_status=cancelled') || href.includes('status=cancelled') || href.includes('zinipay-cancel')) {
+                      isExplicitCancelRedirect = true;
+                    }
+                  } catch (e) {
+                    // Cross-origin means the iframe is still on ZiniPay / bKash / Nagad checkout page! Do NOT cancel!
+                  }
+
+                  if (isExplicitCancelRedirect) {
+                    try {
                       localStorage.removeItem('amb_pending_zinipay_invoice');
                       localStorage.removeItem('amb_zinipay_redirect_active');
                       window.dispatchEvent(new CustomEvent('bnb_payment_cancelled_or_failed', {
                         detail: { status: 'cancelled', message: 'পেমেন্ট বাতিল করা হয়েছে।' }
                       }));
-                      handleReturnToDashboard();
-                      return;
-                    }
-                  } catch (e) {}
-                  // Check status with server immediately on redirect load; if not completed, return to Dashboard
-                  const targetUid = getUserUid();
-                  fetch(apiUrl('/api/payment/check-status'), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      val_id: activeInvoice.val_id,
-                      invoice_id: activeInvoice.invoice_id,
-                      userId: targetUid
-                    })
-                  })
-                    .then(r => r.json())
-                    .then(data => {
-                      if (data && data.success && data.status === 'completed') {
-                        checkPaymentStatusSilently();
-                      } else {
-                        try {
-                          localStorage.removeItem('amb_pending_zinipay_invoice');
-                          localStorage.removeItem('amb_zinipay_redirect_active');
-                          window.dispatchEvent(new CustomEvent('bnb_payment_cancelled_or_failed', {
-                            detail: { status: 'cancelled', message: 'পেমেন্ট বাতিল করা হয়েছে।' }
-                          }));
-                        } catch (e) {}
-                        handleReturnToDashboard();
-                      }
-                    })
-                    .catch(() => {
-                      handleReturnToDashboard();
-                    });
+                    } catch (e) {}
+                    handleReturnToDashboard();
+                    return;
+                  }
+
+                  // Silently check status with server; only close if server confirms completed, cancelled, or failed (never cancel if still pending on checkout!)
+                  checkPaymentStatusSilently();
                 }
               }}
               className="w-full h-full border-0 bg-white"

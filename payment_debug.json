@@ -1,0 +1,40 @@
+{
+  "timestamp": "2026-10-31T08:26:06.523Z",
+  "frontend_payload": {
+    "amount": 50,
+    "userId": "usr_1790067417377_2an4i",
+    "email": "free122055@gmail.com",
+    "name": "Rajibul Islam"
+  },
+  "user_profile_data": null,
+  "outgoing_zinipay_payload": {
+    "amount": 50,
+    "val_id": "DEP-1793435166762-9241",
+    "redirect_url": "https://businessnetworkbangladesh.com/api/payment/zinipay-callback?val_id=DEP-1793435166762-9241&uid=usr_1790067417377_2an4i&token=0913b24b13306b44ecb95ff670f6fb02&origin=https%3A%2F%2Fbusinessnetworkbangladesh.com",
+    "cancel_url": "https://businessnetworkbangladesh.com/api/payment/zinipay-cancel?val_id=DEP-1793435166762-9241&uid=usr_1790067417377_2an4i&token=0913b24b13306b44ecb95ff670f6fb02&origin=https%3A%2F%2Fbusinessnetworkbangladesh.com",
+    "webhook_url": "https://businessnetworkbangladesh.com/api/zinipay/webhook",
+    "cus_name": "Rajibul Islam",
+    "cus_email": "free122055@gmail.com",
+    "metadata": {
+      "val_id": "DEP-1793435166762-9241",
+      "order_id": "ORD-DEP-1793435166762-9241",
+      "customer_id": "usr_1790067417377_2an4i",
+      "userId": "usr_1790067417377_2an4i",
+      "phone": "free122055@gmail.com",
+      "memberId": "BNB00001678",
+      "purpose": "wallet_deposit"
+    }
+  },
+  "outgoing_headers": {
+    "Content-Type": "application/json",
+    "zini-api-key": "95f4bae1906bfd060176e99fa1747c98c8ff6b1b3252d81c"
+  },
+  "zinipay_response_status": 201,
+  "zinipay_response_body": {
+    "status": true,
+    "message": "Invoice created successfully.",
+    "payment_url": "https://secure.zinipay.com/bnb-business-network-bangladesh/payment/0bc6d18c-1159-4dbd-87ce-d4e2394ceda6",
+    "val_id": "DEP-1793435166762-9241"
+  },
+  "error": null
+}

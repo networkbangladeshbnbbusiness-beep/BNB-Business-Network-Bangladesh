@@ -112,7 +112,7 @@ export default function ForgotPasswordModal({
       return;
     }
 
-    if (raw.toUpperCase().includes('BNB') || (!raw.includes('@') && /^\d+$/.test(raw))) {
+    if (!raw.includes('@') && (raw.toUpperCase().includes('BNB') || /^\d+$/.test(raw))) {
       setError(
         isBn
           ? 'BNB কোড বা অ্যাকাউন্ট নম্বর দিয়ে পিন রিসেট করা সম্পূর্ণ নিষিদ্ধ। অনুগ্রহ করে আপনার নিবন্ধিত ইমেইল দিন।'

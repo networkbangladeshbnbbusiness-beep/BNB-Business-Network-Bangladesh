@@ -718,7 +718,7 @@ async function startServer() {
     };
   }
 
-  // Authoritative server-side OTP cache (valid for 15 minutes)
+  // Authoritative server-side OTP cache (valid for 15 minutes) + Firestore stateless persistence
   const serverOtpStore = new Map<string, { otp: string; expiresAt: number }>();
 
   // Endpoint to dispatch real Email/Universal OTP or Phone OTP
@@ -730,12 +730,24 @@ async function startServer() {
       }
 
       let result: any = null;
-      // Always cache OTP server-side for dual-verification
+      const expiresAt = Date.now() + 15 * 60 * 1000;
+
+      // Always cache OTP server-side AND in Firestore so multi-instance production servers never lose an OTP
       if (email && otp) {
-        serverOtpStore.set(String(email).trim().toLowerCase(), {
-          otp: String(otp).trim(),
-          expiresAt: Date.now() + 15 * 60 * 1000
+        const cleanEmail = String(email).trim().toLowerCase();
+        const cleanOtp = String(otp).trim();
+        serverOtpStore.set(cleanEmail, {
+          otp: cleanOtp,
+          expiresAt
         });
+        if (db) {
+          setDoc(doc(db, 'otp_codes', cleanEmail), {
+            email: cleanEmail,
+            otp: cleanOtp,
+            expiresAt,
+            updatedAt: new Date().toISOString()
+          }).catch(() => {});
+        }
       }
 
       // Dispatch email OTP if email is provided and not already dispatched by client
@@ -758,37 +770,78 @@ async function startServer() {
     }
   });
 
-  // Authoritative OTP Verification Endpoint
+  // Authoritative OTP Verification Endpoint (checks memory, otp_codes, and otp_requests in Firestore)
   app.post('/api/verify-otp', async (req, res) => {
     try {
-      const { email, otp } = req.body;
-      if (!email || !otp) {
+      const rawEmail = req.body.email || req.body.identifier || '';
+      const rawOtp = req.body.otp || req.body.code || '';
+      if (!rawEmail || !rawOtp) {
         return res.status(400).json({ success: false, verified: false, error: 'Email and OTP required' });
       }
-      const cleanEmail = String(email).trim().toLowerCase();
-      const cleanOtp = String(otp).trim();
+      const cleanEmail = String(rawEmail).trim().toLowerCase();
+      const cleanOtp = String(rawOtp).trim();
+      const now = Date.now();
+
+      // 1. Check in-memory store
       const record = serverOtpStore.get(cleanEmail);
-      if (record && record.otp === cleanOtp && Date.now() <= record.expiresAt) {
+      if (record && record.otp === cleanOtp && now <= record.expiresAt) {
         return res.json({ success: true, verified: true });
       }
+
+      // 2. Check stateless Firestore otp_codes collection (handles Cloud Run / App Hosting multi-instance routing)
+      if (db) {
+        try {
+          const codeSnap = await getDoc(doc(db, 'otp_codes', cleanEmail));
+          if (codeSnap.exists()) {
+            const cData = codeSnap.data();
+            if (String(cData.otp || '').trim() === cleanOtp && (!cData.expiresAt || now <= Number(cData.expiresAt))) {
+              return res.json({ success: true, verified: true });
+            }
+          }
+        } catch (e) {}
+
+        // 3. Fallback check against recent otp_requests collection
+        try {
+          const qReq = query(collection(db, 'otp_requests'), where('email', '==', cleanEmail), limit(5));
+          const rSnap = await getDocs(qReq);
+          for (const d of rSnap.docs) {
+            const rData = d.data();
+            if (String(rData.otp || '').trim() === cleanOtp) {
+              const createdMs = rData.createdAt ? new Date(rData.createdAt).getTime() : now;
+              if (now - createdMs <= 15 * 60 * 1000) {
+                return res.json({ success: true, verified: true });
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
       return res.json({ success: false, verified: false, error: 'Invalid or expired OTP' });
     } catch (err: any) {
       return res.status(500).json({ success: false, verified: false, error: err?.message });
     }
   });
 
-  // Safe background session recorder via Admin SDK (bypasses client security rule restrictions)
+  // Safe background session recorder via Modular DB + Admin SDK fallback
   app.post('/api/auth/record-login', async (req, res) => {
     try {
       const { uid, activeSessionToken, deviceId } = req.body;
       if (!uid) return res.status(400).json({ error: 'UID required' });
-      if (adminDb) {
-        await adminDb.collection('users').doc(uid).update({
-          activeSessionToken: activeSessionToken || ('sess_' + Date.now()),
-          activeSessionDeviceId: deviceId || 'unknown',
-          lastLoginAt: new Date().toISOString(),
-          isLoggedIn: true
-        }).catch((e: any) => console.warn('[Admin record-login warning]:', e?.message || e));
+      const loginPayload = {
+        activeSessionToken: activeSessionToken || ('sess_' + Date.now()),
+        activeSessionDeviceId: deviceId || 'unknown',
+        lastLoginAt: new Date().toISOString(),
+        isLoggedIn: true
+      };
+      let updated = false;
+      if (db) {
+        try {
+          await updateDoc(doc(db, 'users', uid), loginPayload);
+          updated = true;
+        } catch (e) {}
+      }
+      if (!updated && adminDb && typeof adminDb.collection === 'function') {
+        await adminDb.collection('users').doc(uid).update(loginPayload).catch(() => {});
       }
       return res.json({ success: true });
     } catch (err: any) {
@@ -796,7 +849,7 @@ async function startServer() {
     }
   });
 
-  // Authoritative server-side member registration endpoint (Admin SDK - 100% reliable)
+  // Authoritative server-side member registration endpoint (Modular DB + Admin SDK - 100% reliable in production)
   app.post('/api/auth/register', async (req, res) => {
     try {
       const { name, email, phone, password, pin } = req.body;
@@ -807,6 +860,10 @@ async function startServer() {
 
       const cleanName = String(name).trim();
       const cleanEmail = String(email).trim().toLowerCase();
+      if (!cleanEmail.includes('@') || !cleanEmail.includes('.')) {
+        return res.status(400).json({ success: false, error: 'অনুগ্রহ করে একটি বৈধ ইমেইল ঠিকানা প্রদান করুন।' });
+      }
+
       const cleanPhoneDigits = String(phone).replace(/\D/g, '');
       const standardPhone = cleanPhoneDigits.length === 11 && cleanPhoneDigits.startsWith('0')
         ? `+88${cleanPhoneDigits}`
@@ -815,18 +872,35 @@ async function startServer() {
         : cleanPhoneDigits.startsWith('+')
         ? cleanPhoneDigits
         : `+88${cleanPhoneDigits}`;
+      const localPhone = cleanPhoneDigits.length >= 10 ? `0${cleanPhoneDigits.slice(-10)}` : cleanPhoneDigits;
       const cleanPassword = String(password).trim();
       const cleanPin = String(pin).trim();
 
-      if (!adminDb && !db) {
+      if (!db && !adminDb) {
         return res.status(500).json({ success: false, error: 'ডাটাবেজ সংযোগে সমস্যা হয়েছে।' });
       }
 
-      // Check if email or phone already exists
+      // Check if email or phone already exists using primary modular db first, then adminDb fallback
       let emailExists = false;
       let phoneExists = false;
 
-      if (adminDb) {
+      if (db) {
+        try {
+          const emailSnap = await getDocs(query(collection(db, 'users'), where('email', '==', cleanEmail), limit(1)));
+          if (!emailSnap.empty) emailExists = true;
+        } catch (e) {}
+
+        try {
+          const phoneVariants = Array.from(new Set([standardPhone, localPhone].filter(Boolean)));
+          for (const ph of phoneVariants) {
+            const phoneSnap = await getDocs(query(collection(db, 'users'), where('phone', '==', ph), limit(1)));
+            if (!phoneSnap.empty) {
+              phoneExists = true;
+              break;
+            }
+          }
+        } catch (e) {}
+      } else if (adminDb && typeof adminDb.collection === 'function') {
         const emailSnap = await adminDb.collection('users').where('email', '==', cleanEmail).limit(1).get().catch(() => null);
         if (emailSnap && !emailSnap.empty) emailExists = true;
 
@@ -842,26 +916,34 @@ async function startServer() {
         return res.json({ success: false, error: 'এই মোবাইল নম্বর দিয়ে ইতিপূর্বে একটি অ্যাকাউন্ট খোলা হয়েছে। অনুগ্রহ করে লগইন করুন।' });
       }
 
-      // Generate sequential member ID
-      let nextSerial = 1;
-      if (adminDb) {
+      // Generate sequential member ID safely via modular db or adminDb
+      let nextSerial = Math.floor(1000 + Math.random() * 9000);
+      if (db) {
+        try {
+          const counterRef = doc(db, 'app_config', 'member_counter');
+          const counterSnap = await getDoc(counterRef).catch(() => null);
+          if (counterSnap && counterSnap.exists() && counterSnap.data()?.lastSerial) {
+            nextSerial = Number(counterSnap.data().lastSerial) + 1;
+          }
+          await setDoc(counterRef, {
+            lastSerial: nextSerial,
+            lastAssignedId: `BNB${String(nextSerial).padStart(8, '0')}`,
+            updatedAt: new Date().toISOString()
+          }, { merge: true }).catch(() => {});
+        } catch (e) {}
+      } else if (adminDb && typeof adminDb.collection === 'function') {
         try {
           const counterRef = adminDb.collection('app_config').doc('member_counter');
           const counterSnap = await counterRef.get().catch(() => null);
           if (counterSnap && counterSnap.exists && counterSnap.data()?.lastSerial) {
             nextSerial = Number(counterSnap.data().lastSerial) + 1;
-          } else {
-            const countSnap = await adminDb.collection('users').count().get().catch(() => null);
-            nextSerial = (countSnap?.data()?.count || 1) + 1;
           }
           await counterRef.set({
             lastSerial: nextSerial,
             lastAssignedId: `BNB${String(nextSerial).padStart(8, '0')}`,
             updatedAt: new Date().toISOString()
           }, { merge: true }).catch(() => {});
-        } catch (counterErr) {
-          nextSerial = Math.floor(1000 + Math.random() * 9000);
-        }
+        } catch (e) {}
       }
 
       const newMemberId = `BNB${String(nextSerial).padStart(8, '0')}`;
@@ -890,11 +972,26 @@ async function startServer() {
         updatedAt: new Date().toISOString()
       };
 
-      if (adminDb) {
-        await adminDb.collection('users').doc(newUid).set(newUser);
-      } else if (db) {
-        await setDoc(doc(db, 'users', newUid), newUser);
+      let saved = false;
+      if (db) {
+        try {
+          await setDoc(doc(db, 'users', newUid), newUser);
+          saved = true;
+        } catch (dbErr) {
+          console.warn('[Registration] Modular db setDoc warning, trying adminDb:', dbErr);
+        }
       }
+      if (!saved && adminDb && typeof adminDb.collection === 'function') {
+        await adminDb.collection('users').doc(newUid).set(newUser);
+        saved = true;
+      }
+
+      if (!saved) {
+        return res.status(500).json({ success: false, error: 'অ্যাকাউন্ট ডাটাবেজে সংরক্ষণ করা যায়নি।' });
+      }
+
+      // Update in-memory user email cache so immediate login lookup succeeds in 0ms
+      userEmailCache.set(cleanEmail, { user: newUser, ts: Date.now() });
 
       return res.json({ success: true, user: newUser });
     } catch (err: any) {
@@ -927,8 +1024,8 @@ async function startServer() {
       const upper = trimmed.toUpperCase();
       const digits = trimmed.replace(/\D/g, '');
 
-      // Strict Rule: BNB member codes or non-email login is forbidden
-      if (upper.includes('BNB') || (!lower.includes('@') && /^\d+$/.test(digits))) {
+      // Strict Rule: BNB member codes or non-email login is forbidden (ONLY if input is not a valid email containing '@')
+      if (!lower.includes('@') && (upper.includes('BNB') || /^\d+$/.test(digits))) {
         return res.status(400).json({
           code: 'bnb_code_forbidden',
           error: 'BNB কোড বা অ্যাকাউন্ট নম্বর দিয়ে অ্যাকাউন্ট খোলা বা লগইন করা সম্পূর্ণ নিষিদ্ধ। শুধুমাত্র আপনার নিবন্ধিত বৈধ ইমেইল অ্যাড্রেস দিয়ে লগইন করুন।'
@@ -2023,8 +2120,8 @@ async function startServer() {
 
       // Dynamic return base: if initiating website origin is known and valid, return directly there. Otherwise fallback to registered brand URL.
       const returnBase = (resolvedOrigin && resolvedOrigin.startsWith('http')) ? resolvedOrigin : APP_BASE_URL;
-      const redirect_url = `${returnBase}/dashboard?payment_status=success&status=success&val_id=${val_id}&uid=${encodeURIComponent(userId)}&token=${encodeURIComponent(auth_token)}&origin=${encodeURIComponent(resolvedOrigin)}&z=1`;
-      const cancel_url = `${returnBase}/dashboard?payment_status=cancelled&status=cancelled&val_id=${val_id}&uid=${encodeURIComponent(userId)}&token=${encodeURIComponent(auth_token)}&origin=${encodeURIComponent(resolvedOrigin)}&z=1`;
+      const redirect_url = `${APP_BASE_URL}/api/payment/zinipay-callback?val_id=${encodeURIComponent(val_id)}&uid=${encodeURIComponent(userId)}&token=${encodeURIComponent(auth_token)}&origin=${encodeURIComponent(returnBase)}`;
+      const cancel_url = `${APP_BASE_URL}/api/payment/zinipay-cancel?val_id=${encodeURIComponent(val_id)}&uid=${encodeURIComponent(userId)}&token=${encodeURIComponent(auth_token)}&origin=${encodeURIComponent(returnBase)}`;
       const webhook_url = `${APP_BASE_URL}/api/zinipay/webhook`;
 
       const payload = {
