@@ -37,7 +37,10 @@ jobs:
         run: node scripts/generate-official-icons.mjs
 
       - name: Build Web Production Bundle
-        run: npm run build
+        run: |
+          rm -rf public/assets/aistudio
+          npm run build
+          rm -rf dist/assets/aistudio
 
       - name: Sync Capacitor Android
         run: npx cap sync android
@@ -64,16 +67,29 @@ jobs:
           echo "=== Building Signed Android App Bundle (.aab) & APK ==="
           ./gradlew bundleRelease assembleRelease --no-daemon --stacktrace
 
-      - name: Prepare AAB & APK Artifacts
+      - name: Prepare AAB & APK Artifacts with Unique Versioned Filenames
         run: |
-          mkdir -p final-artifacts
-          find android/app/build/outputs/bundle/release -name "*.aab" -exec cp {} final-artifacts/BNB-BUSINESS-Network-Bangladesh-release.aab \; || true
-          find android/app/build/outputs/apk/release -name "*.apk" -exec cp {} final-artifacts/BNB-BUSINESS-Network-Bangladesh-release.apk \; || true
-          ls -la final-artifacts/
+          mkdir -p final-artifacts apk-only aab-only
+          VERSION_CODE=$(grep -m1 "versionCode" android/app/build.gradle | awk '{print $2}' | tr -d '\r\n' || echo "release")
+          BUILD_TAG="v${VERSION_CODE}-run${GITHUB_RUN_NUMBER}"
+          find android/app/build/outputs/bundle/release -name "*.aab" -exec cp {} "final-artifacts/BNB-BUSINESS-Network-Bangladesh-${BUILD_TAG}.aab" \; || true
+          find android/app/build/outputs/apk/release -name "*.apk" -exec cp {} "final-artifacts/BNB-BUSINESS-Network-Bangladesh-${BUILD_TAG}.apk" \; || true
+          cp final-artifacts/*.aab aab-only/ 2>/dev/null || true
+          cp final-artifacts/*.apk apk-only/ 2>/dev/null || true
+          ls -lh final-artifacts/
 
-      - name: Upload AAB Artifact for Play Console
+      - name: Upload AAB & APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Google-Play-Release-AAB
           path: final-artifacts/*
+          compression-level: 6
+          retention-days: 30
+
+      - name: Upload Direct APK Only Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-Installable-APK
+          path: apk-only/*
+          compression-level: 6
           retention-days: 30

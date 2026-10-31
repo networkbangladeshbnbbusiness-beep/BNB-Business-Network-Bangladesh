@@ -1,11 +1,24 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import fs from "fs";
 import path from "path";
 import { defineConfig } from "vite";
 
 export default defineConfig(() => {
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [
+      react(),
+      tailwindcss(),
+      {
+        name: "exclude-aistudio-chat-media",
+        closeBundle() {
+          const chatMediaDir = path.resolve(__dirname, "dist/assets/aistudio");
+          if (fs.existsSync(chatMediaDir)) {
+            fs.rmSync(chatMediaDir, { recursive: true, force: true });
+          }
+        },
+      },
+    ],
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "."),
