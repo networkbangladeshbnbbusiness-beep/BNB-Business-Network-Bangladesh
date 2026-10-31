@@ -1,10 +1,17 @@
 package com.bnb.business.network;
 
+import android.content.Context;
+import android.content.SharedPreferences;
 import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import androidx.activity.OnBackPressedCallback;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import com.getcapacitor.BridgeActivity;
@@ -12,18 +19,79 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Apply pure white window background BEFORE super.onCreate so there is zero black or green frame
+        try {
+            Window preWindow = getWindow();
+            if (preWindow != null) {
+                preWindow.setBackgroundDrawable(new ColorDrawable(Color.WHITE));
+                View decor = preWindow.getDecorView();
+                if (decor != null) {
+                    decor.setBackgroundColor(Color.WHITE);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        decor.setForceDarkAllowed(false);
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+
         super.onCreate(savedInstanceState);
+
+        // Native Android Back Event handling: Fully intercept hardware button & predictive back gesture
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                if (getBridge() != null && getBridge().getWebView() != null) {
+                    final WebView webView = getBridge().getWebView();
+                    webView.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            webView.evaluateJavascript(
+                                "(function() { " +
+                                "  if (window.navigationManager && typeof window.navigationManager.handleBack === 'function') { " +
+                                "    return window.navigationManager.handleBack('native'); " +
+                                "  } else if (window.history && window.history.length > 1) { " +
+                                "    window.history.back(); " +
+                                "    return true; " +
+                                "  } " +
+                                "  return false; " +
+                                "})()", null);
+                        }
+                    });
+                }
+            }
+        });
 
         // Native Android Status Bar & System Navigation Bar setup
         setupDarkGreenSystemBars();
 
         try {
-            int lightBg = Color.parseColor("#F8FAFC");
-            if (getWindow() != null && getWindow().getDecorView() != null) {
-                getWindow().getDecorView().setBackgroundColor(lightBg);
+            Window window = getWindow();
+            if (window != null) {
+                window.setBackgroundDrawable(new ColorDrawable(Color.WHITE));
+                if (window.getDecorView() != null) {
+                    window.getDecorView().setBackgroundColor(Color.WHITE);
+                }
             }
             if (getBridge() != null && getBridge().getWebView() != null) {
-                getBridge().getWebView().setBackgroundColor(lightBg);
+                WebView webView = getBridge().getWebView();
+                webView.setBackgroundColor(Color.WHITE);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    webView.setForceDarkAllowed(false);
+                }
+                if (webView.getParent() instanceof View) {
+                    ((View) webView.getParent()).setBackgroundColor(Color.WHITE);
+                }
+
+                // Purge any stale cached index.html (such as old #0b6623 green background) from WebView disk cache
+                SharedPreferences prefs = getSharedPreferences("bnb_native_prefs", Context.MODE_PRIVATE);
+                if (!prefs.getBoolean("cache_purged_v54", false)) {
+                    webView.clearCache(true);
+                    prefs.edit().putBoolean("cache_purged_v54", true).apply();
+                }
+                WebSettings settings = webView.getSettings();
+                if (settings != null) {
+                    settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+                }
             }
         } catch (Exception ignored) {}
     }
@@ -43,11 +111,10 @@ public class MainActivity extends BridgeActivity {
             window.setNavigationBarColor(darkGreenColor);
 
             // Icon & Navigation Bar Handle Contrast Management
-            WindowInsetsControllerCompat insetsController = 
+            WindowInsetsControllerCompat insetsController =
                 WindowCompat.getInsetsController(window, window.getDecorView());
-            
+
             if (insetsController != null) {
-                // false = Crisp White time, battery, wifi icons & white gesture handle / 3-buttons
                 insetsController.setAppearanceLightStatusBars(false);
                 insetsController.setAppearanceLightNavigationBars(false);
             }

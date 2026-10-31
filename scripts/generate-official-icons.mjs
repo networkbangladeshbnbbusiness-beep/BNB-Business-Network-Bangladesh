@@ -17,19 +17,50 @@ async function generateAllIcons() {
     .png({ compressionLevel: 9 })
     .toBuffer();
 
-  // Write Web public icons
+  // Write Web public icons (Official Green BNB Logo)
   const publicTargets = [
     'public/logo.png',
     'public/bnb_logo.png',
     'public/app_icon.png',
     'android/app/src/main/ic_launcher-web.png',
-    'android/app/src/main/res/drawable/splash.png',
   ];
 
   for (const relPath of publicTargets) {
     const fullPath = path.resolve(process.cwd(), relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     fs.writeFileSync(fullPath, master512);
+  }
+
+  // Write clean white (#FFFFFF) splash.png across all Android drawable directories so no green/black splash ever appears
+  const cleanWhiteSplash = await sharp({
+    create: {
+      width: 64,
+      height: 64,
+      channels: 4,
+      background: { r: 255, g: 255, b: 255, alpha: 1 },
+    },
+  })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+
+  const splashDirs = [
+    'drawable',
+    'drawable-port-mdpi',
+    'drawable-port-hdpi',
+    'drawable-port-xhdpi',
+    'drawable-port-xxhdpi',
+    'drawable-port-xxxhdpi',
+    'drawable-land-mdpi',
+    'drawable-land-hdpi',
+    'drawable-land-xhdpi',
+    'drawable-land-xxhdpi',
+    'drawable-land-xxxhdpi',
+  ];
+
+  for (const sDir of splashDirs) {
+    const targetSplash = path.resolve(process.cwd(), 'android/app/src/main/res', sDir, 'splash.png');
+    fs.mkdirSync(path.dirname(targetSplash), { recursive: true });
+    fs.writeFileSync(targetSplash, cleanWhiteSplash);
   }
 
   // Write Apple touch icon & favicons

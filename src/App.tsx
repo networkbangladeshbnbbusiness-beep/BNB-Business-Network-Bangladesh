@@ -1287,26 +1287,34 @@ export default function App() {
 
   const setActiveTab = (tab: string) => {
     setTabHistory(prev => {
-      if (tab === 'home') return ['home'];
       if (prev[prev.length - 1] === tab) return prev;
       return [...prev, tab];
     });
+    navigationManager.pushNavigationState('tab', tab);
   };
 
   const [selectedAction, setSelectedAction] = useState<string | null>(null);
   const [showDemoAuthPrompt, setShowDemoAuthPrompt] = useState(false);
   const [foregroundNotification, setForegroundNotification] = useState<{title: string, body: string} | null>(null);
-  const [showExitToast, setShowExitToast] = useState(false);
+  const [showExitConfirmModal, setShowExitConfirmModal] = useState(false);
   const [showLocationModal, setShowLocationModal] = useState(() => {
     return sessionStorage.getItem('amb_fresh_login_location_needed') === 'true';
   });
 
-  // Connect NavigationManager toast callback
+  // Connect NavigationManager exit confirmation callback
   useEffect(() => {
-    navigationManager.setExitToastCallback(setShowExitToast);
+    navigationManager.setExitConfirmCallback(setShowExitConfirmModal);
   }, []);
 
-  // Top-level App layer back handlers (Priority order: Modal overlays > Drawers > Admin/BAP > Tab History)
+  // Top-level App layer back handlers (Priority order: Exit Confirm > Modal overlays > Drawers > Admin > Tab History)
+  useBackHandler(() => {
+    if (showExitConfirmModal) {
+      setShowExitConfirmModal(false);
+      return true;
+    }
+    return false;
+  }, showExitConfirmModal, 95);
+
   useBackHandler(() => {
     if (showLocationModal) {
       sessionStorage.removeItem('amb_fresh_login_location_needed');
@@ -1378,7 +1386,7 @@ export default function App() {
       return true;
     }
     return false;
-  }, tabHistory.length > 1, 10);
+  }, tabHistory.length > 1, 15);
 
   // Global Hardware / Gesture Back Button & popstate Event Dispatcher
   useEffect(() => {
@@ -2594,19 +2602,50 @@ export default function App() {
             />
           )}
 
-          <AnimatePresence>
-            {showExitToast && (
-              <motion.div
-                initial={{ opacity: 0, y: 50, scale: 0.9 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 20, scale: 0.9 }}
-                className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[100] bg-slate-900/95 text-white px-5 py-3 rounded-2xl text-xs font-bold shadow-xl border border-slate-800 backdrop-blur-md flex items-center gap-2.5 whitespace-nowrap select-none pointer-events-none"
-              >
-                <span>📱</span>
-                <span>আবার Back চাপলে অ্যাপ থেকে বের হবে</span>
-              </motion.div>
-            )}
-          </AnimatePresence>
+          {/* Root Exit Confirmation Modal */}
+          {showExitConfirmModal && (
+            <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 font-sans select-none animate-in fade-in duration-200">
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 w-full max-w-sm text-center shadow-2xl relative">
+                <div className="w-14 h-14 mx-auto mb-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border border-emerald-100 dark:border-emerald-800/60 flex items-center justify-center text-2xl shadow-sm">
+                  📱
+                </div>
+                <h3 className="text-base font-black text-slate-800 dark:text-white">
+                  অ্যাপ থেকে বের হবেন?
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
+                  আপনি কি নিশ্চিত যে BNB Business Network Bangladesh অ্যাপ থেকে বের হতে চান?
+                </p>
+
+                <div className="grid grid-cols-2 gap-3 mt-6">
+                  <button
+                    type="button"
+                    onClick={() => setShowExitConfirmModal(false)}
+                    className="py-3 px-4 rounded-xl font-bold text-xs bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors cursor-pointer active:scale-98"
+                  >
+                    না
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowExitConfirmModal(false);
+                      try {
+                        CapApp.exitApp();
+                      } catch (e) {
+                        try {
+                          if ((navigator as any).app && typeof (navigator as any).app.exitApp === 'function') {
+                            (navigator as any).app.exitApp();
+                          }
+                        } catch (err) {}
+                      }
+                    }}
+                    className="py-3 px-4 rounded-xl font-black text-xs bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-600/20 transition-all cursor-pointer active:scale-98"
+                  >
+                    হ্যাঁ
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Online Payment Status Feedback Modal */}
           {paymentNotice && (

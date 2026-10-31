@@ -1,11 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="colorPrimary">@color/colorPrimary</item>
+        <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
+        <item name="colorAccent">@color/colorAccent</item>
+        <item name="android:windowBackground">@drawable/launch_background</item>
+        <item name="android:colorBackground">@color/splashBackground</item>
+        <item name="android:windowSplashScreenBackground">@color/splashBackground</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/launch_background</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
+        <item name="android:forceDarkAllowed">false</item>
+        <item name="android:statusBarColor">@color/statusBarColor</item>
+        <item name="android:navigationBarColor">@color/navigationBarColor</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+    </style>
+
     <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
-        <item name="android:windowBackground">#F8FAFC</item>
-        <item name="android:colorBackground">#F8FAFC</item>
-        <item name="android:windowSplashScreenBackground">#F8FAFC</item>
+        <item name="android:windowBackground">@drawable/launch_background</item>
+        <item name="android:colorBackground">@color/splashBackground</item>
+        <item name="android:windowSplashScreenBackground">@color/splashBackground</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/launch_background</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
+        <item name="android:forceDarkAllowed">false</item>
         <item name="android:statusBarColor">@color/statusBarColor</item>
         <item name="android:navigationBarColor">@color/navigationBarColor</item>
         <item name="android:windowLightStatusBar">false</item>
@@ -17,9 +38,12 @@
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
-        <item name="android:windowBackground">#F8FAFC</item>
-        <item name="android:colorBackground">#F8FAFC</item>
-        <item name="android:windowSplashScreenBackground">#F8FAFC</item>
+        <item name="android:windowBackground">@drawable/launch_background</item>
+        <item name="android:colorBackground">@color/splashBackground</item>
+        <item name="android:windowSplashScreenBackground">@color/splashBackground</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/launch_background</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
+        <item name="android:forceDarkAllowed">false</item>
         <item name="android:statusBarColor">@color/statusBarColor</item>
         <item name="android:navigationBarColor">@color/navigationBarColor</item>
         <item name="android:windowLightStatusBar">false</item>

@@ -4,11 +4,14 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#F8FAFC"
+    android:background="@color/splashBackground"
+    android:forceDarkAllowed="false"
+    tools:targetApi="29"
     tools:context=".MainActivity">
 
     <WebView
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#F8FAFC" />
+        android:background="@color/splashBackground"
+        android:forceDarkAllowed="false" />
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

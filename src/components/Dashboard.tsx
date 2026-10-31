@@ -123,7 +123,7 @@ import SafiPremiumShop from './SafiPremiumShop';
 import BNBCorporateGuide from './BNBCorporateGuide';
 import { DashboardSubViews } from './dashboard/DashboardSubViews';
 import { apiUrl, getReturnOrigin } from '../config/api';
-import { useBackHandler } from '../lib/navigationManager';
+import { useBackHandler, navigationManager } from '../lib/navigationManager';
 
 const cleanDescription = (desc: string, status?: string): string => {
   if (!desc) return '';
@@ -1145,6 +1145,7 @@ const getTxt = (key: string, fallback: string) => {
         if (prev[prev.length - 1] === type) return prev;
         return [...prev, type];
       });
+      navigationManager.pushNavigationState('section', type);
     }
   };
 
@@ -1254,16 +1255,6 @@ const getTxt = (key: string, fallback: string) => {
     return false;
   }, modalStack.length > 0, 30);
 
-  // Dedicated Tab Back Handler: When on any non-home tab (e.g. 'add_money', 'deposit', 'loan', 'history', 'profile'),
-  // pressing the system Back button or gesture returns cleanly to Home Dashboard instead of exiting the app!
-  useBackHandler(() => {
-    if (activeTab && activeTab !== 'home') {
-      setActiveTab('home');
-      if (setSelectedAction) setSelectedAction(null);
-      return true;
-    }
-    return false;
-  }, Boolean(activeTab && activeTab !== 'home'), 20);
 
   // Qard Hasana state variables
   const [qardTab, setQardTab] = useState<'info' | 'donate' | 'apply' | 'my_applications' | 'history'>('info');

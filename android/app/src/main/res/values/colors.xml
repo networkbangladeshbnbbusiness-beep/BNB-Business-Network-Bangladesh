@@ -6,4 +6,5 @@
     <color name="statusBarColor">#005a36</color>
     <color name="navigationBarColor">#005a36</color>
     <color name="ic_launcher_background">#06822e</color>
+    <color name="splashBackground">#FFFFFF</color>
 </resources>

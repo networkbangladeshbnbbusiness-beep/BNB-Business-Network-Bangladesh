@@ -11,8 +11,7 @@ interface RegisteredHandler {
 
 class NavigationManager {
   private handlers: RegisteredHandler[] = [];
-  private lastBackPressTime = 0;
-  private exitTimer: any = null;
+  private showExitConfirmCallback: ((show: boolean) => void) | null = null;
   private showExitToastCallback: ((show: boolean) => void) | null = null;
   private isProcessingBack = false;
   private lastHandledTick = 0;
@@ -21,6 +20,10 @@ class NavigationManager {
 
   constructor() {
     this.armBrowserHistoryTrap();
+  }
+
+  public setExitConfirmCallback(cb: (show: boolean) => void) {
+    this.showExitConfirmCallback = cb;
   }
 
   public setExitToastCallback(cb: (show: boolean) => void) {
@@ -58,9 +61,25 @@ class NavigationManager {
   }
 
   /**
+   * Pushes a history entry for section or tab navigation
+   */
+  public pushNavigationState(type: string, id: string) {
+    if (typeof window !== 'undefined' && window.history) {
+      try {
+        window.history.pushState({ bnb_nav: type, id, ts: Date.now() }, '');
+      } catch (e) {}
+    }
+  }
+
+  /**
    * Register a BackHandler in LIFO (stack) order.
    * Priority can be used if higher priority handlers should run first.
-   * Default priority: 10
+   * Priority hierarchy:
+   *  95-100: Exit confirmation modal / alert
+   *  70-90:  Full modals / Dialogs / Location / PIN prompt / Drawer
+   *  30-40:  Sub-views / Sections (one of 12 sections)
+   *  15-20:  Tab History (step-by-step)
+   *  10:     Default fallback
    */
   public register(handler: BackHandler, priority = 10): () => void {
     const id = 'h_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now();
@@ -93,8 +112,8 @@ class NavigationManager {
   /**
    * Execute global back action.
    * Returns:
-   *  true -> Handled internally (modal closed, subpage returned, tab switched, or 1s exit toast shown)
-   *  false -> User confirmed exit on home screen (app exited)
+   *  true -> Handled internally (modal closed, subpage returned, tab switched, or exit confirmation shown)
+   *  false -> Root exit confirmed
    */
   public handleBack(source = 'unknown'): boolean {
     const now = Date.now();
@@ -120,14 +139,6 @@ class NavigationManager {
           const handled = item.handler();
           if (handled) {
             // Handled by active sub-modal, tab, or sub-page!
-            this.lastBackPressTime = 0;
-            if (this.exitTimer) {
-              clearTimeout(this.exitTimer);
-              this.exitTimer = null;
-            }
-            if (this.showExitToastCallback) {
-              this.showExitToastCallback(false);
-            }
             return true;
           }
         } catch (err) {
@@ -135,7 +146,7 @@ class NavigationManager {
         }
       }
 
-      // 2. If we reach here, we are on the Root Home Screen
+      // 2. If we reach here, we are on the Root Home Screen with no modals or sections open
       return this.handleHomeScreenExit();
     } finally {
       this.isProcessingBack = false;
@@ -143,66 +154,27 @@ class NavigationManager {
   }
 
   /**
-   * Handles root Home Screen back press with STRICT 1-second (1000ms) double-tap exit rule.
-   * - 1st tap: Shows Toast "আবার Back চাপলে অ্যাপ থেকে বের হবে" and starts 1000ms countdown.
-   * - 2nd tap within <= 1000ms: Immediately exits the Android App.
-   * - 2nd tap after > 1000ms: Timer has expired; treats as a new 1st tap and resets countdown.
+   * Handles root Home Screen back press:
+   * Displays the "অ্যাপ থেকে বের হতে চান?" confirmation modal.
+   * The app will ONLY close if the user explicitly confirms "হ্যাঁ".
    */
   public handleHomeScreenExit(): boolean {
-    const now = Date.now();
-    const timeSinceLastPress = now - this.lastBackPressTime;
-
-    if (this.lastBackPressTime > 0 && timeSinceLastPress <= 1000) {
-      // User pressed Back a second time within 1000ms! EXIT APP!
-      this.lastBackPressTime = 0;
-      if (this.exitTimer) {
-        clearTimeout(this.exitTimer);
-        this.exitTimer = null;
-      }
-      if (this.showExitToastCallback) {
-        this.showExitToastCallback(false);
-      }
-
-      try {
-        CapApp.exitApp();
-      } catch (e) {
-        console.log('CapApp.exitApp error / fallback:', e);
-      }
-
-      try {
-        if ((navigator as any).app && typeof (navigator as any).app.exitApp === 'function') {
-          (navigator as any).app.exitApp();
-        }
-      } catch (e) {}
-
-      return false; // Exit app
-    } else {
-      // First Back press on Home Screen OR more than 1 second elapsed
-      this.lastBackPressTime = now;
-
-      if (this.showExitToastCallback) {
-        this.showExitToastCallback(true);
-      }
-
-      if (this.exitTimer) {
-        clearTimeout(this.exitTimer);
-      }
-
-      // Exactly 1.0 second (1000ms) countdown
-      this.exitTimer = setTimeout(() => {
-        if (this.showExitToastCallback) {
-          this.showExitToastCallback(false);
-        }
-        this.lastBackPressTime = 0;
-        this.exitTimer = null;
-      }, 1000);
-
+    if (this.showExitConfirmCallback) {
+      this.showExitConfirmCallback(true);
       return true;
     }
+
+    // Fallback if no modal callback registered
+    return true;
   }
 }
 
 export const navigationManager = new NavigationManager();
+
+// Expose globally so Android native MainActivity can invoke directly
+if (typeof window !== 'undefined') {
+  (window as any).navigationManager = navigationManager;
+}
 
 /**
  * React Hook for registering a back handler within any component.
