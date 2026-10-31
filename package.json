@@ -1,7 +1,7 @@
 {
   "name": "bnb-business-network-bangladesh",
   "private": true,
-  "version": "4.9.0",
+  "version": "5.0.0",
   "type": "module",
   "engines": {
     "node": ">=20.0.0"
