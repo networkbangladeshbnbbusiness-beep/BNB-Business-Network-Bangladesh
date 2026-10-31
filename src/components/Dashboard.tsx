@@ -28,6 +28,7 @@ import {
   addDoc, 
   getDocs, 
   getDoc,
+  getDocFromCache,
   query, 
   where, 
   orderBy, 
@@ -709,7 +710,10 @@ export const Dashboard = React.memo(function Dashboard({
   
   // Helper to render custom gallery image icon if set by Admin, else fall back to default SVG
   const renderGridServiceIcon = (key: string, DefaultIconComponent: React.ComponentType<{ className?: string }>) => {
-    const customImg = appConfig?.customGridIcons?.[key] || appConfig?.sectionIcons?.[key];
+    const customImg =
+      appConfig?.customGridIcons?.[key] ||
+      appConfig?.sectionIcons?.[key] ||
+      (key === 'bill_pay' ? (appConfig?.customGridIcons?.['bap'] || appConfig?.sectionIcons?.['bap']) : undefined);
     if (customImg && customImg !== '/samity_logo.svg') {
       return (
         <img 
@@ -812,7 +816,8 @@ const getTxt = (key: string, fallback: string) => {
         if (!prev || prev.uid !== user.uid) {
           return { ...user, balance: incomingBal, mainBalance: incomingBal };
         }
-        const bestBal = incomingBal > 0 ? incomingBal : getEffectiveBalance(prev);
+        const hasExplicitBalance = user.balance !== undefined || (user as any).mainBalance !== undefined;
+        const bestBal = hasExplicitBalance ? incomingBal : (incomingBal > 0 ? incomingBal : getEffectiveBalance(prev));
         return {
           ...prev,
           ...user,
@@ -1099,7 +1104,7 @@ const getTxt = (key: string, fallback: string) => {
 
       setResendSamitySuccess(isAutoApprove ? 'আপনার সমিতির সদস্যপদ আবেদনটি স্বয়ংক্রিয়ভাবে অনুমোদিত হয়েছে!' : 'আপনার সমিতির সদস্যপদ আবেদনটি এডমিন প্যানেলে সফলভাবে পুন:প্রেরণ করা হয়েছে!');
       // Non-blocking background sync
-      syncLiveProfile().catch(e => console.error("Resend sync error:", e));
+      syncLiveProfile().catch(e => console.warn("Resend sync warning:", e));
     } catch (err: any) {
       console.error('Error resending samity application:', err);
       alert('আবেদন পুন:প্রেরণে ত্রুটি ঘটেছে: ' + (err?.message || 'অনুগ্রহ করে আবার চেষ্টা করুন।'));
@@ -1312,7 +1317,7 @@ const getTxt = (key: string, fallback: string) => {
         setLiveUser({ uid: snap.id, ...uData, balance: effectiveBal, mainBalance: effectiveBal } as User);
       }
     }, (err) => {
-      console.error("Dashboard User subscription error:", err);
+      console.warn("Dashboard User subscription warning:", err);
     });
 
     // 2. Live Transactions real-time listener (Permanent, Immutable Lifetime Records - Bounded & Debounced for 0ms UI)
@@ -1997,15 +2002,15 @@ const getTxt = (key: string, fallback: string) => {
     try {
       // 1. Sync User Document (Essential & lightweight) - Query by exact document ID first to avoid duplicate phone document collisions
       const userRef = doc(db, 'users', user.uid);
-      const userSnap = await getDoc(userRef);
-      if (userSnap.exists()) {
+      const userSnap = await getDoc(userRef).catch(() => getDocFromCache(userRef).catch(() => null));
+      if (userSnap && userSnap.exists()) {
         const uData = userSnap.data();
         const effectiveBal = getEffectiveBalance(uData);
         setLiveUser({ uid: userSnap.id, ...uData, balance: effectiveBal, mainBalance: effectiveBal } as User);
-      } else {
+      } else if (user.phone) {
         const q = query(collection(db, 'users'), where('phone', '==', user.phone));
-        const qSnap = await getDocs(q);
-        if (!qSnap.empty) {
+        const qSnap = await getDocs(q).catch(() => null);
+        if (qSnap && !qSnap.empty) {
           const uDoc = qSnap.docs[0];
           const uData = uDoc.data();
           const effectiveBal = getEffectiveBalance(uData);
@@ -2015,48 +2020,56 @@ const getTxt = (key: string, fallback: string) => {
 
       // 2. Sync User's own transactions (lightweight, permanent, index-safe)
       const tQ = query(collection(db, 'transactions'), where('userId', '==', user.uid));
-      const tSnap = await getDocs(tQ);
-      const list: Transaction[] = [];
-      tSnap.forEach((d) => {
-        list.push({ id: d.id, ...d.data() } as Transaction);
-      });
-      if (user.memberId) {
-        try {
-          const mSnap = await getDocs(query(collection(db, 'transactions'), where('memberId', '==', user.memberId)));
-          mSnap.forEach((d) => {
-            if (!list.some(x => x.id === d.id)) list.push({ id: d.id, ...d.data() } as Transaction);
-          });
-        } catch (eMem) {
-          console.warn("Member transaction sync fallback:", eMem);
+      const tSnap = await getDocs(tQ).catch(() => null);
+      if (tSnap) {
+        const list: Transaction[] = [];
+        tSnap.forEach((d) => {
+          list.push({ id: d.id, ...d.data() } as Transaction);
+        });
+        if (user.memberId) {
+          try {
+            const mSnap = await getDocs(query(collection(db, 'transactions'), where('memberId', '==', user.memberId))).catch(() => null);
+            if (mSnap) {
+              mSnap.forEach((d) => {
+                if (!list.some(x => x.id === d.id)) list.push({ id: d.id, ...d.data() } as Transaction);
+              });
+            }
+          } catch (eMem) {
+            console.warn("Member transaction sync fallback:", eMem);
+          }
         }
+        setAllTransactions(sortTransactionsNewestFirst(list));
       }
-      setAllTransactions(sortTransactionsNewestFirst(list));
 
       // 3. Sync User's specific Ration Card (lightweight)
       try {
         const rcQ = query(collection(db, 'ration_cards'), where('userId', '==', user.uid));
-        const rcSnap = await getDocs(rcQ);
-        if (!rcSnap.empty) {
-          setRationCard({ id: rcSnap.docs[0].id, ...rcSnap.docs[0].data() });
-        } else {
-          setRationCard(null);
+        const rcSnap = await getDocs(rcQ).catch(() => null);
+        if (rcSnap) {
+          if (!rcSnap.empty) {
+            setRationCard({ id: rcSnap.docs[0].id, ...rcSnap.docs[0].data() });
+          } else {
+            setRationCard(null);
+          }
         }
       } catch (err) {
-        console.error("Ration cards sync failed:", err);
+        console.warn("Ration cards sync deferred:", err);
       }
 
       // 4. Sync User's own Shop Orders (lightweight)
       try {
         const soQ = query(collection(db, 'shop_orders'), where('userId', '==', user.uid));
-        const soSnap = await getDocs(soQ);
-        const listSos: any[] = [];
-        soSnap.forEach((d) => {
-          listSos.push({ id: d.id, ...d.data() });
-        });
-        listSos.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-        setAllShopOrders(listSos);
+        const soSnap = await getDocs(soQ).catch(() => null);
+        if (soSnap) {
+          const listSos: any[] = [];
+          soSnap.forEach((d) => {
+            listSos.push({ id: d.id, ...d.data() });
+          });
+          listSos.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+          setAllShopOrders(listSos);
+        }
       } catch (err) {
-        console.error("Shop orders sync failed:", err);
+        console.warn("Shop orders sync deferred:", err);
       }
 
       // 5. Run other heavy, global, or redundant queries strictly in background (Non-Blocking)
@@ -2065,39 +2078,47 @@ const getTxt = (key: string, fallback: string) => {
         try {
           if (allNotices.length === 0) {
             const nQ = query(collection(db, 'notices'), orderBy('createdAt', 'desc'), limit(15));
-            const nSnap = await getDocs(nQ);
-            const listNotices: Notice[] = [];
-            nSnap.forEach((d) => {
-              listNotices.push({ id: d.id, ...d.data() } as Notice);
-            });
-            setAllNotices(listNotices);
+            const nSnap = await getDocs(nQ).catch(() => null);
+            if (nSnap) {
+              const listNotices: Notice[] = [];
+              nSnap.forEach((d) => {
+                listNotices.push({ id: d.id, ...d.data() } as Notice);
+              });
+              setAllNotices(listNotices);
+            }
           }
 
           if (allUsers.length === 0) {
-            const memSnap = await getDocs(query(collection(db, 'users'), limit(50)));
-            const listMems: User[] = [];
-            memSnap.forEach((d) => {
-              listMems.push({ uid: d.id, ...d.data() } as User);
-            });
-            setAllUsers(listMems);
+            const memSnap = await getDocs(query(collection(db, 'users'), limit(50))).catch(() => null);
+            if (memSnap) {
+              const listMems: User[] = [];
+              memSnap.forEach((d) => {
+                listMems.push({ uid: d.id, ...d.data() } as User);
+              });
+              setAllUsers(listMems);
+            }
           }
 
           if (allOffers.length === 0) {
-            const offSnap = await getDocs(query(collection(db, 'offers'), orderBy('createdAt', 'desc'), limit(15)));
-            const listOffers: Offer[] = [];
-            offSnap.forEach((d) => {
-              listOffers.push({ id: d.id, ...d.data() } as Offer);
-            });
-            setAllOffers(listOffers);
+            const offSnap = await getDocs(query(collection(db, 'offers'), orderBy('createdAt', 'desc'), limit(15))).catch(() => null);
+            if (offSnap) {
+              const listOffers: Offer[] = [];
+              offSnap.forEach((d) => {
+                listOffers.push({ id: d.id, ...d.data() } as Offer);
+              });
+              setAllOffers(listOffers);
+            }
           }
 
           if (allProducts.length === 0) {
-            const prodSnap = await getDocs(query(collection(db, 'products'), orderBy('createdAt', 'desc'), limit(15)));
-            const listProds: Product[] = [];
-            prodSnap.forEach((d) => {
-              listProds.push({ id: d.id, ...d.data() } as Product);
-            });
-            setAllProducts(listProds.length === 0 ? defaultProducts : listProds);
+            const prodSnap = await getDocs(query(collection(db, 'products'), orderBy('createdAt', 'desc'), limit(15))).catch(() => null);
+            if (prodSnap) {
+              const listProds: Product[] = [];
+              prodSnap.forEach((d) => {
+                listProds.push({ id: d.id, ...d.data() } as Product);
+              });
+              setAllProducts(listProds.length === 0 ? defaultProducts : listProds);
+            }
           }
 
           if (qardHistory.length === 0) {
@@ -2106,37 +2127,41 @@ const getTxt = (key: string, fallback: string) => {
               where('type', 'in', ['qard_donation', 'qard_loan_request', 'qard_loan_disbursment', 'qard_loan_repayment']),
               limit(30)
             );
-            const qardSnap = await getDocs(qardQ);
-            const qardList: Transaction[] = [];
-            qardSnap.forEach((d) => {
-              qardList.push({ id: d.id, ...d.data() } as Transaction);
-            });
-            qardList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-            setQardHistory(qardList);
+            const qardSnap = await getDocs(qardQ).catch(() => null);
+            if (qardSnap) {
+              const qardList: Transaction[] = [];
+              qardSnap.forEach((d) => {
+                qardList.push({ id: d.id, ...d.data() } as Transaction);
+              });
+              qardList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+              setQardHistory(qardList);
 
-            const starterAmount = 55000;
-            const totalDonations = qardList
-              .filter(t => t.type === 'qard_donation' && t.status === 'success')
-              .reduce((sum, t) => sum + (t.amount || 0), 0);
-            setQardTotalFund(starterAmount + totalDonations);
+              const starterAmount = 55000;
+              const totalDonations = qardList
+                .filter(t => t.type === 'qard_donation' && t.status === 'success')
+                .reduce((sum, t) => sum + (t.amount || 0), 0);
+              setQardTotalFund(starterAmount + totalDonations);
 
-            const totalDisbursed = qardList
-              .filter(t => t.type === 'qard_loan_disbursment' && t.status === 'success')
-              .reduce((sum, t) => sum + (t.amount || 0), 0);
-            const totalRepaid = qardList
-              .filter(t => t.type === 'qard_loan_repayment' && t.status === 'success')
-              .reduce((sum, t) => sum + (t.amount || 0), 0);
-            setQardActiveLoansAmount(Math.max(0, totalDisbursed - totalRepaid));
+              const totalDisbursed = qardList
+                .filter(t => t.type === 'qard_loan_disbursment' && t.status === 'success')
+                .reduce((sum, t) => sum + (t.amount || 0), 0);
+              const totalRepaid = qardList
+                .filter(t => t.type === 'qard_loan_repayment' && t.status === 'success')
+                .reduce((sum, t) => sum + (t.amount || 0), 0);
+              setQardActiveLoansAmount(Math.max(0, totalDisbursed - totalRepaid));
+            }
           }
 
           if (safeDeals.length === 0) {
-            const sdSnap = await getDocs(collection(db, 'safe_deals'));
-            const listSds: any[] = [];
-            sdSnap.forEach((d) => {
-              listSds.push({ id: d.id, ...d.data() });
-            });
-            listSds.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-            setSafeDeals(listSds.length === 0 ? [] : listSds);
+            const sdSnap = await getDocs(collection(db, 'safe_deals')).catch(() => null);
+            if (sdSnap) {
+              const listSds: any[] = [];
+              sdSnap.forEach((d) => {
+                listSds.push({ id: d.id, ...d.data() });
+              });
+              listSds.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+              setSafeDeals(listSds.length === 0 ? [] : listSds);
+            }
           }
         } catch (bgErr) {
           console.warn("Background fetch warning:", bgErr);
@@ -2144,7 +2169,7 @@ const getTxt = (key: string, fallback: string) => {
       }, 50);
 
     } catch (e) {
-      console.error("Live profile sync error:", e);
+      console.warn("Live profile sync deferred (offline/unavailable):", e);
     }
   };
 

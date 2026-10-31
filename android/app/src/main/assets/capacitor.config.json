@@ -34,7 +34,7 @@
 			"style": "DARK"
 		},
 		"CapacitorHttp": {
-			"enabled": true
+			"enabled": false
 		}
 	}
 }

@@ -422,6 +422,9 @@ export default function AdminPanel(props: AdminPanelProps) {
   );
   const [cfgLogoUrl, setCfgLogoUrl] = useState(appConfig.logoUrl || '');
   const [cfgBNBToBNBIconUrl, setCfgBNBToBNBIconUrl] = useState(appConfig.ambToBNBIconUrl || '');
+  const [cfgSectionIcons, setCfgSectionIcons] = useState<Record<string, string>>(
+    appConfig.sectionIcons || appConfig.customGridIcons || {}
+  );
   const [cfgServiceStatus, setCfgServiceStatus] = useState<Record<string, boolean>>(
     appConfig.serviceStatus || {
       samity: true, bank: true, telecom: true, shop: true, qard: true,
@@ -1221,6 +1224,12 @@ export default function AdminPanel(props: AdminPanelProps) {
       }
       setCfgLogoUrl(appConfig.logoUrl || '');
       setCfgBNBToBNBIconUrl(appConfig.ambToBNBIconUrl || '');
+      if (appConfig.sectionIcons || appConfig.customGridIcons) {
+        setCfgSectionIcons({
+          ...(appConfig.customGridIcons || {}),
+          ...(appConfig.sectionIcons || {})
+        });
+      }
       setCfgServiceStatus(appConfig.serviceStatus || {
         samity: true, bank: true, telecom: true, shop: true, qard: true,
         safedeals: true, safi: true, ration: true, chat: true, agent: true,
@@ -1478,6 +1487,8 @@ export default function AdminPanel(props: AdminPanelProps) {
         ],
         logoUrl: cfgLogoUrl,
         ambToBNBIconUrl: cfgBNBToBNBIconUrl,
+        sectionIcons: cfgSectionIcons,
+        customGridIcons: cfgSectionIcons,
         serviceStatus: cfgServiceStatus,
         maintenanceMode: !!cfgMaintenanceMode,
         maintenanceTitle: cfgMaintenanceTitle,
@@ -10407,6 +10418,8 @@ export default function AdminPanel(props: AdminPanelProps) {
     notices,
     phoneChangeRequests,
     cfgLogoUrl,
+    cfgSectionIcons,
+    setCfgSectionIcons,
     handleDirectUpdateLogo,
     handleGoBack,
     adminTab,

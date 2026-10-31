@@ -1,11 +1,32 @@
 
+export function filterValidSectionIcons(rawIcons: any): Record<string, string> {
+  const cleanIcons: Record<string, string> = {};
+  if (!rawIcons || typeof rawIcons !== 'object' || Array.isArray(rawIcons)) {
+    return cleanIcons;
+  }
+  for (const [k, v] of Object.entries(rawIcons)) {
+    if (/^\d+$/.test(k)) continue;
+    if (typeof v === 'string' && v.trim().length > 0) {
+      cleanIcons[k] = v;
+    }
+  }
+  if (cleanIcons.bap && !cleanIcons.bill_pay) {
+    cleanIcons.bill_pay = cleanIcons.bap;
+  }
+  if (!cleanIcons.samity) {
+    cleanIcons.samity = "/samity_logo.svg";
+  }
+  return cleanIcons;
+}
+
 export function stripHeavyConfigFields(configObj: any): any {
   if (!configObj || typeof configObj !== 'object') return configObj;
   const { customGridIcons, sectionIcons, mandatoryNoticeResponses, noticeResponses, ...clean } = configObj;
   
+  const preservedKeys = new Set(['logoUrl', 'ambToBNBIconUrl', 'maintenanceLogoUrl', 'maintenanceBgUrl', 'maintenanceAnimationUrl']);
   const result: Record<string, any> = {};
   for (const [key, value] of Object.entries(clean)) {
-    if (typeof value === 'string' && value.length > 20000 && value.startsWith('data:')) {
+    if (!preservedKeys.has(key) && typeof value === 'string' && value.length > 50000 && value.startsWith('data:')) {
       continue;
     }
     result[key] = value;
@@ -403,11 +424,23 @@ export const DEFAULT_CONFIG: AppConfig = {
 export const DEFAULT_SAMITY_INVESTMENTS: import('../types').SamityInvestment[] = [];
 
 export async function loadAppConfig(): Promise<AppConfig> {
+  let cachedLocal: Partial<AppConfig> = {};
+  try {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('amb_app_config');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          cachedLocal = parsed;
+        }
+      }
+    }
+  } catch (e) {}
+
   try {
     const configRef = doc(db, 'system_settings', 'app_config');
     const mainConfigRef = doc(db, 'app_config', 'main');
     const iconsRef = doc(db, 'system_settings', 'section_icons');
-    const responsesRef = doc(db, 'system_settings', 'notice_responses');
 
     const [docSnap, mainSnap, iconsSnap] = await Promise.all([
       getDoc(configRef).catch(() => null),
@@ -415,69 +448,61 @@ export async function loadAppConfig(): Promise<AppConfig> {
       getDoc(iconsRef).catch(() => null)
     ]);
 
-    let data: any = {};
-    if (docSnap && docSnap.exists()) {
-      const rawDocData = docSnap.data() as any;
-      if (rawDocData.customGridIcons || rawDocData.sectionIcons || rawDocData.mandatoryNoticeResponses) {
-        const legacyIcons = { ...(rawDocData.customGridIcons || {}), ...(rawDocData.sectionIcons || {}) };
-        if (Object.keys(legacyIcons).length > 0) {
-          setDoc(iconsRef, legacyIcons, { merge: true }).catch(() => null);
-        }
-        updateDoc(configRef, {
-          customGridIcons: deleteField(),
-          sectionIcons: deleteField(),
-          mandatoryNoticeResponses: deleteField()
-        }).catch(() => null);
-      }
-      data = rawDocData;
-    } else if (mainSnap && mainSnap.exists()) {
-      data = mainSnap.data() as any;
+    if (!docSnap && !mainSnap && !iconsSnap) {
+      return { ...DEFAULT_CONFIG, ...cachedLocal } as AppConfig;
     }
 
-    let iconsData: Record<string, string> = {};
+    const mainData = (mainSnap && mainSnap.exists()) ? (mainSnap.data() as any) : {};
+    const sysData = (docSnap && docSnap.exists()) ? (docSnap.data() as any) : {};
+
+    let data: any = { ...mainData, ...sysData };
+    if (mainData.logoUrl && !data.logoUrl) data.logoUrl = mainData.logoUrl;
+    if (mainData.dashboardBanners?.length && (!data.dashboardBanners || data.dashboardBanners.length === 0)) {
+      data.dashboardBanners = mainData.dashboardBanners;
+    }
+    if (mainData.bottomBanners?.length && (!data.bottomBanners || data.bottomBanners.length === 0)) {
+      data.bottomBanners = mainData.bottomBanners;
+    }
+
+    let rawIcons: Record<string, any> = {
+      ...(cachedLocal.customGridIcons || {}),
+      ...(cachedLocal.sectionIcons || {}),
+      ...(mainData.customGridIcons || {}),
+      ...(mainData.sectionIcons || {}),
+      ...(sysData.customGridIcons || {}),
+      ...(sysData.sectionIcons || {})
+    };
     if (iconsSnap && iconsSnap.exists()) {
-      iconsData = (iconsSnap.data() as Record<string, string>) || {};
+      rawIcons = { ...rawIcons, ...(iconsSnap.data() || {}) };
     }
 
-    // Migration: Safely strip heavy fields from local data object to prevent writing oversized payload back to Firestore
+    const iconsData = filterValidSectionIcons(rawIcons);
+
+    // Safely strip heavy fields from local data object
     delete data.customGridIcons;
     delete data.sectionIcons;
     delete data.mandatoryNoticeResponses;
 
-    if (!iconsData.samity) {
-      iconsData.samity = "/samity_logo.svg";
-    }
     data.sectionIcons = iconsData;
     data.customGridIcons = iconsData;
 
-    let updated = false;
     if (!data.globalTexts) {
       data.globalTexts = {};
     }
     if (data.globalTexts.cardSafeDealsTitle === "BNB নিরাপদ ডিল" || !data.globalTexts.cardSafeDealsTitle) {
       data.globalTexts.cardSafeDealsTitle = "BNB নিরাপদ লেনদেন";
-      updated = true;
     }
-    if (data.globalTexts.cardBankTitle === "MY BNB লেনদেন" || data.globalTexts.cardBankTitle === "BNB লেনদেন" || !data.globalTexts.cardBankTitle) {
+    if (data.globalTexts.cardBankTitle === "BNB লেনদেন" || !data.globalTexts.cardBankTitle) {
       data.globalTexts.cardBankTitle = "MY BNB লেনদেন";
-      updated = true;
     }
     if (data.escrowTicker === "BNB নিরাপদ ডিলঃ যেকোনো প্রোডাক্ট কুরিয়ার কন্ডিশনে ক্রয়ের পূর্বে এসক্রো ডিল বুকিং করে আপনার মেইন ব্যালেন্সের পেমেন্ট নিরাপদ করুন।" || !data.escrowTicker) {
       data.escrowTicker = "BNB নিরাপদ লেনদেনঃ যেকোনো প্রোডাক্ট কুরিয়ার কন্ডিশনে ক্রয়ের পূর্বে এসক্রো ডিল বুকিং করে আপনার মেইন ব্যালেন্সের পেমেন্ট নিরাপদ করুন।";
-      updated = true;
     }
-    if (updated) {
-      try {
-        const toSave = stripHeavyConfigFields(data);
-        await setDoc(configRef, toSave, { merge: true });
-      } catch (e) {
-        console.warn("App config local migration active:", e);
-      }
-    }
-    return { ...DEFAULT_CONFIG, ...data } as AppConfig;
+
+    return { ...DEFAULT_CONFIG, ...cachedLocal, ...data, sectionIcons: iconsData, customGridIcons: iconsData } as AppConfig;
   } catch (err) {
-    console.warn("Failed to load DB config, using local default values:", err);
-    return DEFAULT_CONFIG;
+    console.warn("Failed to load DB config, using cached/default values:", err);
+    return { ...DEFAULT_CONFIG, ...cachedLocal } as AppConfig;
   }
 }
 
@@ -505,7 +530,7 @@ export async function saveAppConfig(newConfig: AppConfig): Promise<void> {
     const sanitized = sanitizeConfig(newConfig);
     
     // Save heavy icon maps to dedicated system_settings/section_icons document
-    const iconsData = { ...(sanitized.sectionIcons || {}), ...(sanitized.customGridIcons || {}) };
+    const iconsData = filterValidSectionIcons({ ...(sanitized.sectionIcons || {}), ...(sanitized.customGridIcons || {}) });
     if (Object.keys(iconsData).length > 0) {
       await setDoc(iconsRef, iconsData, { merge: true }).catch(() => null);
     }
@@ -519,7 +544,7 @@ export async function saveAppConfig(newConfig: AppConfig): Promise<void> {
     ]);
 
     try {
-      localStorage.setItem('amb_app_config', JSON.stringify({ ...DEFAULT_CONFIG, ...sanitized }));
+      localStorage.setItem('amb_app_config', JSON.stringify({ ...DEFAULT_CONFIG, ...sanitized, sectionIcons: iconsData, customGridIcons: iconsData }));
     } catch (e) {}
   } catch (err) {
     console.error("Failed to save DB config:", err);

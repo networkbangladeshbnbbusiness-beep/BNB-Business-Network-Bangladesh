@@ -903,10 +903,18 @@ export async function deleteUserCompletelyFromDatabase(targetUserOrId: string | 
  * Reads directly from Firestore to ensure freshness and prevent stale local state mismatches.
  */
 export async function findUserInFirestoreByPhone(
-  rawQuery: string,
-  countryCode: string = '+880'
-): Promise<{ docId: string; user: User } | null> {
-  if (!rawQuery) return null;
+  rawQueryOrDb: any,
+  secondArg: string = '+880'
+): Promise<{ docId: string; user: User; id: string; data: User } | null> {
+  const rawQuery = typeof rawQueryOrDb === 'string' ? rawQueryOrDb : (typeof secondArg === 'string' ? secondArg : '');
+  if (!rawQuery || typeof rawQuery !== 'string') return null;
+
+  const formatResult = (docId: string, user: User) => ({
+    docId,
+    user,
+    id: docId,
+    data: user
+  });
 
   const trimmedQuery = rawQuery.trim();
   const engQuery = convertBengaliToEnglishDigits(trimmedQuery);
@@ -935,7 +943,7 @@ export async function findUserInFirestoreByPhone(
           memberId: 'MAIN_ADMIN'
         };
         saveUserToLocalBackup(userObj);
-        return { docId: 'admin_master', user: userObj };
+        return formatResult('admin_master', userObj);
       }
     } catch (e) {
       console.warn("admin_master lookup warning:", e);
@@ -968,7 +976,7 @@ export async function findUserInFirestoreByPhone(
         if (last9Digits && uPhoneDigits && !uPhoneDigits.endsWith(last9Digits)) {
           return null;
         }
-        return { docId: id, user: { ...uData, uid: snap.id } };
+        return formatResult(id, { ...uData, uid: snap.id });
       }
     } catch (e) { return null; }
     return null;
@@ -1055,7 +1063,7 @@ export async function findUserInFirestoreByPhone(
           mainBalance: effectiveBal
         };
         saveUserToLocalBackup(userObj);
-        return { docId: userDoc.id, user: userObj };
+        return formatResult(userDoc.id, userObj);
       }
     }
   }
@@ -1095,11 +1103,11 @@ export async function findUserInFirestoreByPhone(
           mainBalance: effectiveBal
         };
         saveUserToLocalBackup(userObj);
-        return { docId: userDoc.id, user: userObj };
+        return formatResult(userDoc.id, userObj);
       }
     }
   } catch (e) {
-    console.error("Critical fallback scan failed:", e);
+    console.warn("Fallback scan skipped (offline/unavailable):", e);
   }
 
   // 5. Check Local Backup Cache ONLY if phone or member ID matches exactly
@@ -1122,7 +1130,7 @@ export async function findUserInFirestoreByPhone(
             ) {
               const uid = u.uid || ('user_' + (normalizePhoneNumber(u.phone) || digitsOnly));
               const recoveredObj: User = { ...u, uid };
-              return { docId: uid, user: recoveredObj };
+              return formatResult(uid, recoveredObj);
             }
           }
         } catch (eLocal) {}

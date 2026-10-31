@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, signInAnonymously } from 'firebase/auth';
-import { initializeFirestore, memoryLocalCache, getFirestore, setLogLevel, doc, getDocFromServer } from 'firebase/firestore';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache, getFirestore, setLogLevel, doc, getDocFromServer, enableNetwork } from 'firebase/firestore';
 import 'firebase/firestore';
 import { getMessaging } from 'firebase/messaging';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -20,7 +20,12 @@ try {
 if (typeof window !== 'undefined') {
   window.addEventListener('unhandledrejection', (event) => {
     const msg = String(event?.reason?.message || event?.reason || '');
-    if (msg.includes('RST_STREAM') || msg.includes("GrpcConnection RPC 'Listen'") || msg.includes('Code: 13')) {
+    if (
+      msg.includes('RST_STREAM') ||
+      msg.includes("GrpcConnection RPC 'Listen'") ||
+      msg.includes('Code: 13') ||
+      msg.includes('client is offline')
+    ) {
       event.preventDefault();
     }
   });
@@ -29,27 +34,43 @@ if (typeof window !== 'undefined') {
 let firestoreInstance: any;
 try {
   firestoreInstance = initializeFirestore(app, {
-    experimentalForceLongPolling: true,
+    experimentalAutoDetectLongPolling: true,
     ignoreUndefinedProperties: true,
-    localCache: memoryLocalCache()
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
   }, TARGET_DATABASE_ID);
-} catch (e1) {
+} catch (e0) {
   try {
-    firestoreInstance = getFirestore(app, TARGET_DATABASE_ID);
-  } catch (e2) {
+    firestoreInstance = initializeFirestore(app, {
+      experimentalAutoDetectLongPolling: true,
+      ignoreUndefinedProperties: true,
+      localCache: memoryLocalCache()
+    }, TARGET_DATABASE_ID);
+  } catch (e1) {
     try {
-      firestoreInstance = initializeFirestore(app, {
-        experimentalForceLongPolling: true,
-        ignoreUndefinedProperties: true,
-        localCache: memoryLocalCache()
-      });
-    } catch (e3) {
-      firestoreInstance = getFirestore(app);
+      firestoreInstance = getFirestore(app, TARGET_DATABASE_ID);
+    } catch (e2) {
+      try {
+        firestoreInstance = initializeFirestore(app, {
+          experimentalAutoDetectLongPolling: true,
+          ignoreUndefinedProperties: true,
+          localCache: memoryLocalCache()
+        });
+      } catch (e3) {
+        firestoreInstance = getFirestore(app);
+      }
     }
   }
 }
 
 export const db = firestoreInstance; /* CRITICAL: The app will break without this line */
+
+// Ensure Firestore network is enabled and recovers automatically on reconnect
+if (typeof window !== 'undefined' && db) {
+  enableNetwork(db).catch(() => {});
+  window.addEventListener('online', () => {
+    enableNetwork(db).catch(() => {});
+  });
+}
 
 // Validate Connection to Firestore on boot as mandated by Firebase Skill
 async function testConnection() {
@@ -59,7 +80,7 @@ async function testConnection() {
     }
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn("Please check your Firebase configuration: client is offline.");
+      enableNetwork(db).catch(() => {});
     }
   }
 }

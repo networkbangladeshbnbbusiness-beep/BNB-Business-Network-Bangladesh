@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { ensureAuth, db, handleFirestoreError, OperationType, auth } from './lib/firebase';
 import { signOut } from 'firebase/auth';
-import { doc, getDoc, collection, query, where, getDocs, updateDoc, setDoc, limit, onSnapshot, increment, serverTimestamp, writeBatch, runTransaction } from 'firebase/firestore';
+import { doc, getDoc, getDocFromCache, collection, query, where, getDocs, updateDoc, setDoc, limit, onSnapshot, increment, serverTimestamp, writeBatch, runTransaction } from 'firebase/firestore';
 import { User, AppConfig, getEffectiveBalance } from './types';
 import { processUserSamitySavingsAutoDeduction, getUnpaidSamityMonths } from './lib/samitySavingsEngine';
 import { loadAppConfig, DEFAULT_CONFIG } from './lib/config';
@@ -285,8 +285,9 @@ export default function App() {
     const storedUid = localStorage.getItem('amb_user_uid');
     if (!storedUid || isFakeOrTemporaryUid(storedUid)) return;
     try {
-      const snap = await getDoc(doc(db, 'users', storedUid));
-      if (snap.exists()) {
+      const userDocRef = doc(db, 'users', storedUid);
+      const snap = await getDoc(userDocRef).catch(() => getDocFromCache(userDocRef).catch(() => null));
+      if (snap && snap.exists()) {
         const uData = { ...(snap.data() as User), uid: snap.id };
         const effectiveBal = getEffectiveBalance(uData);
         uData.balance = effectiveBal;
@@ -299,7 +300,7 @@ export default function App() {
         window.dispatchEvent(new CustomEvent('bnb_balance_updated', { detail: { amount: pAmount || 0, newBalance: effectiveBal } }));
       }
     } catch (e) {
-      console.warn('Live balance refresh error:', e);
+      console.warn('Live balance refresh warning:', e);
     }
   }, []);
 
@@ -371,8 +372,9 @@ export default function App() {
     try {
       await ensureAuth().catch(() => {});
       if (targetUid && !isFakeOrTemporaryUid(targetUid)) {
-        const uSnap = await getDoc(doc(db, 'users', targetUid));
-        if (uSnap.exists()) {
+        const uRef = doc(db, 'users', targetUid);
+        const uSnap = await getDoc(uRef).catch(() => getDocFromCache(uRef).catch(() => null));
+        if (uSnap && uSnap.exists()) {
           return persistAndReturnUser({ ...uSnap.data(), uid: uSnap.id });
         }
       }
@@ -380,20 +382,23 @@ export default function App() {
       // 3. Direct client-side Firestore lookup via deposits/{targetValId} or zinipay_invoices/{targetValId}
       if (targetValId) {
         let depData: any = null;
-        const depSnap = await getDoc(doc(db, 'deposits', targetValId));
-        if (depSnap.exists()) {
+        const depRef = doc(db, 'deposits', targetValId);
+        const depSnap = await getDoc(depRef).catch(() => getDocFromCache(depRef).catch(() => null));
+        if (depSnap && depSnap.exists()) {
           depData = depSnap.data();
         } else {
-          const invSnap = await getDoc(doc(db, 'zinipay_invoices', targetValId));
-          if (invSnap.exists()) depData = invSnap.data();
+          const invRef = doc(db, 'zinipay_invoices', targetValId);
+          const invSnap = await getDoc(invRef).catch(() => getDocFromCache(invRef).catch(() => null));
+          if (invSnap && invSnap.exists()) depData = invSnap.data();
         }
 
         if (depData) {
           const depUid = depData.userId || depData.uid || '';
           const depPhone = depData.userPhone || depData.phone || '';
           if (depUid && !isFakeOrTemporaryUid(depUid)) {
-            const uSnap = await getDoc(doc(db, 'users', depUid));
-            if (uSnap.exists()) {
+            const uRef = doc(db, 'users', depUid);
+            const uSnap = await getDoc(uRef).catch(() => getDocFromCache(uRef).catch(() => null));
+            if (uSnap && uSnap.exists()) {
               return persistAndReturnUser({ ...uSnap.data(), uid: uSnap.id });
             }
           }
@@ -1008,12 +1013,23 @@ export default function App() {
     const iconsRef = doc(db, 'system_settings', 'section_icons');
     const unsubIcons = onSnapshot(iconsRef, (snap) => {
       if (snap.exists()) {
-        const iconsData = (snap.data() as Record<string, string>) || {};
+        const rawIcons = (snap.data() as Record<string, string>) || {};
+        const cleanIcons: Record<string, string> = {};
+        for (const [k, v] of Object.entries(rawIcons)) {
+          if (/^\d+$/.test(k)) continue;
+          if (typeof v === 'string' && v.trim().length > 0) {
+            cleanIcons[k] = v;
+          }
+        }
+        if (cleanIcons.bap && !cleanIcons.bill_pay) {
+          cleanIcons.bill_pay = cleanIcons.bap;
+        }
         setAppConfig(prev => {
+          const mergedIcons = { ...(prev.customGridIcons || {}), ...(prev.sectionIcons || {}), ...cleanIcons };
           const merged = {
             ...prev,
-            customGridIcons: { ...(prev.customGridIcons || {}), ...iconsData },
-            sectionIcons: { ...(prev.sectionIcons || {}), ...iconsData }
+            customGridIcons: mergedIcons,
+            sectionIcons: mergedIcons
           };
           try {
             localStorage.setItem('amb_app_config', JSON.stringify({ ...DEFAULT_CONFIG, ...merged }));
@@ -1604,12 +1620,33 @@ export default function App() {
           ensureAuth()
         ]);
 
-        setAppConfig(config);
-        try {
-          localStorage.setItem('amb_app_config', JSON.stringify(config));
-        } catch (e) {
-          console.error("Failed to cache appConfig", e);
-        }
+        setAppConfig(prev => {
+          const mergedIcons = {
+            ...(prev.customGridIcons || {}),
+            ...(prev.sectionIcons || {}),
+            ...(config.customGridIcons || {}),
+            ...(config.sectionIcons || {})
+          };
+          const merged: AppConfig = {
+            ...prev,
+            ...config,
+            logoUrl: config.logoUrl || prev.logoUrl || DEFAULT_CONFIG.logoUrl,
+            dashboardBanners: (config.dashboardBanners && config.dashboardBanners.length > 0)
+              ? config.dashboardBanners
+              : (prev.dashboardBanners && prev.dashboardBanners.length > 0 ? prev.dashboardBanners : DEFAULT_CONFIG.dashboardBanners),
+            bottomBanners: (config.bottomBanners && config.bottomBanners.length > 0)
+              ? config.bottomBanners
+              : (prev.bottomBanners && prev.bottomBanners.length > 0 ? prev.bottomBanners : DEFAULT_CONFIG.bottomBanners),
+            customGridIcons: mergedIcons,
+            sectionIcons: mergedIcons
+          };
+          try {
+            localStorage.setItem('amb_app_config', JSON.stringify(merged));
+          } catch (e) {
+            console.error("Failed to cache appConfig", e);
+          }
+          return merged;
+        });
 
         if (authUser) {
           setAuthUid(authUser.uid);
@@ -1642,7 +1679,7 @@ export default function App() {
               if (err?.code === 'permission-denied' || err?.message?.includes('permission')) {
                 handleFirestoreError(err, OperationType.GET, `users/${targetUid}`);
               } else {
-                throw err;
+                userSnap = await getDocFromCache(userRef).catch(() => null);
               }
             }
 
@@ -1753,7 +1790,7 @@ export default function App() {
             prev.samityStatus === uData.samityStatus &&
             prev.pin === uData.pin &&
             prev.name === uData.name &&
-            prev.avatarUrl === uData.avatarUrl
+            (prev as any).avatarUrl === (uData as any).avatarUrl
           ) {
             return prev;
           }
@@ -1761,7 +1798,7 @@ export default function App() {
         });
       }
     }, (err) => {
-      console.error("Real-time App user document snapshot error:", err);
+      console.warn("Real-time App user document snapshot warning:", err);
     });
 
     return () => unsub();
@@ -1855,7 +1892,7 @@ export default function App() {
               await updateDoc(doc(db, 'users', currentUser.uid), updates);
             }
           } catch (err) {
-            console.error("Failed to automatically register device ID / fingerprint:", err);
+            console.warn("Device ID / fingerprint registration deferred:", err);
           }
         };
         registerDevice();
@@ -1873,7 +1910,7 @@ export default function App() {
           deviceStatus: 'Online'
         });
       } catch (err) {
-        console.error("Failed to update status to Online in Firestore:", err);
+        console.warn("Deferred status update to Online in Firestore:", err);
       }
     };
     setOnline();
@@ -1882,7 +1919,7 @@ export default function App() {
       if (currentUser?.uid) {
         updateDoc(doc(db, 'users', currentUser.uid), {
           deviceStatus: 'Offline'
-        }).catch((err) => console.error("Failed to update status to Offline:", err));
+        }).catch(() => {});
       }
     };
 
