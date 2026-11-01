@@ -6,10 +6,14 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore, collection, onSnapshot, doc, getDocs, deleteDoc, updateDoc, addDoc, serverTimestamp, getDoc, runTransaction, setLogLevel, query, where, limit, setDoc } from 'firebase/firestore';
-import admin from 'firebase-admin';
+import * as admin from 'firebase-admin';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+let db: any = null;
+let adminDb: any = null;
+const firebaseAdmin = admin as any;
 
 const PAYMENT_AUTH_SECRET = process.env.PAYMENT_AUTH_SECRET || 'bnb_secure_payment_salt_2026';
 
@@ -517,9 +521,8 @@ async function startServer() {
   // Authoritative Target Firestore Database ID
   const TARGET_DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || 'ai-studio-120ec6e1-2db5-45d2-b1b1-46493400c959';
   let firebaseApp: any = null;
-  let db: any = null;
-  let adminDb: any = null;
-  const firebaseAdmin = admin as any;
+  db = null;
+  adminDb = null;
 
   try {
     const configPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
@@ -1987,7 +1990,7 @@ async function startServer() {
       if (!resolvedUserId && authHeader && authHeader.startsWith('Bearer ')) {
         try {
           const token = authHeader.split('Bearer ')[1];
-          const decodedToken = await admin.auth().verifyIdToken(token);
+          const decodedToken = await firebaseAdmin.auth().verifyIdToken(token);
           if (decodedToken?.uid) {
             resolvedUserId = decodedToken.uid;
           }
@@ -2132,6 +2135,8 @@ async function startServer() {
         webhook_url,
         cus_name: cus_name.trim(),
         cus_email: cus_email.trim(),
+        logo: `${APP_BASE_URL}/logo.png`,
+        brand_logo_url: `${APP_BASE_URL}/logo.png`,
         metadata: {
           val_id,
           order_id: `ORD-${val_id}`,
@@ -2139,7 +2144,9 @@ async function startServer() {
           userId,
           phone: cus_phone,
           memberId,
-          purpose: 'wallet_deposit'
+          purpose: 'wallet_deposit',
+          logo_url: `${APP_BASE_URL}/logo.png`,
+          brand_logo: `${APP_BASE_URL}/logo.png`
         }
       };
 

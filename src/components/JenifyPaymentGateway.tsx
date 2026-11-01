@@ -454,7 +454,7 @@ export const JenifyPaymentGateway: React.FC<JenifyPaymentGatewayProps> = ({
     <div className="max-w-2xl mx-auto px-4 py-6">
       <div className="flex items-center justify-between mb-6">
         <UnifiedBackButton onClick={handleReturnToDashboard} label="ফিরে যান" />
-        <h2 className="text-xl font-bold text-slate-900 dark:text-white">অনলাইন পেমেন্ট গেটওয়ে (ZiniPay)</h2>
+        <h2 className="text-xl font-bold text-slate-900 dark:text-white">অনলাইন পেমেন্ট গেটওয়ে</h2>
       </div>
 
       {step === 'input' && (
@@ -546,6 +546,7 @@ export const JenifyPaymentGateway: React.FC<JenifyPaymentGatewayProps> = ({
             </button>
 
             <div className="flex items-center gap-1.5 text-xs sm:text-sm font-bold truncate px-2">
+              <img src="/logo.png" alt="BNB" className="w-5 h-5 rounded-md bg-white p-0.5 shrink-0" />
               <Lock className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
               <span>নিরাপদ পেমেন্ট (৳{activeInvoice.amount})</span>
             </div>

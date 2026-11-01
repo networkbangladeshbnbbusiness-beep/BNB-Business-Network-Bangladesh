@@ -3018,7 +3018,7 @@ export default function AdminPanel(props: AdminPanelProps) {
   const [editSavings, setEditSavings] = useState<string | number>(0);
   const [editDueLoan, setEditDueLoan] = useState<string | number>(0);
   const [editPin, setEditPin] = useState('');
-  const [editRole, setEditRole] = useState<'user' | 'admin' | 'sub_admin'>('user');
+  const [editRole, setEditRole] = useState<'user' | 'admin' | 'sub_admin' | 'agent'>('user');
   const [editSubAdminPermissions, setEditSubAdminPermissions] = useState<string[]>([]);
   const [editMemberGroup, setEditMemberGroup] = useState<'general' | 'admin' | 'need'>('general');
   const [editUserStatus, setEditUserStatus] = useState<'active' | 'inactive'>('active');

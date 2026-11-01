@@ -11,7 +11,7 @@ export interface User {
   activeSessionToken?: string; // Single active device session token
   activeSessionDeviceId?: string; // Unique ID of active device
   isPendingPin?: boolean;
-  role: 'user' | 'admin' | 'sub_admin';
+  role: 'user' | 'admin' | 'sub_admin' | 'agent';
   subAdminPermissions?: string[]; // Array of permitted section IDs in Admin Panel
   balance: number; // Deposit-able wallet balance (Samity)
   mainBalance?: number; // Primary main balance
