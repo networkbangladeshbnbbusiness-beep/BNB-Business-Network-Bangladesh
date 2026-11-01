@@ -159,3 +159,20 @@ body {
 .animate-bnb-blink {
   animation: bnb-blink 1.2s infinite;
 }
+
+/* Safe Area Inset Utilities for Edge-to-Edge and Full-Display Android & iOS */
+.pt-safe {
+  padding-top: max(env(safe-area-inset-top, 0px), 32px);
+}
+
+.pb-safe {
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+}
+
+.mt-safe {
+  margin-top: max(env(safe-area-inset-top, 0px), 32px);
+}
+
+.mb-safe {
+  margin-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+}

@@ -647,7 +647,7 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
     <div className="min-h-screen bg-[#0b6623] text-slate-850 font-sans flex flex-col relative" id="telecom-screen-root">
       
       {/* Dynamic Green Top Header */}
-      <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-2.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-20 space-y-2.5">
+      <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-safe pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-20 space-y-2.5">
         <div className="flex items-center justify-between gap-1">
           <div className="flex items-center gap-2">
             <UnifiedBackButton

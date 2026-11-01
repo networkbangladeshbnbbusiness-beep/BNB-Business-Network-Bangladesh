@@ -3282,7 +3282,7 @@ export const SamityScreen = React.memo(function SamityScreen({
     <div className="min-h-screen bg-[#0b6623] text-slate-800 font-sans flex flex-col relative" id="samity-screen-root">
       
       {/* 1. Header (1. হেডার) styled matching top green header */}
-      <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-2.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-20 space-y-2.5">
+      <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-safe pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-20 space-y-2.5">
         {/* Decorative subtle header glows */}
         <div className="absolute -top-10 -right-10 w-28 h-28 bg-teal-500/10 rounded-full blur-xl pointer-events-none" />
         <div className="absolute -bottom-10 -left-10 w-28 h-28 bg-emerald-500/15 rounded-full blur-xl pointer-events-none" />

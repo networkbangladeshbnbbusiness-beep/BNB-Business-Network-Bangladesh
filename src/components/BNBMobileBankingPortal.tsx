@@ -6378,7 +6378,7 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
       <div id="money-exchange-module-root" className="w-full max-w-xl mx-auto bg-[#001E17] min-h-screen text-white pb-16 relative">
         
         {/* Green Top Header Section matching Home Dashboard */}
-        <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-2.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-30 space-y-2.5 mb-2">
+        <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-safe pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-30 space-y-2.5 mb-2">
           <div className="flex items-center justify-between gap-2.5">
             <div className="flex items-center gap-2">
               <UnifiedBackButton 

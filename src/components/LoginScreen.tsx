@@ -828,7 +828,7 @@ export default function LoginScreen({
           isDark
             ? 'from-[#06331C] via-[#084426] to-[#0A522E]'
             : 'from-[#094828] via-[#0B5C33] to-[#0D6B3C]'
-        } text-white pt-3 sm:pt-4 pb-12 sm:pb-16 px-4 overflow-hidden shadow-lg transition-colors duration-200`}
+        } text-white pt-safe sm:pt-4 pb-12 sm:pb-16 px-4 overflow-hidden shadow-lg transition-colors duration-200`}
       >
         {/* Subtle decorative background silhouettes / landscape */}
         <div className="absolute inset-0 opacity-15 pointer-events-none mix-blend-overlay">

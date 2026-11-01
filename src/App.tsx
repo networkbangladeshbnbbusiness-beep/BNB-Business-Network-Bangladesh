@@ -233,7 +233,13 @@ export default function App() {
       return () => clearTimeout(t);
     }
   }, [paymentToast]);
-  const [showSplash, setShowSplash] = useState(false);
+  const [showSplash, setShowSplash] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('amb_splash_shown') !== 'true';
+    }
+    return false;
+  });
+
 
 
   const handleSplashFinish = useCallback(() => {
@@ -2207,7 +2213,7 @@ export default function App() {
 
   return (
     <div className={`min-h-screen bg-slate-50 text-slate-800 antialiased selection:bg-emerald-100 selection:text-emerald-900 ${darkMode ? 'dark bg-slate-950 text-slate-100' : ''}`}>
-      
+      {showSplash && <CleanSplash onFinish={handleSplashFinish} />}
 
       {showMaintenance ? (
         <MaintenanceScreen 

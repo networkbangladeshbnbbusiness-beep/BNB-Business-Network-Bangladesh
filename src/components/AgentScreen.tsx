@@ -1900,7 +1900,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
     <div className="bg-[#0b6623] min-h-screen text-slate-800 pb-28 relative max-w-lg mx-auto border-x border-slate-150">
       
       {/* Green Top Header Section matching Home Dashboard */}
-      <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-2.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-30 space-y-2.5">
+      <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-safe pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-30 space-y-2.5">
         <div className="flex items-center justify-between gap-1">
           <div className="flex items-center gap-3">
             <UnifiedBackButton
