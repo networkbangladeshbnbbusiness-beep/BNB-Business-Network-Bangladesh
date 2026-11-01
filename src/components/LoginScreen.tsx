@@ -1223,17 +1223,6 @@ export default function LoginScreen({
                       }`}
                     />
                   </div>
-                  <p
-                    className={`text-[11px] rounded-xl px-3 py-1.5 mt-2 font-medium border ${
-                      isDark
-                        ? 'text-amber-300 bg-amber-950/50 border-amber-800/60'
-                        : 'text-amber-700 bg-amber-50/70 border-amber-200/60'
-                    }`}
-                  >
-                    {isBn
-                      ? '⚠️ BNB কোড বা অ্যাকাউন্ট নম্বর দিয়ে লগইন সম্পূর্ণ নিষিদ্ধ। একাউন্ট খোলা এবং লগইন শুধুমাত্র ইমেইলের মাধ্যমে করতে হবে।'
-                      : '⚠️ Logging in with a BNB code or account number is strictly prohibited. Registration and login must be done via email only.'}
-                  </p>
                 </div>
 
                 {/* Forgot PIN link */}
