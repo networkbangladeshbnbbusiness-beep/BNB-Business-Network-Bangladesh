@@ -2205,7 +2205,7 @@ return (
                         </div>
                         <div>
                           <h4 className="text-sm font-black text-white flex items-center gap-2">
-                            স্বয়ংক্রিয় অনলাইন পেমেন্ট গেটওয়ে কন্ট্রোল (ZiNiPay Auto Gateway)
+                            স্বয়ংক্রিয় অনলাইন পেমেন্ট গেটওয়ে কন্ট্রোল
                             <span className="text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 px-2 py-0.5 rounded-full flex items-center gap-1">
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                               🟢 সক্রিয় (Active)

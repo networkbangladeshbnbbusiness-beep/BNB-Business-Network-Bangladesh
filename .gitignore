@@ -11,26 +11,38 @@ coverage/
 bun.lock
 bun.lockb
 
-# AI Studio chat attachments and recordings (too large for GitHub sync)
-public/assets/aistudio/*.mp4
-public/assets/aistudio/*.jpg
-public/assets/aistudio/*.png
+# AI Studio chat attachments and media recordings (prevents GitHub sync payload errors)
+public/assets/
+public/assets/**
+public/assets/aistudio/
+public/assets/aistudio/**
+*.mp4
+*.webm
+*.mov
+*.m4v
 .aistudio/
 tmp/
 
-# Temporary diagnostic scripts
+# Temporary diagnostic scripts & archives
 *.py
 fix_admin.sh
 fix_admin_2.sh
 fix_db.ts
-bnb-deploy.zip
+*.zip
+*.tar.gz
 
-# Android & Capacitor build output artifacts (NOTE: .gradle files MUST NOT be ignored!)
+# Android & Capacitor build output artifacts (NOTE: .gradle wrapper files must NOT be ignored)
 android/app/src/main/assets/public/
+android/app/src/main/assets/public/**
 android/app/build/
+android/app/build/**
 android/build/
+android/build/**
 android/.gradle/
+android/.gradle/**
 android/local.properties
 android/.idea/
+android/.idea/**
 android/*.iml
 android/app/*.iml
+

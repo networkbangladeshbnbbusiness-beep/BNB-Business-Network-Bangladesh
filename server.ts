@@ -2127,6 +2127,7 @@ async function startServer() {
       const cancel_url = `${APP_BASE_URL}/api/payment/zinipay-cancel?val_id=${encodeURIComponent(val_id)}&uid=${encodeURIComponent(userId)}&token=${encodeURIComponent(auth_token)}&origin=${encodeURIComponent(returnBase)}`;
       const webhook_url = `${APP_BASE_URL}/api/zinipay/webhook`;
 
+      const officialLogoUrl = `${APP_BASE_URL}/bnb_logo.png`;
       const payload = {
         amount: depositAmount,
         val_id,
@@ -2135,8 +2136,13 @@ async function startServer() {
         webhook_url,
         cus_name: cus_name.trim(),
         cus_email: cus_email.trim(),
-        logo: `${APP_BASE_URL}/logo.png`,
-        brand_logo_url: `${APP_BASE_URL}/logo.png`,
+        logo: officialLogoUrl,
+        brand_logo: officialLogoUrl,
+        brand_logo_url: officialLogoUrl,
+        merchant_logo: officialLogoUrl,
+        company_logo: officialLogoUrl,
+        avatar: officialLogoUrl,
+        image: officialLogoUrl,
         metadata: {
           val_id,
           order_id: `ORD-${val_id}`,
@@ -2145,8 +2151,10 @@ async function startServer() {
           phone: cus_phone,
           memberId,
           purpose: 'wallet_deposit',
-          logo_url: `${APP_BASE_URL}/logo.png`,
-          brand_logo: `${APP_BASE_URL}/logo.png`
+          logo: officialLogoUrl,
+          brand_logo: officialLogoUrl,
+          logo_url: officialLogoUrl,
+          company_logo: officialLogoUrl
         }
       };
 
