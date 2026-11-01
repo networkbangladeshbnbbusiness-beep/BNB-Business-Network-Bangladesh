@@ -98,7 +98,6 @@ import SafiPremiumShop from '../SafiPremiumShop';
 import BNBCorporateGuide from '../BNBCorporateGuide';
 import BNBBillPayScreen from '../BNBBillPayScreen';
 import BNBAutoRechargeScreen from '../BNBAutoRechargeScreen';
-import { useBackHandler } from '../../lib/navigationManager';
 
 const cleanDescription = (desc: string, status?: string): string => {
   if (!desc) return '';
@@ -296,14 +295,6 @@ const {
     };
   }, [setModalType]);
 
-  // Handle hardware / gesture / browser back when modalType is active
-  useBackHandler(() => {
-    if (modalType) {
-      setModalType(null);
-      return true;
-    }
-    return false;
-  }, !!modalType, 20);
 
   return (
     <>

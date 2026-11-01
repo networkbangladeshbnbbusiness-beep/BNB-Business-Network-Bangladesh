@@ -1246,14 +1246,14 @@ const getTxt = (key: string, fallback: string) => {
     return false;
   }, Boolean(showAddDealModal || showCreateCardModal || showMaintenanceModal || showDemoAuthPrompt || showSecretPinPrompt || showNotificationsModal), 40);
 
-  // Active section (one of 12 main service sections) back handler
+  // Active section (one of 12 main service sections) back handler (Priority 18: runs only when internal section subviews/modals have returned false)
   useBackHandler(() => {
     if (modalStack.length > 0) {
       popModal();
       return true;
     }
     return false;
-  }, modalStack.length > 0, 30);
+  }, modalStack.length > 0, 18);
 
 
   // Qard Hasana state variables
