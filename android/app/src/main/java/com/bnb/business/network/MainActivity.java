@@ -82,11 +82,11 @@ public class MainActivity extends BridgeActivity {
                     ((View) webView.getParent()).setBackgroundColor(Color.WHITE);
                 }
 
-                // Purge any stale cached index.html (such as old #0b6623 green background) from WebView disk cache
+                // Purge any stale cached index.html from WebView disk cache
                 SharedPreferences prefs = getSharedPreferences("bnb_native_prefs", Context.MODE_PRIVATE);
-                if (!prefs.getBoolean("cache_purged_v54", false)) {
+                if (!prefs.getBoolean("cache_purged_v55", false)) {
                     webView.clearCache(true);
-                    prefs.edit().putBoolean("cache_purged_v54", true).apply();
+                    prefs.edit().putBoolean("cache_purged_v55", true).apply();
                 }
                 WebSettings settings = webView.getSettings();
                 if (settings != null) {

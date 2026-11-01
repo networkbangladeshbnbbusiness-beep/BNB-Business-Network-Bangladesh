@@ -14,7 +14,6 @@ import SetAppLockModal from './components/SetAppLockModal';
 import Dashboard from './components/Dashboard';
 import DrawerMenu from './components/DrawerMenu';
 import AdminPanel from './components/AdminPanel';
-import CleanSplash from './components/CleanSplash';
 
 import MaintenanceScreen from './components/MaintenanceScreen';
 import ForceUpdateScreen from './components/ForceUpdateScreen';
@@ -233,23 +232,19 @@ export default function App() {
       return () => clearTimeout(t);
     }
   }, [paymentToast]);
-  const [showSplash, setShowSplash] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return sessionStorage.getItem('amb_splash_shown') !== 'true';
+
+  // Dismiss single startup splash screen smoothly once App is mounted
+  useEffect(() => {
+    if (typeof window !== 'undefined' && (window as any).__hideAppSplash) {
+      (window as any).__hideAppSplash();
     }
-    return false;
-  });
-
-
-
-  const handleSplashFinish = useCallback(() => {
-    setShowSplash(false);
-    try {
-      if (typeof window !== 'undefined') {
-        sessionStorage.setItem('amb_splash_shown', 'true');
-      }
-    } catch (e) {}
   }, []);
+
+  const setShowSplash = (_val?: boolean) => {
+    if (typeof window !== 'undefined' && (window as any).__hideAppSplash) {
+      (window as any).__hideAppSplash();
+    }
+  };
   const [appConfig, setAppConfig] = useState<AppConfig>(() => {
     try {
       const cached = localStorage.getItem('amb_app_config');
@@ -2213,8 +2208,6 @@ export default function App() {
 
   return (
     <div className={`min-h-screen bg-slate-50 text-slate-800 antialiased selection:bg-emerald-100 selection:text-emerald-900 ${darkMode ? 'dark bg-slate-950 text-slate-100' : ''}`}>
-      {showSplash && <CleanSplash onFinish={handleSplashFinish} />}
-
       {showMaintenance ? (
         <MaintenanceScreen 
           appConfig={appConfig} 

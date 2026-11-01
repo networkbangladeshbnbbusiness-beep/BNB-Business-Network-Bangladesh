@@ -44,7 +44,7 @@
         color-scheme: light;
         background-color: #ffffff !important;
       }
-      html, body, #root {
+      html, body {
         background-color: #ffffff !important;
         margin: 0;
         padding: 0;
@@ -52,26 +52,71 @@
         width: 100%;
         overflow-x: hidden;
       }
-      #root:empty {
+      #root {
+        min-height: 100%;
+        width: 100%;
+      }
+      /* Single Unified Splash Screen: Displays immediately on startup, prevents blank flashes */
+      #app-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 99999;
+        background-color: #ffffff;
         display: flex;
         align-items: center;
         justify-content: center;
-        background-color: #ffffff;
-        min-height: 100vh;
-        width: 100%;
+        user-select: none;
+        transition: opacity 0.35s ease-out;
       }
-      #root:empty::after {
-        content: "";
+      #app-splash.splash-hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #app-splash img {
         width: 190px;
         height: 190px;
-        background-image: url("/bnb_logo.png");
-        background-size: contain;
-        background-repeat: no-repeat;
-        background-position: center;
+        max-width: 65vw;
+        max-height: 65vw;
+        object-fit: contain;
       }
     </style>
+    <script>
+      (function() {
+        var startTime = Date.now();
+        var MIN_SPLASH_TIME = 1200; // 1.2s smooth presentation
+        var isDismissed = false;
+
+        window.__hideAppSplash = function() {
+          if (isDismissed) return;
+          isDismissed = true;
+          var elapsed = Date.now() - startTime;
+          var remaining = Math.max(0, MIN_SPLASH_TIME - elapsed);
+          setTimeout(function() {
+            var splash = document.getElementById('app-splash');
+            if (splash) {
+              splash.classList.add('splash-hidden');
+              setTimeout(function() {
+                if (splash && splash.parentNode) {
+                  splash.parentNode.removeChild(splash);
+                }
+              }, 400);
+            }
+          }, remaining);
+        };
+
+        // Fallback timer: guarantees splash screen smoothly clears after 3s even if network is slow
+        setTimeout(function() {
+          if (!isDismissed && window.__hideAppSplash) {
+            window.__hideAppSplash();
+          }
+        }, 3000);
+      })();
+    </script>
   </head>
   <body style="background-color: #ffffff; margin: 0; padding: 0;">
+    <div id="app-splash">
+      <img src="/bnb_logo.png" alt="BNB Logo" />
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

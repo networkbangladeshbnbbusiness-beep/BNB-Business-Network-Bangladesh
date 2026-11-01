@@ -24,6 +24,9 @@ export default function AdminApp() {
   const [appLanguage, setAppLanguage] = useState('bn');
 
   useEffect(() => {
+    if (typeof window !== 'undefined' && (window as any).__hideAppSplash) {
+      (window as any).__hideAppSplash();
+    }
     loadAppConfig().then(cfg => {
       if (cfg) setAppConfig({ ...DEFAULT_CONFIG, ...cfg });
     }).catch(err => console.warn("Failed to load app config in AdminApp:", err));
