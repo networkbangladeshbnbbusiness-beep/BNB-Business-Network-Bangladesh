@@ -10,19 +10,12 @@ export interface RetentionCleanupResult {
 }
 
 export const HISTORY_COLLECTIONS = [
-  // NOTE: 'transactions' collection is STRICTLY and PERMANENTLY EXCLUDED from retention cleanup.
-  // Financial transaction ledgers are permanent audit logs and must never be deleted under any circumstances.
+  // NOTE: 'transactions', orders, and audit logs are STRICTLY and PERMANENTLY EXCLUDED from retention cleanup.
+  // Financial transaction ledgers and order records are permanent audit logs and must never be deleted.
   { name: 'user_notifications', label: 'নোটিফিকেশন খাতা (Notifications)' },
   { name: 'notices', label: 'নোটিশ ও হিস্ট্রি (Notices)' },
   { name: 'corporate_feedbacks', label: 'ফিডব্যাক ও রিপোর্টস (Feedbacks)' },
   { name: 'support_chats', label: 'সাপোর্ট চ্যাট মেসেজ (Support Chats)' },
-  { name: 'agent_requests', label: 'এজেন্ট রিকোয়েস্ট লগস (Agent Requests)' },
-  { name: 'escrow_disputes', label: 'এসক্রো ডিসপিউট লগস (Escrow Disputes)' },
-  { name: 'safe_deal_orders', label: 'নিরাপদ ডিল অর্ডারস (Safe Deal Orders)' },
-  { name: 'shop_orders', label: 'সুপার শপ অর্ডারস (Shop Orders)' },
-  { name: 'ration_orders', label: 'রেশন অর্ডার হিস্ট্রি (Ration Orders)' },
-  { name: 'salary_payments', label: 'স্যালারি পে আউট লগস (Salary Payments)' },
-  { name: 'activity_logs', label: 'অ্যাক্টিভিটি ও অডিট লগস (Activity Logs)' },
 ];
 
 /**

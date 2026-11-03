@@ -22,6 +22,7 @@ export default function SetAppLockModal({
   appLanguage = 'bn',
   isMandatoryOnLogout = false
 }: SetAppLockModalProps) {
+  const isBn = appLanguage !== 'en';
   const [code, setCode] = useState('');
   const [confirmCode, setConfirmCode] = useState('');
   const [showCode, setShowCode] = useState(false);
@@ -38,13 +39,13 @@ export default function SetAppLockModal({
     const cleanCode = code.trim();
     const cleanConfirm = confirmCode.trim();
 
-    if (cleanCode.length < 4 || cleanCode.length > 12) {
-      setError('পাসওয়ার্ডটি অবশ্যই 4 থেকে 12 অক্ষরের/সংখ্যার হতে হবে!');
+    if (cleanCode.length !== 4 || !/^\d{4}$/.test(cleanCode)) {
+      setError(isBn ? 'পিন অবশ্যই 4 ডিজিটের সংখ্যা হতে হবে!' : 'PIN must be a 4-digit number!');
       return;
     }
 
     if (cleanCode !== cleanConfirm) {
-      setError('পাসওয়ার্ড এবং কনফার্ম পাসওয়ার্ড দুটির মিল নেই!');
+      setError(isBn ? 'পিন এবং কনফার্ম পিন দুটির মিল নেই!' : 'PIN and Confirm PIN do not match!');
       return;
     }
 
@@ -75,7 +76,9 @@ export default function SetAppLockModal({
           localStorage.setItem('bnb_user_pin', cleanCode);
         } catch (e) {}
       } catch (err) {
-        console.error("Failed to save app lock code to Firestore:", err);
+        if (import.meta.env.DEV) {
+          console.error("Failed to save app lock code to Firestore:", err);
+        }
       }
     }
 
@@ -111,10 +114,14 @@ export default function SetAppLockModal({
             </div>
             <div>
               <h3 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-1">
-                {isMandatoryOnLogout ? '🔒 নিরাপদ লগআউট ও পাসওয়ার্ড লক' : '🔒 গোপন অ্যাপ লক সেটআপ'}
+                {isMandatoryOnLogout
+                  ? (isBn ? '🔒 নিরাপদ লগআউট ও পিন লক' : '🔒 Secure Logout & PIN Lock')
+                  : (isBn ? '🔒 অ্যাপ পিন লক সেটআপ' : '🔒 App PIN Lock Setup')}
               </h3>
               <p className="text-[10px] text-slate-500 font-medium">
-                {isMandatoryOnLogout ? 'লগআউটের পর পুনরায় এই পাসওয়ার্ড দিয়ে লগইন করতে হবে' : 'সিকিউরিটি পাসওয়ার্ড (4 - 12 ডিজিট/অক্ষর)'}
+                {isMandatoryOnLogout
+                  ? (isBn ? 'লগআউটের পর পুনরায় এই 4 ডিজিট পিন দিয়ে লগইন করতে হবে' : 'You will need this 4-digit PIN to log in again')
+                  : (isBn ? 'সিকিউরিটি পিন (4 ডিজিট)' : 'Security PIN (4 Digits)')}
               </p>
             </div>
           </div>
@@ -124,9 +131,21 @@ export default function SetAppLockModal({
             <AlertTriangle className={`w-3.5 h-3.5 ${isMandatoryOnLogout ? 'text-rose-600' : 'text-amber-600'} shrink-0 mt-0.5`} />
             <div>
               {isMandatoryOnLogout ? (
-                <span><strong>বাধ্যতামূলক নিয়ম:</strong> লগআউট করতে 4-12 অক্ষরের একটি পাসওয়ার্ড সেট/কনফার্ম করুন। পুনরায় অ্যাপে লগইন করতে <strong>হুবহু এই পাসওয়ার্ডটি</strong> প্রয়োজন হবে।</span>
+                <span>
+                  {isBn ? (
+                    <><strong>বাধ্যতামূলক নিয়ম:</strong> লগআউট করতে 4 ডিজিট পিন সেট/কনফার্ম করুন। পুনরায় অ্যাপে প্রবেশ করতে <strong>হুবহু এই পিনটি</strong> প্রয়োজন হবে।</>
+                  ) : (
+                    <><strong>Mandatory Rule:</strong> Set/confirm a 4-digit PIN to log out. You will need <strong>this exact PIN</strong> to re-enter the app.</>
+                  )}
+                </span>
               ) : (
-                <span><strong>গুরুত্বপূর্ণ নিয়ম:</strong> 4-12 অক্ষরের একটি সিক্রেট পাসওয়ার্ড সেট করুন। অ্যাপ লক আনলক করতে এই পাসওয়ার্ডটি দিতে হবে।</span>
+                <span>
+                  {isBn ? (
+                    <><strong>গুরুত্বপূর্ণ নিয়ম:</strong> 4 ডিজিট সিকিউরিটি পিন সেট করুন। অ্যাপ লক আনলক করতে এই পিনটি দিতে হবে।</>
+                  ) : (
+                    <><strong>Important:</strong> Set a 4-digit security PIN. You will need this PIN to unlock the app.</>
+                  )}
+                </span>
               )}
             </div>
           </div>
@@ -144,16 +163,18 @@ export default function SetAppLockModal({
             {/* Input 1 */}
             <div>
               <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                সিকিউরিটি পাসওয়ার্ড (4 - 12 অক্ষর/সংখ্যা) <span className="text-rose-500">*</span>
+                {isBn ? '4 ডিজিট পিন' : '4-Digit PIN'} <span className="text-rose-500">*</span>
               </label>
               <div className="relative">
                 <input
                   type={showCode ? 'text' : 'password'}
+                  inputMode="numeric"
+                  pattern="\d{4}"
                   value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                  maxLength={12}
-                  placeholder="যেমন: amb987654 বা 1234"
-                  className="w-full pl-8 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-all"
+                  onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  maxLength={4}
+                  placeholder="••••"
+                  className="w-full pl-8 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-all tracking-widest"
                   required
                 />
                 <KeyRound className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
@@ -170,16 +191,18 @@ export default function SetAppLockModal({
             {/* Input 2 */}
             <div>
               <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                পাসওয়ার্ডটি পুনরায় নিশ্চিত করুন <span className="text-rose-500">*</span>
+                {isBn ? 'পিন পুনরায় নিশ্চিত করুন' : 'Confirm 4-Digit PIN'} <span className="text-rose-500">*</span>
               </label>
               <div className="relative">
                 <input
                   type={showConfirmCode ? 'text' : 'password'}
+                  inputMode="numeric"
+                  pattern="\d{4}"
                   value={confirmCode}
-                  onChange={(e) => setConfirmCode(e.target.value)}
-                  maxLength={12}
-                  placeholder="কনফার্ম পাসওয়ার্ড লিখুন"
-                  className="w-full pl-8 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-all"
+                  onChange={(e) => setConfirmCode(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  maxLength={4}
+                  placeholder="••••"
+                  className="w-full pl-8 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-all tracking-widest"
                   required
                 />
                 <Lock className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
@@ -201,7 +224,7 @@ export default function SetAppLockModal({
                 disabled={loading}
                 className="w-1/3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-all cursor-pointer text-center"
               >
-                বাতিল
+                {isBn ? 'বাতিল' : 'Cancel'}
               </button>
               <button
                 type="submit"
@@ -213,7 +236,9 @@ export default function SetAppLockModal({
                 ) : (
                   <>
                     <Lock className="w-3.5 h-3.5" />
-                    {isMandatoryOnLogout ? 'লক করে লগআউট করুন' : 'অ্যাপ লক করুন'}
+                    {isMandatoryOnLogout
+                      ? (isBn ? 'লক করে লগআউট করুন' : 'Lock & Log Out')
+                      : (isBn ? 'অ্যাপ লক করুন' : 'Lock App')}
                   </>
                 )}
               </button>

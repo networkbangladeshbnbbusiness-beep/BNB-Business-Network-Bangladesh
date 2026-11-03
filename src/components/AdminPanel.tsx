@@ -9174,13 +9174,15 @@ export default function AdminPanel(props: AdminPanelProps) {
 
       const cleanUpdatedFields = sanitizeData(updatedFields);
 
-      // ⚡ 1. Collect all document IDs and phone variants for authoritative multi-doc sync
+      // ⚡ 1. Target strictly the single authoritative user UID being edited (never broadcast across memberId or phone)
       const targetDocIds = new Set<string>();
-      if (targetUserId && typeof targetUserId === 'string' && targetUserId.trim()) targetDocIds.add(targetUserId.trim());
-      if (editingUser.uid && typeof editingUser.uid === 'string' && editingUser.uid.trim()) targetDocIds.add(editingUser.uid.trim());
-      if (editingUser.id && typeof editingUser.id === 'string' && editingUser.id.trim()) targetDocIds.add(editingUser.id.trim());
-      if ((editingUser as any).docId && typeof (editingUser as any).docId === 'string' && (editingUser as any).docId.trim()) {
-        targetDocIds.add((editingUser as any).docId.trim());
+      const exactUid = (targetUserId && typeof targetUserId === 'string' && targetUserId.trim())
+        || (editingUser.uid && typeof editingUser.uid === 'string' && editingUser.uid.trim())
+        || (editingUser.id && typeof editingUser.id === 'string' && editingUser.id.trim())
+        || ((editingUser as any).docId && typeof (editingUser as any).docId === 'string' && (editingUser as any).docId.trim())
+        || '';
+      if (exactUid) {
+        targetDocIds.add(exactUid);
       }
 
       const rawPhone = editUserPhone.trim();
@@ -9202,52 +9204,22 @@ export default function AdminPanel(props: AdminPanelProps) {
         }
       }
 
-      // Query `users` by all phone variants
-      for (const pVar of Array.from(phoneVariants)) {
-        try {
-          const qP = query(collection(db, 'users'), where('phone', '==', pVar));
-          const snapP = await getDocs(qP);
-          snapP.forEach(d => targetDocIds.add(d.id));
-        } catch (e) {}
-      }
-
-      // Query `users` by memberId
-      if (editUserMemberId.trim()) {
-        try {
-          const qM = query(collection(db, 'users'), where('memberId', '==', editUserMemberId.trim()));
-          const snapM = await getDocs(qM);
-          snapM.forEach(d => targetDocIds.add(d.id));
-        } catch (e) {}
-      }
-      if (editingUser.memberId && editingUser.memberId !== editUserMemberId.trim()) {
-        try {
-          const qM2 = query(collection(db, 'users'), where('memberId', '==', editingUser.memberId));
-          const snapM2 = await getDocs(qM2);
-          snapM2.forEach(d => targetDocIds.add(d.id));
-        } catch (e) {}
-      }
-
-      // Memory lookup fallback in current `users` list
-      users.forEach(u => {
-        const uPhoneDigits = (u.phone || '').replace(/\D/g, '');
-        if (cleanDigits && uPhoneDigits && (uPhoneDigits === cleanDigits || uPhoneDigits.endsWith(cleanDigits.slice(-9)))) {
-          if (u.uid) targetDocIds.add(u.uid);
-        }
-        if (editUserMemberId.trim() && u.memberId && u.memberId.trim().toUpperCase() === editUserMemberId.trim().toUpperCase()) {
-          if (u.uid) targetDocIds.add(u.uid);
-        }
-      });
-
-      // ⚡ 2. Write updated fields to all matching `users` records
+      // ⚡ 2. Write updated fields strictly to the single target `users` record via server proxy (with client fallback for non-restricted fields)
       const validUserIds = Array.from(targetDocIds).filter(uId => Boolean(uId && typeof uId === 'string' && uId.trim()));
-      const userWritePromises = validUserIds.map(uId => 
-        setDoc(doc(db, 'users', uId), {
-          ...cleanUpdatedFields,
-          updatedAt: serverTimestamp()
-        }, { merge: true })
-      );
-      if (userWritePromises.length > 0) {
-        await Promise.all(userWritePromises);
+      for (const uId of validUserIds) {
+        try {
+          await fetch('/api/admin/update-user', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uid: uId, updates: cleanUpdatedFields })
+          });
+        } catch (e) {}
+        try {
+          await setDoc(doc(db, 'users', uId), {
+            ...cleanUpdatedFields,
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+        } catch (e) {}
       }
 
       // ⚡ 3. Sync to `samity_applications` collection

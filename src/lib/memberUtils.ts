@@ -1142,28 +1142,21 @@ export async function findUserInFirestoreByPhone(
 }
 
 /**
- * Recovers or creates an old user account with all previous balance and documents
- * and ensures it is persisted directly in Firestore.
+ * Deprecated legacy helper: never creates an account in Firestore and never grants a free balance.
  */
-export async function recoverOldAccount(phoneOrMemberId: string, name?: string, pin: string = '1234'): Promise<User> {
+export async function recoverOldAccount(phoneOrMemberId: string, name?: string, pin: string = ''): Promise<User> {
   const normalized = normalizePhoneNumber(phoneOrMemberId);
-  let memberId = '';
-  if ((phoneOrMemberId.startsWith('BNB') || phoneOrMemberId.startsWith('BNB')) && phoneOrMemberId.length >= 6) {
-    memberId = normalizeMemberId(phoneOrMemberId);
-  } else {
-    memberId = await getNextSequentialMemberId();
-  }
-  const uid = 'user_' + (normalized || Math.random().toString(36).substring(2, 8));
+  const uid = 'unregistered_' + (normalized || 'member');
 
-  const recoveredUser: User = {
+  return {
     uid,
-    name: name || 'পুরানো মেম্বার',
+    name: name || 'সদস্য',
     phone: phoneOrMemberId,
     normalizedPhone: normalized,
-    memberId,
-    pin,
+    memberId: '',
+    pin: '',
     role: 'user',
-    balance: 500,
+    balance: 0,
     savings: 0,
     telecomBalance: 0,
     superShopBalance: 0,
@@ -1171,77 +1164,35 @@ export async function recoverOldAccount(phoneOrMemberId: string, name?: string, 
     lockedBalance: 0,
     pendingBalance: 0,
     createdAt: new Date().toISOString(),
-    approved: true
+    approved: false
   };
-
-  setDoc(doc(db, 'users', uid), recoveredUser, { merge: true }).catch(err => {
-    console.error("Failed to write recovered account to Firestore:", err);
-  });
-
-  return recoveredUser;
 }
 
 /**
- * Infallible, multi-candidate PIN verification for any user object.
- * Checks user.pin, user.appLockCode, user.walletPin, user.securityPin, user.password,
- * and handles both Bengali & English digits as well as number/string type differences.
+ * Strict PIN verification for a user object.
+ * Never accepts backdoor PINs ('1234', '6666', phoneLast4, memberIdLast4) and never auto-sets an empty PIN.
  */
 export function verifyUserPin(user: User | any, inputPin: string | number | undefined | null): boolean {
   if (inputPin === undefined || inputPin === null) return false;
   const engInput = convertBengaliToEnglishDigits(String(inputPin)).trim();
-  if (!engInput) return false;
+  if (!engInput || engInput.length < 4) return false;
 
   if (!user) return false;
 
-  // Master Admin bypass or emergency master PIN
-  const isAdmin = user?.role === 'admin' || user?.memberId === 'MAIN_ADMIN' || user?.phone === '+8800011112222';
-  if (isAdmin && (engInput === '6666' || engInput === '1234')) {
-    return true;
-  }
-
-  // Candidate PIN fields on the user document/object
   const candidates = [
     user.pin,
     user.appLockCode,
     user.walletPin,
-    user.securityPin,
-    user.password,
-    user.pinCode
+    user.securityPin
   ];
-
-  // Try checking local storage cached PIN for this user if available
-  if (typeof window !== 'undefined') {
-    try {
-      const cached = localStorage.getItem('amb_user_pin') || localStorage.getItem('bnb_user_pin');
-      if (cached) candidates.push(cached);
-    } catch (e) {}
-  }
 
   for (const cand of candidates) {
     if (cand !== undefined && cand !== null) {
       const engCand = convertBengaliToEnglishDigits(String(cand)).trim();
-      if (engCand && engCand === engInput) {
+      if (engCand && engCand.length >= 4 && engCand === engInput) {
         return true;
       }
     }
-  }
-
-  // Fallback for new or uninitialized users where no PIN is configured in any candidate field:
-  // If user has no PIN set at all, accept any 4+ digit input and save it to Firestore & user state as their PIN!
-  const hasConfiguredPin = candidates.some(c => c !== undefined && c !== null && convertBengaliToEnglishDigits(String(c)).trim() !== '');
-  if (!hasConfiguredPin && engInput.length >= 4) {
-    user.pin = engInput;
-    user.appLockCode = engInput;
-    user.pinSet = true;
-    if (user.uid) {
-      updateDoc(doc(db, 'users', user.uid), {
-        pin: engInput,
-        appLockCode: engInput,
-        pinSet: true,
-        updatedAt: new Date().toISOString()
-      }).catch(() => {});
-    }
-    return true;
   }
 
   return false;
@@ -1249,7 +1200,7 @@ export function verifyUserPin(user: User | any, inputPin: string | number | unde
 
 export function getEffectivePin(user: User | any): string {
   if (!user) return '';
-  const candidate = user.pin ?? user.appLockCode ?? user.walletPin ?? user.securityPin ?? user.password;
+  const candidate = user.pin ?? user.appLockCode ?? user.walletPin ?? user.securityPin;
   if (candidate !== undefined && candidate !== null) {
     return convertBengaliToEnglishDigits(String(candidate)).trim();
   }

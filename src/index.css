@@ -28,16 +28,16 @@
 
 /* Custom supportive styles for scrollbars and active selections */
 html {
-  background-color: #f8fafc;
+  background-color: #06822e;
 }
 
 body {
   font-family: var(--font-sans);
-  background-color: #f8fafc;
+  background-color: #06822e;
 }
 
 #root {
-  background-color: #f8fafc;
+  background-color: #06822e;
   min-height: 100vh;
 }
 
@@ -160,19 +160,51 @@ body {
   animation: bnb-blink 1.2s infinite;
 }
 
-/* Safe Area Inset Utilities for Edge-to-Edge and Full-Display Android & iOS */
+/* Safe Area Inset Utilities and Global Layout Rules for Android & iOS */
+:root {
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+html.is-android {
+  --safe-area-top: max(env(safe-area-inset-top, 0px), 28px);
+}
+
 .pt-safe {
-  padding-top: max(env(safe-area-inset-top, 0px), 32px);
+  padding-top: var(--safe-area-top) !important;
 }
 
 .pb-safe {
-  padding-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  padding-bottom: var(--safe-area-bottom) !important;
 }
 
 .mt-safe {
-  margin-top: max(env(safe-area-inset-top, 0px), 32px);
+  margin-top: var(--safe-area-top) !important;
 }
 
 .mb-safe {
-  margin-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  margin-bottom: var(--safe-area-bottom) !important;
 }
+
+/* Global top header / top bar safe-area padding across all screens */
+header,
+.rounded-b-\[28px\].from-\[\#0b6623\],
+.sticky.top-0.z-20,
+.sticky.top-0.z-30,
+.sticky.top-0.z-40,
+.sticky.top-0.z-50,
+.fixed.inset-0 > .bg-emerald-800 {
+  padding-top: calc(var(--safe-area-top) + 10px) !important;
+}
+
+/* Global bottom navigation and fixed bottom buttons safe-area padding */
+nav.fixed.bottom-0,
+footer.fixed.bottom-0,
+.fixed.bottom-0.left-0.right-0 {
+  padding-bottom: var(--safe-area-bottom) !important;
+}
+
+nav.fixed.bottom-0 {
+  height: calc(60px + var(--safe-area-bottom)) !important;
+}
+

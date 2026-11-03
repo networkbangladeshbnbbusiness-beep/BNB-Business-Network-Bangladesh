@@ -37,15 +37,7 @@ export default function LoginScreen({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
-  const [debugInfo, setDebugInfo] = useState<{ url: string; status: number; errorCode: string; rawSnippet?: string } | null>(null);
-  const [healthStatus, setHealthStatus] = useState<{ build?: string; adminSdk?: boolean } | null>(null);
-
-  useEffect(() => {
-    fetch(apiUrl('/api/health'))
-      .then(r => r.json())
-      .then(d => setHealthStatus(d))
-      .catch(() => {});
-  }, []);
+  const [existingAccountConflict, setExistingAccountConflict] = useState<'email' | 'phone' | null>(null);
 
   // Form states
   const [email, setEmail] = useState(() => {
@@ -119,10 +111,53 @@ export default function LoginScreen({
 
   const isBn = currentLang === 'bn';
 
+  const localizeErrorText = (rawError: string | undefined, fallbackBn: string, fallbackEn: string): string => {
+    if (!rawError) return isBn ? fallbackBn : fallbackEn;
+    const lower = rawError.toLowerCase();
+    if (lower.includes('already') || lower.includes('exists') || rawError.includes('ইতিপূর্বে') || rawError.includes('আগেই')) {
+      if (lower.includes('phone') || lower.includes('mobile') || rawError.includes('মোবাইল') || rawError.includes('ফোন')) {
+        return isBn
+          ? 'এই মোবাইল নম্বর দিয়ে আগেই অ্যাকাউন্ট খোলা হয়েছে। অনুগ্রহ করে লগইন করুন।'
+          : 'An account has already been opened with this mobile number. Please log in.';
+      }
+      return isBn
+        ? 'এই ইমেইল দিয়ে আগেই অ্যাকাউন্ট খোলা হয়েছে। অনুগ্রহ করে লগইন করুন।'
+        : 'An account has already been opened with this email. Please log in.';
+    }
+    if (lower.includes('not found') || lower.includes('no account') || rawError.includes('পাওয়া যায়নি') || rawError.includes('পাওয়া যায়নি')) {
+      return isBn
+        ? 'এই ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি। নতুন অ্যাকাউন্ট খুলতে অনুগ্রহ করে নিবন্ধন করুন।'
+        : 'No account found with this email. Please sign up to create a new account.';
+    }
+    if (lower.includes('expired') || rawError.includes('মেয়াদ') || rawError.includes('মেয়াদ')) {
+      return isBn
+        ? 'ওটিপি কোডের মেয়াদ শেষ হয়ে গেছে। অনুগ্রহ করে পুনরায় ওটিপি পাঠান।'
+        : 'The OTP code has expired. Please request a new OTP.';
+    }
+    if (lower.includes('invalid') || lower.includes('incorrect') || lower.includes('wrong') || rawError.includes('সঠিক নয়') || rawError.includes('সঠিক নয়') || rawError.includes('ভুল')) {
+      return isBn
+        ? 'প্রদত্ত ওটিপি কোডটি সঠিক নয়। অনুগ্রহ করে সঠিক ৬ সংখ্যার কোড দিন।'
+        : 'Incorrect OTP code. Please enter the valid 6-digit code.';
+    }
+    if (lower.includes('too many') || lower.includes('rate') || rawError.includes('অতিরিক্ত')) {
+      return isBn
+        ? 'অতিরিক্তবার চেষ্টা করা হয়েছে। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।'
+        : 'Too many attempts. Please wait a moment and try again.';
+    }
+    if (isBn && /[a-zA-Z]{3,}/.test(rawError)) {
+      return fallbackBn;
+    }
+    if (!isBn && /[\u0980-\u09FF]/.test(rawError)) {
+      return fallbackEn;
+    }
+    return rawError;
+  };
+
   const handleToggleLanguage = () => {
     const nextLang: 'bn' | 'en' = isBn ? 'en' : 'bn';
     setCurrentLang(nextLang);
     setError('');
+    setExistingAccountConflict(null);
     if (typeof window !== 'undefined') {
       try {
         localStorage.setItem('amb_lang', nextLang);
@@ -164,37 +199,15 @@ export default function LoginScreen({
     }
   };
 
-  // Fast, non-blocking background lookup helper (races server API and indexed Firestore query simultaneously)
+  // Authoritative server lookup helper (exact email -> lowercase -> uid_mappings)
   const fetchUserFast = async (rawInput: string, silent = false): Promise<User | null> => {
     const trimmedInput = rawInput.trim();
     if (!trimmedInput || !trimmedInput.includes('@')) return null;
     const cleanInput = trimmedInput.toLowerCase();
 
-    // 1. Instant 0ms memory cache hit
+    // 1. Instant in-memory prefetch cache hit (current page load only)
     const memCached = prefetchedUsersRef.current.get(cleanInput);
     if (memCached) return memCached;
-
-    // 2. Instant 0ms localStorage cache hit
-    if (typeof window !== 'undefined') {
-      try {
-        const fastRaw = localStorage.getItem(`amb_fast_email_${cleanInput}`);
-        if (fastRaw) {
-          const parsed = JSON.parse(fastRaw);
-          if (parsed && parsed.uid) {
-            prefetchedUsersRef.current.set(cleanInput, parsed);
-            return parsed;
-          }
-        }
-        const lastUserRaw = localStorage.getItem('amb_last_user');
-        if (lastUserRaw) {
-          const cached = JSON.parse(lastUserRaw);
-          if (cached.email && cached.email.toLowerCase().trim() === cleanInput) {
-            prefetchedUsersRef.current.set(cleanInput, cached);
-            return cached;
-          }
-        }
-      } catch (e) {}
-    }
 
     // Reuse inflight promise if already pre-fetching while user was typing
     const existingPromise = inflightLookupRef.current.get(cleanInput);
@@ -202,56 +215,31 @@ export default function LoginScreen({
 
     const lookupPromise = (async (): Promise<User | null> => {
       const requestUrl = apiUrl('/api/auth/locate-user');
-
-      const serverTask = (async (): Promise<User | null> => {
-        try {
-          const res = await fetch(requestUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query: cleanInput })
-          });
-          const status = res.status;
-          const contentType = res.headers.get('content-type') || '';
-          let data: any = {};
-          if (contentType.includes('application/json')) {
-            data = await res.json().catch(() => ({}));
+      try {
+        const res = await fetch(requestUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          // Pass trimmedInput (preserving case) so server checks exact stored email first, then lowercase, then uid_mappings
+          body: JSON.stringify({ query: trimmedInput })
+        });
+        const status = res.status;
+        const contentType = res.headers.get('content-type') || '';
+        let data: any = {};
+        if (contentType.includes('application/json')) {
+          data = await res.json().catch(() => ({}));
+        }
+        if (res.ok && data.found && data.user) {
+          if (import.meta.env.DEV && !silent) {
+            console.debug('[Auth] Located user:', { status });
           }
-          if (res.ok && data.found && data.user) {
-            if (!silent) setDebugInfo({ url: requestUrl, status, errorCode: '200_FOUND' });
-            return data.user as User;
-          }
-        } catch (e) {}
-        return null;
-      })();
-
-      const clientTask = (async (): Promise<User | null> => {
-        if (!db) return null;
-        try {
-          const queriesToTry = [
-            query(collection(db, 'users'), where('email', '==', cleanInput), limit(1)),
-            ...(cleanInput !== trimmedInput ? [query(collection(db, 'users'), where('email', '==', trimmedInput), limit(1))] : []),
-            query(collection(db, 'users'), where('phone', '==', cleanInput), limit(1))
-          ];
-          const results = await Promise.all(queriesToTry.map(q => getDocs(q).catch(() => null)));
-          for (const snap of results) {
-            if (snap && !snap.empty) {
-              const docSnap = snap.docs[0];
-              return { uid: docSnap.id, ...(docSnap.data() as any) } as User;
-            }
-          }
-        } catch (e) {}
-        return null;
-      })();
-
-      // Race server and client so whichever resolves first wins immediately
-      const firstHit = await Promise.race([
-        serverTask.then(u => u ? u : clientTask),
-        clientTask.then(u => u ? u : serverTask)
-      ]);
-
-      if (firstHit) {
-        cacheLocatedUser(cleanInput, firstHit);
-        return firstHit;
+          const located = data.user as User;
+          cacheLocatedUser(cleanInput, located);
+          return located;
+        }
+      } catch (e) {
+        if (import.meta.env.DEV && !silent) {
+          console.debug('[Auth] Lookup error:', e);
+        }
       }
       return null;
     })();
@@ -266,7 +254,7 @@ export default function LoginScreen({
 
   // Predictive pre-fetching: as soon as the user types or loads a valid email, resolve the account in the background BEFORE click!
   useEffect(() => {
-    const candidate = email.trim().toLowerCase();
+    const candidate = email.trim();
     if (
       !isRegistering &&
       step === 'info' &&
@@ -281,7 +269,7 @@ export default function LoginScreen({
     }
   }, [email, isRegistering, step]);
 
-  // Helper to locate user via server-side endpoint with automatic client-side Firestore fallback
+  // Helper to locate user via server-side endpoint (exact email -> lowercase -> uid_mappings)
   const locateUser = async (rawInput: string): Promise<User | null> => {
     const trimmedInput = rawInput.trim();
     if (!trimmedInput) return null;
@@ -290,8 +278,8 @@ export default function LoginScreen({
     if (!trimmedInput.includes('@') && (trimmedInput.toUpperCase().includes('BNB') || /^\d+$/.test(trimmedInput))) {
       setError(
         isBn
-          ? 'BNB কোড বা অ্যাকাউন্ট নম্বর দিয়ে একাউন্ট খোলা বা লগইন করা সম্পূর্ণ নিষিদ্ধ! একাউন্ট খোলা এবং লগইন শুধুমাত্র আপনার নিবন্ধিত বৈধ ইমেইলের মাধ্যমে করতে হবে।'
-          : 'Opening an account or logging in with a BNB code or account number is strictly prohibited! Registration and login must be done using your registered valid email only.'
+          ? 'মেম্বার আইডি বা অ্যাকাউন্ট নম্বর দিয়ে লগইন করা সম্পূর্ণ নিষিদ্ধ! শুধুমাত্র আপনার নিবন্ধিত বৈধ ইমেইলের মাধ্যমে লগইন করুন।'
+          : 'Logging in with a member ID or account number is strictly prohibited! Please log in using your registered valid email only.'
       );
       return null;
     }
@@ -299,8 +287,8 @@ export default function LoginScreen({
     if (!trimmedInput.includes('@')) {
       setError(
         isBn
-          ? 'অনুগ্রহ করে আপনার সঠিক নিবন্ধিত ইমেইল অ্যাড্রেস প্রদান করুন (যেমন: example@gmail.com)।'
-          : 'Please enter your valid registered email address (e.g. example@gmail.com).'
+          ? 'অনুগ্রহ করে আপনার সঠিক নিবন্ধিত ইমেইল ঠিকানা প্রদান করুন।'
+          : 'Please enter your valid registered email address.'
       );
       return null;
     }
@@ -308,16 +296,17 @@ export default function LoginScreen({
     return await fetchUserFast(trimmedInput, false);
   };
 
-  // Handle Send OTP for Login (Strictly Email-Only OTP Verification - Instant 0ms UI Transition)
+  // Handle Send OTP for Login (Works for ANY registered email; never creates an account)
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setExistingAccountConflict(null);
     setSuccessMessage('');
     const rawInput = email.trim();
     if (!rawInput) {
       setError(
         isBn
-          ? 'অনুগ্রহ করে আপনার নিবন্ধিত ইমেইল অ্যাড্রেস প্রদান করুন।'
+          ? 'অনুগ্রহ করে আপনার নিবন্ধিত ইমেইল ঠিকানা প্রদান করুন।'
           : 'Please enter your registered email address.'
       );
       return;
@@ -327,8 +316,8 @@ export default function LoginScreen({
     if (!rawInput.includes('@') && (rawInput.toUpperCase().includes('BNB') || /^\d+$/.test(rawInput))) {
       setError(
         isBn
-          ? 'BNB কোড বা অ্যাকাউন্ট নম্বর দিয়ে অ্যাকাউন্ট খোলা বা লগইন করা সম্পূর্ণ নিষিদ্ধ! অ্যাকাউন্ট খোলা এবং লগইন শুধুমাত্র আপনার নিবন্ধিত বৈধ ইমেইল অ্যাড্রেসের মাধ্যমে করতে হবে।'
-          : 'Opening an account or logging in with a BNB code or account number is strictly prohibited! Registration and login must be done using your registered valid email address only.'
+          ? 'মেম্বার আইডি বা অ্যাকাউন্ট নম্বর দিয়ে লগইন করা সম্পূর্ণ নিষিদ্ধ! শুধুমাত্র আপনার নিবন্ধিত বৈধ ইমেইল ঠিকানার মাধ্যমে লগইন করুন।'
+          : 'Logging in with a member ID or account number is strictly prohibited! Please log in using your registered valid email address only.'
       );
       return;
     }
@@ -336,8 +325,8 @@ export default function LoginScreen({
     if (!rawInput.includes('@') || !rawInput.includes('.')) {
       setError(
         isBn
-          ? 'অনুগ্রহ করে আপনার সঠিক নিবন্ধিত ইমেইল অ্যাড্রেস প্রদান করুন (যেমন: example@gmail.com)।'
-          : 'Please enter your valid registered email address (e.g. example@gmail.com).'
+          ? 'অনুগ্রহ করে আপনার সঠিক নিবন্ধিত ইমেইল ঠিকানা প্রদান করুন।'
+          : 'Please enter your valid registered email address.'
       );
       return;
     }
@@ -349,8 +338,8 @@ export default function LoginScreen({
       if (!targetUser) {
         setError(
           isBn
-            ? 'প্রদত্ত ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি। সঠিক নিবন্ধিত ইমেইল অ্যাড্রেস দিয়ে পুনরায় চেষ্টা করুন।'
-            : 'No account found with this email. Please try again with your registered email address.'
+            ? 'এই ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি। নতুন অ্যাকাউন্ট খুলতে অনুগ্রহ করে নিবন্ধন করুন।'
+            : 'No account found with this email. Please sign up to create a new account.'
         );
         return;
       }
@@ -359,14 +348,15 @@ export default function LoginScreen({
 
       const userDisplayName = targetUser.name || (isBn ? 'সম্মানিত সদস্য' : 'Respected Member');
       const userPhone = targetUser.phone || '';
-      const userEmail = targetUser.email ? targetUser.email.trim().toLowerCase() : (targetUser.phone && targetUser.phone.includes('@') ? targetUser.phone.trim().toLowerCase() : '');
+      const userEmail = targetUser.email
+        ? targetUser.email.trim().toLowerCase()
+        : (targetUser.phone && targetUser.phone.includes('@') ? targetUser.phone.trim().toLowerCase() : rawInput.toLowerCase());
 
-      // Strict security: User must have a registered email in database to login with real-time OTP
       if (!userEmail || !userEmail.includes('@')) {
         setError(
           isBn
-            ? 'এই অ্যাকাউন্টের সাথে কোনো বৈধ ইমেইল যুক্ত নেই। সুরক্ষার স্বার্থে শুধুমাত্র নিবন্ধিত ইমেইলের মাধ্যমেই রিয়েল-টাইম ওটিপি ভেরিফিকেশন করে লগইন করা সম্ভব।'
-            : 'No valid email is linked to this account. For security reasons, login is only possible via real-time OTP verification sent to a registered email.'
+            ? 'এই অ্যাকাউন্টের সাথে কোনো বৈধ ইমেইল যুক্ত নেই। সুরক্ষার স্বার্থে শুধুমাত্র নিবন্ধিত ইমেইলের মাধ্যমেই ওটিপি ভেরিফিকেশন করে লগইন করা সম্ভব।'
+            : 'No valid email is linked to this account. For security reasons, login is only possible via OTP verification sent to a registered email.'
         );
         return;
       }
@@ -390,16 +380,14 @@ export default function LoginScreen({
         }
       }
 
-      // 1. Generate authoritative 6-digit OTP immediately in 0ms
-      const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
-      setSentOtpCode(generatedOtp);
+      setSentOtpCode('');
       setFoundUser(targetUser);
 
-      // Persist across app switching (e.g. when checking Gmail app)
+      // Persist pending user info (NEVER persist OTP code client-side)
       if (typeof window !== 'undefined') {
-        sessionStorage.setItem('bnb_pending_otp_code', generatedOtp);
+        sessionStorage.removeItem('bnb_pending_otp_code');
+        localStorage.removeItem('bnb_pending_otp_code');
         sessionStorage.setItem('bnb_pending_otp_user', JSON.stringify(targetUser));
-        localStorage.setItem('bnb_pending_otp_code', generatedOtp);
         localStorage.setItem('bnb_pending_otp_user', JSON.stringify(targetUser));
         localStorage.setItem('amb_saved_login_email', rawInput);
       }
@@ -414,7 +402,28 @@ export default function LoginScreen({
       };
       const displayEmail = maskEmail(targetEmail);
 
-      // 2. Update UI state & switch to OTP input screen INSTANTLY (0ms wait — never blocked by SMTP network latency)
+      // Dispatch server-generated 6-digit Email OTP to any registered email
+      const otpDispatch = await sendEmailOtpDirect({
+        email: targetEmail,
+        otp: '',
+        userName: userDisplayName,
+        phone: formattedPhone || userPhone,
+        memberId: targetUser.memberId || rawInput,
+        userId: targetUser.uid,
+        reason: 'login'
+      });
+
+      if (!otpDispatch.success) {
+        setError(
+          localizeErrorText(
+            otpDispatch.error,
+            'ওটিপি পাঠাতে সমস্যা হয়েছে। অনুগ্রহ করে পুনরায় চেষ্টা করুন।',
+            'Failed to send OTP. Please try again.'
+          )
+        );
+        return;
+      }
+
       setDeliveryInfo({
         deliveredTo: displayEmail,
         channel: 'email',
@@ -424,31 +433,19 @@ export default function LoginScreen({
 
       setSuccessMessage(
         isBn
-          ? `আপনার নিবন্ধিত ইমেইলে (${displayEmail}) ৬ সংখ্যার অফিসিয়াল ভেরিফিকেশন ওটিপি কোড পাঠানো হয়েছে। অনুগ্রহ করে আপনার ইনবক্স চেক করুন।`
-          : `A 6-digit official verification OTP code has been sent to your registered email (${displayEmail}). Please check your inbox.`
+          ? `আপনার নিবন্ধিত ইমেইলে (${displayEmail}) ৬ সংখ্যার ভেরিফিকেশন ওটিপি কোড পাঠানো হয়েছে (মেয়াদ ৫ মিনিট)। অনুগ্রহ করে আপনার ইনবক্স চেক করুন।`
+          : `A 6-digit verification OTP code has been sent to your registered email (${displayEmail}). Please check your inbox.`
       );
 
       setStep('verify-otp');
-
-      // 3. Dispatch multi-channel authoritative OTP in background immediately without blocking the UI
-      sendEmailOtpDirect({
-        email: targetEmail,
-        otp: generatedOtp,
-        userName: userDisplayName,
-        phone: formattedPhone || userPhone,
-        memberId: targetUser.memberId || rawInput,
-        userId: targetUser.uid,
-        reason: 'login'
-      }).catch((otpErr) => {
-        console.warn('Background OTP dispatch warning:', otpErr);
-      });
     } catch (err: any) {
-      console.error('Login error:', err);
+      if (import.meta.env.DEV) {
+        console.error('Login error:', err);
+      }
       setError(
-        err?.message ||
-          (isBn
-            ? 'লগইন প্রসেসে ত্রুটি হয়েছে। অনুগ্রহ করে পুনরায় চেষ্টা করুন।'
-            : 'An error occurred during login. Please try again.')
+        isBn
+          ? 'লগইন প্রক্রিয়ায় ত্রুটি হয়েছে। অনুগ্রহ করে পুনরায় চেষ্টা করুন।'
+          : 'An error occurred during login. Please try again.'
       );
     } finally {
       setLoading(false);
@@ -484,17 +481,20 @@ export default function LoginScreen({
         localStorage.removeItem('bnb_pending_otp_code');
         localStorage.removeItem('bnb_pending_otp_user');
       } catch (storeErr) {
-        console.warn('Storage save warning:', storeErr);
+        if (import.meta.env.DEV) {
+          console.warn('Storage save warning:', storeErr);
+        }
       }
     }
 
     // 2. Set explicit success feedback
     setSuccessMessage(
       isBn
-        ? '✅ ওটিপি ভেরিফিকেশন সফল হয়েছে! অনুগ্রহ করে আপনার সিকিউরিটি পিন দিন...'
-        : '✅ OTP verification successful! Please enter your security PIN...'
+        ? '✅ ওটিপি যাচাই সফল হয়েছে! অনুগ্রহ করে আপনার 4 ডিজিট পিন দিন...'
+        : '✅ OTP verification successful! Please enter your 4-digit PIN...'
     );
     setError('');
+    setExistingAccountConflict(null);
 
     // 3. Immediately invoke onLoginSuccess to switch screen to user dashboard (NEVER blocked by network)
     onLoginSuccess(userWithToken);
@@ -511,22 +511,12 @@ export default function LoginScreen({
         })
       }).catch(() => {});
     } catch (e) {}
-
-    // 5. Non-blocking client firestore update if available (never awaited)
-    if (db && userToLogin.uid) {
-      updateDoc(doc(db, 'users', userToLogin.uid), {
-        activeSessionToken: newSessionToken,
-        activeSessionDeviceId: deviceId,
-        lastLoginAt: new Date().toISOString(),
-        isLoggedIn: true
-      }).catch(() => {});
-    }
   };
 
-  // Verify OTP (Dual check: Local session OTP, persistent storage OTP, or server-side /api/verify-otp)
+  // Verify OTP strictly via Server (/api/verify-otp) for both Login and Signup
   const handleVerifyOtp = async (e?: React.FormEvent, directCode?: string) => {
     if (e) e.preventDefault();
-    const code = (directCode || otpInput).trim();
+    const code = convertBengaliToEnglishDigits(directCode || otpInput).trim();
     if (!code) {
       setError(
         isBn
@@ -536,7 +526,7 @@ export default function LoginScreen({
       return;
     }
 
-    if (code.length !== 6) {
+    if (code.length !== 6 || !/^\d{6}$/.test(code)) {
       setError(
         isBn
           ? 'ওটিপি কোড অবশ্যই ৬ সংখ্যার হতে হবে।'
@@ -547,86 +537,162 @@ export default function LoginScreen({
 
     setLoading(true);
     setError('');
+    setExistingAccountConflict(null);
 
     try {
-      let isVerified = false;
-
-      // 1. Primary check against local state / persisted storage OTP code
-      const effectiveSentCode = sentOtpCode || (typeof window !== 'undefined' ? (sessionStorage.getItem('bnb_pending_otp_code') || localStorage.getItem('bnb_pending_otp_code') || '') : '');
-      
       let effectiveUser = foundUser;
-      if (!effectiveUser && typeof window !== 'undefined') {
+      if (!effectiveUser && !isRegistering && typeof window !== 'undefined') {
         try {
           const raw = sessionStorage.getItem('bnb_pending_otp_user') || localStorage.getItem('bnb_pending_otp_user');
           if (raw) effectiveUser = JSON.parse(raw);
         } catch (e) {}
       }
 
-      if (effectiveSentCode && code === effectiveSentCode) {
-        isVerified = true;
+      const rawEnteredEmail = (email || effectiveUser?.email || '').trim();
+      const targetEmail = (effectiveUser?.email || email || '').trim().toLowerCase();
+      if (!targetEmail) {
+        setError(isBn ? 'ইমেইল ঠিকানা পাওয়া যায়নি।' : 'Email address not found.');
+        return;
       }
 
-      // 2. Server-side verification fallback via /api/verify-otp
-      if (!isVerified && (effectiveUser?.email || email)) {
-        try {
-          const verifyRes = await fetch(apiUrl('/api/verify-otp'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              email: (effectiveUser?.email || email).trim().toLowerCase(),
-              otp: code
-            })
-          });
-          const verifyData = await verifyRes.json().catch(() => null);
-          if (verifyData?.verified) {
-            isVerified = true;
+      // Authoritative Server-Side OTP Verification (on login, server resolves existing user: exact -> lowercase -> uid_mappings)
+      const verifyRes = await fetch(apiUrl('/api/verify-otp'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: rawEnteredEmail || targetEmail,
+          otp: code,
+          purpose: isRegistering ? 'signup' : 'login'
+        })
+      });
+      const verifyData = await verifyRes.json().catch(() => null);
+
+      if (!isRegistering && (verifyRes.status === 404 || verifyData?.code === 'user_not_found')) {
+        setError(
+          isBn
+            ? 'এই ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি। নতুন অ্যাকাউন্ট খুলতে অনুগ্রহ করে নিবন্ধন করুন।'
+            : 'No account found with this email. Please sign up to create a new account.'
+        );
+        return;
+      }
+
+      if (!verifyRes.ok || !verifyData?.verified) {
+        setError(
+          localizeErrorText(
+            verifyData?.error,
+            'প্রদত্ত ওটিপি কোডটি সঠিক নয় বা মেয়াদ শেষ হয়েছে। অনুগ্রহ করে সঠিক ৬ সংখ্যার কোড দিন।',
+            'Invalid or expired OTP code. Please enter the correct 6-digit code.'
+          )
+        );
+        return;
+      }
+
+      // If completing new account registration after Email OTP verification:
+      if (isRegistering) {
+        const cleanPhoneDigits = convertBengaliToEnglishDigits(regPhone).replace(/\D/g, '');
+        const standardPhone = cleanPhoneDigits.length === 11 && cleanPhoneDigits.startsWith('0') ? `+88${cleanPhoneDigits}` : cleanPhoneDigits;
+
+        const regRes = await fetch(apiUrl('/api/auth/register'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: regName.trim(),
+            email: targetEmail,
+            phone: standardPhone,
+            password: regPassword.trim(),
+            pin: convertBengaliToEnglishDigits(regPin).trim(),
+            otp: code,
+            otpVerificationToken: verifyData.otpVerificationToken || ''
+          })
+        });
+        const regData = await regRes.json().catch(() => null);
+        if (!regRes.ok || !regData?.success || !regData?.user) {
+          const errRaw = String(regData?.error || '');
+          const errLower = errRaw.toLowerCase();
+          if (
+            regRes.status === 409 ||
+            errLower.includes('already') ||
+            errLower.includes('exists') ||
+            errRaw.includes('ইতিপূর্বে') ||
+            errRaw.includes('আগেই')
+          ) {
+            const isPhoneConflict =
+              errLower.includes('phone') ||
+              errLower.includes('mobile') ||
+              errRaw.includes('মোবাইল') ||
+              errRaw.includes('ফোন');
+            setStep('info');
+            setOtpInput('');
+            setSuccessMessage('');
+            setExistingAccountConflict(isPhoneConflict ? 'phone' : 'email');
+            setError(
+              isPhoneConflict
+                ? isBn
+                  ? 'এই মোবাইল নম্বর দিয়ে আগেই অ্যাকাউন্ট খোলা হয়েছে। অনুগ্রহ করে লগইন করুন।'
+                  : 'An account has already been opened with this mobile number. Please log in.'
+                : isBn
+                ? 'এই ইমেইল দিয়ে আগেই অ্যাকাউন্ট খোলা হয়েছে। অনুগ্রহ করে লগইন করুন।'
+                : 'An account has already been opened with this email. Please log in.'
+            );
+            return;
           }
-        } catch (serverVerifyErr) {
-          console.warn('Server verify-otp error:', serverVerifyErr);
+          setError(
+            localizeErrorText(
+              regData?.error,
+              'অ্যাকাউন্ট তৈরিতে সমস্যা হয়েছে। অনুগ্রহ করে পুনরায় চেষ্টা করুন।',
+              'Failed to create account. Please try again.'
+            )
+          );
+          return;
         }
+        saveUserToLocalBackup(regData.user);
+        setSuccessMessage(
+          isBn
+            ? '✅ ইমেইল যাচাই ও অ্যাকাউন্ট তৈরি সফল হয়েছে! স্বাগতম...'
+            : '✅ Email verified and account created successfully! Welcome...'
+        );
+        executeLogin(regData.user);
+        return;
       }
 
-      if (isVerified) {
-        if (!effectiveUser) {
-          effectiveUser = await locateUser(email.trim());
-        }
+      // Otherwise, completing Login: NEVER create a new account at login.
+      // Use server-resolved user from /api/verify-otp (exact -> lowercase -> uid_mappings), or fallback to locateUser
+      let resolvedLoginUser: User | null = (verifyData?.user as User) || null;
+      if (!resolvedLoginUser) {
+        resolvedLoginUser = await locateUser(rawEnteredEmail || targetEmail);
+      }
 
-        if (effectiveUser) {
-          setSuccessMessage(
-            isBn
-              ? '✅ ওটিপি যাচাই সফল হয়েছে! স্বাগতম...'
-              : '✅ OTP verified successfully! Welcome...'
-          );
-          executeLogin(effectiveUser);
-        } else {
-          setError(
-            isBn
-              ? 'ইউজার সেশন পাওয়া যায়নি। অনুগ্রহ করে পুনরায় আপনার নিবন্ধিত ইমেইল দিয়ে চেষ্টা করুন।'
-              : 'User session not found. Please try again with your registered email.'
-          );
-        }
+      if (resolvedLoginUser && resolvedLoginUser.uid) {
+        setSuccessMessage(
+          isBn
+            ? '✅ ওটিপি যাচাই সফল হয়েছে! স্বাগতম...'
+            : '✅ OTP verified successfully! Welcome...'
+        );
+        executeLogin(resolvedLoginUser);
       } else {
         setError(
           isBn
-            ? 'প্রদত্ত ওটিপি কোডটি সঠিক নয়। অনুগ্রহ করে আপনার ইমেইল ইনবক্সে আসা ৬ সংখ্যার সঠিক কোডটি দিন।'
-            : 'Invalid OTP code. Please enter the correct 6-digit code sent to your email inbox.'
+            ? 'এই ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি। নতুন অ্যাকাউন্ট খুলতে অনুগ্রহ করে নিবন্ধন করুন।'
+            : 'No account found with this email. Please sign up to create a new account.'
         );
       }
     } catch (verifyErr: any) {
-      console.error('OTP Verification Error:', verifyErr);
+      if (import.meta.env.DEV) {
+        console.error('OTP Verification Error:', verifyErr);
+      }
       setError(
-        verifyErr?.message ||
-          (isBn ? 'ওটিপি যাচাইয়ে ত্রুটি হয়েছে।' : 'Failed to verify OTP.')
+        isBn ? 'ওটিপি যাচাই করতে সমস্যা হয়েছে। অনুগ্রহ করে পুনরায় চেষ্টা করুন।' : 'Failed to verify OTP. Please try again.'
       );
     } finally {
       setLoading(false);
     }
   };
 
-  // Registration handler
+  // Registration handler (Step 1: validate fields, ensure email/phone is not already registered, dispatch server OTP -> Step 2: verify OTP & create account)
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setExistingAccountConflict(null);
     setSuccessMessage('');
 
     if (!regName.trim() || !email.trim() || !regPhone.trim() || !regPassword.trim() || !regPin.trim()) {
@@ -642,8 +708,8 @@ export default function LoginScreen({
     if (!cleanRegEmail.includes('@') && cleanRegEmail.toUpperCase().includes('BNB')) {
       setError(
         isBn
-          ? 'BNB কোড দিয়ে একাউন্ট খোলা সম্পূর্ণ নিষিদ্ধ! শুধুমাত্র আপনার ব্যক্তিগত বৈধ ইমেইল অ্যাড্রেস দিয়ে একাউন্ট খুলুন।'
-          : 'Opening an account with a BNB code is strictly prohibited! Please register using your personal valid email address only.'
+          ? 'মেম্বার আইডি দিয়ে অ্যাকাউন্ট খোলা সম্পূর্ণ নিষিদ্ধ! শুধুমাত্র আপনার ব্যক্তিগত বৈধ ইমেইল ঠিকানা দিয়ে অ্যাকাউন্ট খুলুন।'
+          : 'Opening an account with a member ID is strictly prohibited! Please register using your personal valid email address only.'
       );
       return;
     }
@@ -651,16 +717,27 @@ export default function LoginScreen({
     if (!cleanRegEmail.includes('@') || !cleanRegEmail.includes('.')) {
       setError(
         isBn
-          ? 'অনুগ্রহ করে একটি সঠিক ও সক্রিয় ইমেইল অ্যাড্রেস প্রদান করুন (যেমন: example@gmail.com)। একাউন্ট খোলা শুধুমাত্র ইমেইলের মাধ্যমেই সম্ভব।'
-          : 'Please provide a valid and active email address (e.g. example@gmail.com). Account registration is only possible via email.'
+          ? 'অনুগ্রহ করে একটি সঠিক ও সক্রিয় ইমেইল ঠিকানা প্রদান করুন।'
+          : 'Please provide a valid and active email address.'
       );
       return;
     }
 
-    if (regPin.trim().length !== 4) {
+    const cleanPhoneDigits = convertBengaliToEnglishDigits(regPhone).replace(/\D/g, '');
+    if (cleanPhoneDigits.length < 10 || cleanPhoneDigits.length > 15) {
       setError(
         isBn
-          ? 'সিকিউরিটি পিন অবশ্যই ৪ সংখ্যার হতে হবে।'
+          ? 'অনুগ্রহ করে সঠিক মোবাইল নম্বর প্রদান করুন।'
+          : 'Please enter a valid mobile number.'
+      );
+      return;
+    }
+
+    const cleanPinDigits = convertBengaliToEnglishDigits(regPin).trim();
+    if (cleanPinDigits.length !== 4 || !/^\d{4}$/.test(cleanPinDigits)) {
+      setError(
+        isBn
+          ? 'সিকিউরিটি পিন অবশ্যই 4 ডিজিটের হতে হবে।'
           : 'Security PIN must be exactly 4 digits.'
       );
       return;
@@ -669,129 +746,73 @@ export default function LoginScreen({
     setLoading(true);
 
     try {
-      const cleanPhoneDigits = convertBengaliToEnglishDigits(regPhone).replace(/\D/g, '');
-      const standardPhone = cleanPhoneDigits.length === 11 && cleanPhoneDigits.startsWith('0') ? `+88${cleanPhoneDigits}` : cleanPhoneDigits;
-      const cleanEmail = email.trim().toLowerCase();
-
-      let createdUser: User | null = null;
-      let specificError = '';
-
-      // 1. First attempt fast authoritative server-side registration via Firebase Admin SDK
-      try {
-        const res = await fetch(apiUrl('/api/auth/register'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: regName.trim(),
-            email: cleanEmail,
-            phone: standardPhone,
-            password: regPassword.trim(),
-            pin: regPin.trim()
-          })
-        });
-
-        const data = await res.json().catch(() => null);
-        if (data?.success && data.user) {
-          createdUser = data.user;
-        } else if (data?.error && !data.error.includes('route not found') && !data.error.includes('Not Found') && data.code !== 'route_not_found') {
-          specificError = data.error;
-        }
-      } catch (serverErr) {
-        console.warn('Server registration route note:', serverErr);
-      }
-
-      if (specificError) {
-        setError(specificError);
-        setLoading(false);
-        return;
-      }
-
-      // 2. Direct client-side Firestore fallback (guarantees registration never fails if server route is not reached)
-      if (!createdUser && db) {
-        try {
-          // Check duplicate email
-          const qEmail = query(collection(db, 'users'), where('email', '==', cleanEmail), limit(1));
-          const snapEmail = await getDocs(qEmail).catch(() => null);
-          if (snapEmail && !snapEmail.empty) {
-            setError(
-              isBn
-                ? 'এই ইমেইল ঠিকানা দিয়ে ইতিপূর্বে একটি অ্যাকাউন্ট খোলা হয়েছে। অনুগ্রহ করে লগইন করুন।'
-                : 'An account is already registered with this email address. Please log in.'
-            );
-            setLoading(false);
-            return;
-          }
-
-          // Check duplicate phone
-          const qPhone = query(collection(db, 'users'), where('phone', '==', standardPhone), limit(1));
-          const snapPhone = await getDocs(qPhone).catch(() => null);
-          if (snapPhone && !snapPhone.empty) {
-            setError(
-              isBn
-                ? 'এই মোবাইল নম্বর দিয়ে ইতিপূর্বে একটি অ্যাকাউন্ট খোলা হয়েছে। অনুগ্রহ করে লগইন করুন।'
-                : 'An account is already registered with this mobile number. Please log in.'
-            );
-            setLoading(false);
-            return;
-          }
-
-          const fallbackSerial = Math.floor(10000000 + Math.random() * 90000000);
-          const newMemberId = `BNB${fallbackSerial}`;
-          const newUid = `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-
-          const newUserObj: User = {
-            uid: newUid,
-            name: regName.trim(),
-            email: cleanEmail,
-            phone: standardPhone,
-            memberId: newMemberId,
-            role: 'user',
-            balance: 0,
-            mainBalance: 0,
-            savings: 0,
-            telecomBalance: 0,
-            superShopBalance: 0,
-            dueLoan: 0,
-            password: regPassword.trim(),
-            pin: regPin.trim(),
-            appLockCode: regPin.trim(),
-            pinSet: true,
-            status: 'active',
-            samityStatus: 'none',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          };
-
-          await setDoc(doc(db, 'users', newUid), newUserObj);
-          createdUser = newUserObj;
-        } catch (clientRegErr: any) {
-          console.error('Client registration fallback error:', clientRegErr);
-        }
-      }
-
-      if (!createdUser) {
+      // 1. Check if email already has an account before sending signup OTP
+      const existing = await fetchUserFast(cleanRegEmail, true);
+      if (existing) {
+        setExistingAccountConflict('email');
         setError(
           isBn
-            ? 'অ্যাকাউন্ট তৈরিতে সাময়িক সমস্যা হয়েছে। অনুগ্রহ করে পুনরায় চেষ্টা করুন।'
-            : 'Temporary issue creating account. Please try again.'
+            ? 'এই ইমেইল দিয়ে আগেই অ্যাকাউন্ট খোলা হয়েছে। অনুগ্রহ করে লগইন করুন।'
+            : 'An account has already been opened with this email. Please log in.'
         );
         setLoading(false);
         return;
       }
 
-      saveUserToLocalBackup(createdUser);
+      // 2. Check if phone number already has an account before sending signup OTP
+      const existingByPhone = await findUserInFirestoreByPhone(db, cleanPhoneDigits).catch(() => null);
+      if (existingByPhone && existingByPhone.data) {
+        setExistingAccountConflict('phone');
+        setError(
+          isBn
+            ? 'এই মোবাইল নম্বর দিয়ে আগেই অ্যাকাউন্ট খোলা হয়েছে। অনুগ্রহ করে লগইন করুন।'
+            : 'An account has already been opened with this mobile number. Please log in.'
+        );
+        setLoading(false);
+        return;
+      }
+
+      const otpRes = await sendEmailOtpDirect({
+        email: cleanRegEmail,
+        otp: '',
+        userName: regName.trim(),
+        phone: regPhone.trim(),
+        reason: 'verification'
+      });
+
+      if (!otpRes.success) {
+        setError(
+          localizeErrorText(
+            otpRes.error,
+            'ভেরিফিকেশন ওটিপি পাঠাতে সমস্যা হয়েছে। অনুগ্রহ করে পুনরায় চেষ্টা করুন।',
+            'Failed to send verification OTP. Please try again.'
+          )
+        );
+        setLoading(false);
+        return;
+      }
+
+      setDeliveryInfo({
+        deliveredTo: cleanRegEmail,
+        channel: 'email',
+        targetPhone: regPhone.trim(),
+        targetEmail: cleanRegEmail
+      });
+
       setSuccessMessage(
         isBn
-          ? '✅ আপনার অ্যাকাউন্ট সফলভাবে তৈরি হয়েছে! স্বাগতম...'
-          : '✅ Your account has been created successfully! Welcome...'
+          ? `আপনার ইমেইল (${cleanRegEmail}) যাচাই করতে ৬ সংখ্যার ওটিপি পাঠানো হয়েছে। ওটিপি দিয়ে নিবন্ধন সম্পন্ন করুন।`
+          : `A 6-digit OTP has been sent to ${cleanRegEmail}. Enter the OTP to complete registration.`
       );
-      executeLogin(createdUser);
+      setStep('verify-otp');
     } catch (err: any) {
-      console.error(err);
+      if (import.meta.env.DEV) {
+        console.error(err);
+      }
       setError(
         isBn
-          ? `অ্যাকাউন্ট তৈরিতে সমস্যা হয়েছে: ${err?.message || ''}`
-          : `Error creating account: ${err?.message || ''}`
+          ? 'অ্যাকাউন্ট তৈরিতে সমস্যা হয়েছে। অনুগ্রহ করে পুনরায় চেষ্টা করুন।'
+          : 'Error creating account. Please try again.'
       );
     } finally {
       setLoading(false);
@@ -971,6 +992,7 @@ export default function LoginScreen({
                 setIsRegistering(false);
                 setStep('info');
                 setError('');
+                setExistingAccountConflict(null);
                 setSuccessMessage('');
               }}
               className={`flex-1 py-3 px-4 sm:px-6 rounded-full text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 cursor-pointer ${
@@ -1003,6 +1025,7 @@ export default function LoginScreen({
                 setIsRegistering(true);
                 setStep('info');
                 setError('');
+                setExistingAccountConflict(null);
                 setSuccessMessage('');
               }}
               className={`flex-1 py-3 px-4 sm:px-6 rounded-full text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 cursor-pointer ${
@@ -1032,21 +1055,32 @@ export default function LoginScreen({
 
           {/* Feedback messages */}
           {error && (
-            <div className="space-y-1.5">
-              <div
-                className={`text-xs p-3.5 rounded-2xl font-bold flex items-start gap-2 shadow-xs animate-fade-in border ${
-                  isDark
-                    ? 'bg-rose-950/60 border-rose-800/80 text-rose-200'
-                    : 'bg-rose-50 border-rose-200 text-rose-800'
-                }`}
-              >
+            <div
+              className={`text-xs p-3.5 rounded-2xl font-bold flex flex-col gap-2.5 shadow-xs animate-fade-in border ${
+                isDark
+                  ? 'bg-rose-950/60 border-rose-800/80 text-rose-200'
+                  : 'bg-rose-50 border-rose-200 text-rose-800'
+              }`}
+            >
+              <div className="flex items-start gap-2">
                 <AlertTriangle className={`w-4 h-4 shrink-0 mt-0.5 ${isDark ? 'text-rose-400' : 'text-rose-600'}`} />
-                <span>{error}</span>
+                <span className="leading-relaxed">{error}</span>
               </div>
-              {debugInfo && (
-                <div className="px-2.5 py-1 bg-slate-900/90 text-emerald-400 font-mono text-[10px] rounded-lg break-all border border-slate-700 select-all">
-                  API: {debugInfo.url} | Status: {debugInfo.status} ({debugInfo.errorCode})
-                </div>
+              {isRegistering && existingAccountConflict && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsRegistering(false);
+                    setStep('info');
+                    setError('');
+                    setExistingAccountConflict(null);
+                    setSuccessMessage('');
+                  }}
+                  className="self-start inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-full bg-[#0B532C] hover:bg-[#084223] active:bg-[#06331B] text-white text-xs font-black shadow-xs transition active:scale-95 cursor-pointer"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>{isBn ? 'লগইন করুন' : 'Switch to Login'}</span>
+                </button>
               )}
             </div>
           )}
@@ -1114,12 +1148,13 @@ export default function LoginScreen({
                     </div>
                     <input
                       type="text"
+                      inputMode="numeric"
                       autoFocus
                       required
                       maxLength={6}
                       value={otpInput}
                       onChange={(e) => {
-                        const val = e.target.value.replace(/\D/g, '');
+                        const val = convertBengaliToEnglishDigits(e.target.value).replace(/\D/g, '');
                         setOtpInput(val);
                         if (val.length === 6) {
                           handleVerifyOtp(undefined, val);
@@ -1160,7 +1195,7 @@ export default function LoginScreen({
                           : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
                       }`}
                     >
-                      {isBn ? 'পুনরায় পাঠান (Resend)' : 'Resend OTP'}
+                      {isBn ? 'পুনরায় কোড পাঠান' : 'Resend OTP'}
                     </button>
                     <button
                       type="button"
@@ -1168,6 +1203,7 @@ export default function LoginScreen({
                         setStep('info');
                         setOtpInput('');
                         setError('');
+                        setExistingAccountConflict(null);
                       }}
                       className={`flex-1 py-2.5 rounded-full border text-xs font-bold transition cursor-pointer ${
                         isDark
@@ -1194,7 +1230,7 @@ export default function LoginScreen({
                 <div>
                   <div className="flex items-center justify-between mb-2 px-1">
                     <label className={`block text-xs sm:text-sm font-extrabold text-left ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>
-                      {isBn ? 'আপনার নিবন্ধিত ইমেইল অ্যাড্রেস' : 'Your Registered Email Address'}
+                      {isBn ? 'আপনার নিবন্ধিত ইমেইল ঠিকানা' : 'Your Registered Email Address'}
                     </label>
                     <span
                       className={`text-[10.5px] font-bold px-2 py-0.5 rounded-full border ${
@@ -1214,8 +1250,11 @@ export default function LoginScreen({
                       type="email"
                       required
                       value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder={isBn ? 'আপনার ইমেইল দিন (যেমন: name@gmail.com)' : 'Enter your email (e.g. name@gmail.com)'}
+                      onChange={(e) => {
+                        setEmail(e.target.value);
+                        if (error) setError('');
+                      }}
+                      placeholder={isBn ? 'আপনার নিবন্ধিত ইমেইল লিখুন' : 'Enter your email (e.g. name@gmail.com)'}
                       className={`w-full pl-13 pr-5 py-3.5 sm:py-4 border-2 rounded-full text-xs sm:text-sm font-bold focus:outline-none focus:ring-4 focus:ring-emerald-500/15 shadow-2xs transition-all ${
                         isDark
                           ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500 focus:border-emerald-500'
@@ -1249,7 +1288,7 @@ export default function LoginScreen({
                     <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   ) : (
                     <>
-                      <span>{isBn ? 'OTP কোড পাঠান (Send OTP)' : 'Send OTP Code'}</span>
+                      <span>{isBn ? 'ওটিপি কোড পাঠান' : 'Send OTP Code'}</span>
                       <ArrowRight className="w-5 h-5 stroke-[2.5]" />
                     </>
                   )}
@@ -1285,13 +1324,19 @@ export default function LoginScreen({
 
                 <div>
                   <label className={`block text-xs font-extrabold mb-1 px-1 ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
-                    {isBn ? 'ইমেইল ঠিকানা (Email) *' : 'Email Address *'}
+                    {isBn ? 'ইমেইল ঠিকানা *' : 'Email Address *'}
                   </label>
                   <input
                     type="email"
                     required
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (existingAccountConflict === 'email') {
+                        setExistingAccountConflict(null);
+                        setError('');
+                      }
+                    }}
                     placeholder="example@gmail.com"
                     className={`w-full px-5 py-3 border-2 rounded-full text-xs sm:text-sm font-bold focus:outline-none shadow-2xs transition-colors ${
                       isDark
@@ -1309,7 +1354,13 @@ export default function LoginScreen({
                     type="tel"
                     required
                     value={regPhone}
-                    onChange={(e) => setRegPhone(e.target.value.replace(/\D/g, ''))}
+                    onChange={(e) => {
+                      setRegPhone(convertBengaliToEnglishDigits(e.target.value).replace(/\D/g, ''));
+                      if (existingAccountConflict === 'phone') {
+                        setExistingAccountConflict(null);
+                        setError('');
+                      }
+                    }}
                     placeholder="01712345678"
                     className={`w-full px-5 py-3 border-2 rounded-full text-xs sm:text-sm font-mono font-bold focus:outline-none shadow-2xs transition-colors ${
                       isDark
@@ -1339,14 +1390,17 @@ export default function LoginScreen({
                   </div>
                   <div>
                     <label className={`block text-xs font-extrabold mb-1 px-1 ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
-                      {isBn ? '৪ ডিজিট পিন *' : '4-Digit PIN *'}
+                      {isBn ? '4 ডিজিট পিন *' : '4-Digit PIN *'}
                     </label>
                     <input
                       type="password"
+                      inputMode="numeric"
                       required
+                      minLength={4}
                       maxLength={4}
+                      pattern="\d{4}"
                       value={regPin}
-                      onChange={(e) => setRegPin(e.target.value.replace(/\D/g, ''))}
+                      onChange={(e) => setRegPin(convertBengaliToEnglishDigits(e.target.value).replace(/\D/g, '').slice(0, 4))}
                       placeholder="••••"
                       className={`w-full px-5 py-3 border-2 rounded-full text-xs font-mono font-bold focus:outline-none shadow-2xs text-center transition-colors ${
                         isDark

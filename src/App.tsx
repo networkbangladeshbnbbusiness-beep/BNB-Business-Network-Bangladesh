@@ -93,11 +93,10 @@ function getStoredLocalUser(): User | null {
   }
 
   const rememberedPhone = localStorage.getItem('amb_user_phone');
-  if (rememberedPhone && rememberedPhone.trim().length >= 5) {
-    const finalUid = rememberedUid || ('user_' + rememberedPhone.replace(/\D/g, ''));
+  if (rememberedUid && !isFakeOrTemporaryUid(rememberedUid) && rememberedPhone && rememberedPhone.trim().length >= 5) {
     const storedBal = Number(localStorage.getItem('amb_user_balance') || '0');
     return {
-      uid: finalUid,
+      uid: rememberedUid,
       name: localStorage.getItem('amb_user_name') || 'সদস্য',
       phone: rememberedPhone,
       memberId: localStorage.getItem('bnb_user_member_id') || localStorage.getItem('amb_user_member_id') || 'BNB00000000',
@@ -108,14 +107,13 @@ function getStoredLocalUser(): User | null {
       telecomBalance: Number(localStorage.getItem('amb_user_telecom_balance') || '0'),
       superShopBalance: Number(localStorage.getItem('amb_user_super_shop_balance') || '0'),
       dueLoan: Number(localStorage.getItem('amb_user_due_loan') || '0'),
-      pin: localStorage.getItem('amb_user_pin') || undefined,
       createdAt: new Date().toISOString(),
       status: 'active',
       samityStatus: (localStorage.getItem('amb_user_samity_status') as any) || 'none'
     };
   }
 
-  // Check server-issued session cookies ONLY if they contain a real UID or phone
+  // Check server-issued session cookies ONLY if they contain a real UID
   try {
     const rawCookies = typeof document !== 'undefined' ? (document.cookie || '') : '';
     if (rawCookies) {
@@ -128,11 +126,10 @@ function getStoredLocalUser(): User | null {
       const cookieName = getCookieVal('bnb_active_name') || localStorage.getItem('amb_user_name') || 'সদস্য';
       const cookieMemberId = getCookieVal('bnb_active_member_id') || localStorage.getItem('bnb_user_member_id') || 'BNB00000000';
 
-      if ((!isFakeOrTemporaryUid(cookieUid) && cookieUid && cookiePhone && cookiePhone.trim().length >= 5) || (cookiePhone && cookiePhone.trim().length >= 5)) {
-        const resolvedUid = (!isFakeOrTemporaryUid(cookieUid) && cookieUid) ? cookieUid : ('user_' + cookiePhone.replace(/\D/g, ''));
+      if (!isFakeOrTemporaryUid(cookieUid) && cookieUid && cookiePhone && cookiePhone.trim().length >= 5) {
         const storedBal = Number(localStorage.getItem('amb_user_balance') || '0');
         return {
-          uid: resolvedUid,
+          uid: cookieUid,
           name: cookieName,
           phone: cookiePhone || '',
           memberId: cookieMemberId,
@@ -143,7 +140,6 @@ function getStoredLocalUser(): User | null {
           telecomBalance: 0,
           superShopBalance: 0,
           dueLoan: 0,
-          pin: localStorage.getItem('amb_user_pin') || '0000',
           createdAt: new Date().toISOString(),
           status: 'active',
           samityStatus: 'none'
@@ -1603,18 +1599,12 @@ export default function App() {
     if (changed) {
       try {
         await updateDoc(doc(db, 'users', user.uid), {
-          role: updatedUser.role || 'user',
           memberId: updatedUser.memberId,
           isDemo: updatedUser.isDemo ?? false,
           samityStatus: updatedUser.samityStatus || 'pending'
         });
-        console.log("Successfully synchronized user non-balance metadata for user:", user.uid);
       } catch (e: any) {
-        if (e?.code === 'unavailable' || e?.message?.includes('offline')) {
-          console.warn("User profile metadata update delayed: Client is offline.");
-        } else {
-          console.error("User profile metadata update in Firestore failed:", e);
-        }
+        // Ignore non-critical metadata sync errors
       }
     }
     return updatedUser;
@@ -1695,13 +1685,32 @@ export default function App() {
             let resolvedUserData: User | null = null;
             if (userSnap && userSnap.exists()) {
               resolvedUserData = { ...(userSnap.data() as User), uid: userSnap.id };
-            } else if (rememberedPhone && rememberedPhone.trim().length >= 5) {
+            } else {
               try {
-                const foundByPhone = await findUserInFirestoreByPhone(db, rememberedPhone);
-                if (foundByPhone && foundByPhone.data) {
-                  resolvedUserData = { ...(foundByPhone.data as User), uid: foundByPhone.id };
+                const resUid = await fetch('/api/auth/resolve-uid', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ uid: targetUid })
+                });
+                const resData = await resUid.json().catch(() => null);
+                if (resData?.resolved && resData?.user?.uid) {
+                  const primarySnap = await getDoc(doc(db, 'users', resData.user.uid)).catch(() => null);
+                  if (primarySnap && primarySnap.exists()) {
+                    resolvedUserData = { ...(primarySnap.data() as User), uid: primarySnap.id };
+                  } else {
+                    resolvedUserData = resData.user as User;
+                  }
                 }
               } catch (e) {}
+
+              if (!resolvedUserData && rememberedPhone && rememberedPhone.trim().length >= 5) {
+                try {
+                  const foundByPhone = await findUserInFirestoreByPhone(db, rememberedPhone);
+                  if (foundByPhone && foundByPhone.data) {
+                    resolvedUserData = { ...(foundByPhone.data as User), uid: foundByPhone.id };
+                  }
+                } catch (e) {}
+              }
             }
 
             if (resolvedUserData) {
@@ -1712,9 +1721,7 @@ export default function App() {
                 localStorage.setItem('amb_active_session_token', finalUserData.activeSessionToken);
               }
 
-              if (finalUserData.pin) {
-                localStorage.setItem('amb_user_pin', finalUserData.pin);
-              }
+              localStorage.removeItem('amb_user_pin');
               localStorage.setItem('amb_user_uid', finalUserData.uid);
               localStorage.setItem('amb_last_user', JSON.stringify(finalUserData));
               saveUserToLocalBackup(finalUserData);
@@ -2097,59 +2104,33 @@ export default function App() {
     setAdminError('');
 
     const cleanInput = convertBengaliToEnglishDigits(adminPinInput).trim();
-    const userPinClean = currentUser?.pin ? convertBengaliToEnglishDigits(String(currentUser.pin)).trim() : '';
+    if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'sub_admin')) {
+      setAdminError('অ্যাক্সেস সংরক্ষিত! শুধুমাত্র অনুমোদিত অ্যাডমিন অ্যাকাউন্ট দিয়ে লগইন করুন।');
+      setAdminPinInput('');
+      setAdminBypassed(false);
+      return;
+    }
 
-    // Valid PIN: strictly "6666" or custom appConfig.adminPin
-    const isMasterPin = cleanInput === '6666' || 
-                        (appConfig?.adminPin && cleanInput === convertBengaliToEnglishDigits(String(appConfig.adminPin)).trim());
-
-    if (isMasterPin) {
-      if (!currentUser) {
-        // Log in directly as Master Admin
-        const masterAdminUser: User = {
-          uid: 'usr_1790067417377_2an4i',
-          name: 'জাতীয় এডমিন প্যানেল',
-          phone: '+8800011112222',
-          email: 'free122055@gmail.com',
-          memberId: 'BNB00000001',
-          role: 'admin',
-          balance: 0,
-          mainBalance: 0,
-          savings: 0,
-          telecomBalance: 0,
-          superShopBalance: 0,
-          dueLoan: 0,
-          pin: '6666',
-          createdAt: new Date().toISOString(),
-          status: 'active',
-          samityStatus: 'approved'
-        };
-        setCurrentUser(masterAdminUser);
-        localStorage.setItem('amb_user_uid', masterAdminUser.uid);
-        localStorage.setItem('amb_user_phone', masterAdminUser.phone);
-        localStorage.setItem('amb_user_role', 'admin');
-        localStorage.setItem('amb_last_user', JSON.stringify(masterAdminUser));
-      } else if (currentUser.role !== 'admin') {
-        try {
-          await updateDoc(doc(db, 'users', currentUser.uid), { role: 'admin' });
-        } catch (err) {
-          console.error("Failed to promote user to admin in attempt:", err);
-        }
-        setCurrentUser(prev => prev ? { ...prev, role: 'admin' } : null);
+    try {
+      const resp = await fetch('/api/auth/verify-pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: currentUser.uid, pin: cleanInput })
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data.verified) {
+        localStorage.setItem('amb_admin_mode', 'true');
+        setAdminOpen(true);
+        setShowAdminPinModal(false);
+        setAdminPinInput('');
+        setAdminError('');
+        return;
       }
-      localStorage.setItem('amb_admin_mode', 'true');
-      setAdminOpen(true);
-      setShowAdminPinModal(false);
+      setAdminError(data.error || 'ভুল অ্যাডমিন সিকিউরিটি পিন!');
       setAdminPinInput('');
-      setAdminError('');
-    } else if (userPinClean && cleanInput === userPinClean && (currentUser?.role === 'admin' || currentUser?.role === 'sub_admin')) {
-      localStorage.setItem('amb_admin_mode', 'true');
-      setAdminOpen(true);
-      setShowAdminPinModal(false);
-      setAdminPinInput('');
-      setAdminError('');
-    } else {
-      setAdminError('ভুল অ্যাডমিন সিকিউরিটি পিন! এডমিন প্যানেলে প্রবেশের জন্য সঠিক পিন (6666) দিন।');
+      setAdminBypassed(false);
+    } catch (err) {
+      setAdminError('সার্ভার সংযোগ সমস্যা। অনুগ্রহ করে আবার চেষ্টা করুন।');
       setAdminPinInput('');
       setAdminBypassed(false);
     }

@@ -87,7 +87,9 @@ export default function LockoutScreen({
           {appLanguage === 'en' ? '1-Hour Security Lockout' : '1 ঘণ্টার জন্য সিকিউরিটি লক'}
         </h3>
         <p className="text-xs text-rose-700 dark:text-rose-300 font-semibold mt-1 px-2">
-          {appLanguage === 'en' ? reasonTextEn : reasonText} নিরাপত্তার স্বার্থে অ্যাকাউন্টটি 1 ঘণ্টার জন্য সাময়িকভাবে লক করা হয়েছে।
+          {appLanguage === 'en'
+            ? `${reasonTextEn}, your account has been temporarily locked for 1 hour for security.`
+            : `${reasonText} নিরাপত্তার স্বার্থে অ্যাকাউন্টটি 1 ঘণ্টার জন্য সাময়িকভাবে লক করা হয়েছে।`}
         </p>
       </div>
 
@@ -137,13 +139,13 @@ export default function LockoutScreen({
           className="w-full bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold py-3 px-4 rounded-xl text-xs transition flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 cursor-pointer"
         >
           <MessageSquare className="w-4 h-4" />
-          <span>📱 এডমিনকে মেসেজ দিয়ে দ্রুত আনলক করুন (WhatsApp)</span>
+          <span>{appLanguage === 'en' ? '📱 Message Admin to Unlock Quickly' : '📱 এডমিনকে মেসেজ দিয়ে দ্রুত আনলক করুন'}</span>
           <ExternalLink className="w-3.5 h-3.5" />
         </a>
 
         <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium flex items-center justify-center gap-1">
           <PhoneCall className="w-3.5 h-3.5 text-emerald-600" />
-          <span>হেল্পলাইনঃ</span>
+          <span>{appLanguage === 'en' ? 'Helpline:' : 'হেল্পলাইনঃ'}</span>
           <a href="tel:01865911728" className="font-mono font-bold text-slate-800 dark:text-slate-200 hover:underline">
             01865911728
           </a>

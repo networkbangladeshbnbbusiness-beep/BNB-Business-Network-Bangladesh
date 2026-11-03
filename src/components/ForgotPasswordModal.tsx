@@ -98,25 +98,61 @@ export default function ForgotPasswordModal({
         }
       }
     } catch (err) {
-      console.warn('Clipboard read failed:', err);
+      if (import.meta.env.DEV) {
+        console.warn('Clipboard read failed:', err);
+      }
     }
   };
 
-  // Step 1: Request OTP for Account
+  const localizeErrorText = (rawError: string | undefined, fallbackBn: string, fallbackEn: string): string => {
+    if (!rawError) return isBn ? fallbackBn : fallbackEn;
+    const lower = rawError.toLowerCase();
+    if (lower.includes('not found') || lower.includes('no account') || rawError.includes('পাওয়া যায়নি') || rawError.includes('পাওয়া যায়নি')) {
+      return isBn
+        ? 'এই ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি। নতুন অ্যাকাউন্ট খুলতে অনুগ্রহ করে নিবন্ধন করুন।'
+        : 'No account found with this email. Please sign up to create a new account.';
+    }
+    if (lower.includes('expired') || rawError.includes('মেয়াদ') || rawError.includes('মেয়াদ')) {
+      return isBn
+        ? 'ওটিপি কোডের মেয়াদ শেষ হয়ে গেছে। অনুগ্রহ করে পুনরায় ওটিপি পাঠান।'
+        : 'The OTP code has expired. Please request a new OTP.';
+    }
+    if (lower.includes('invalid') || lower.includes('incorrect') || lower.includes('wrong') || rawError.includes('সঠিক নয়') || rawError.includes('সঠিক নয়') || rawError.includes('ভুল')) {
+      return isBn
+        ? 'ভুল ওটিপি কোড! আপনার ইমেইল ইনবক্স চেক করে সঠিক ৬ সংখ্যার কোডটি দিন।'
+        : 'Invalid OTP code! Please check your email inbox and enter the correct 6-digit code.';
+    }
+    if (lower.includes('too many') || lower.includes('rate') || rawError.includes('অতিরিক্ত')) {
+      return isBn
+        ? 'অতিরিক্তবার চেষ্টা করা হয়েছে। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।'
+        : 'Too many attempts. Please wait a moment and try again.';
+    }
+    if (isBn && /[a-zA-Z]{3,}/.test(rawError)) {
+      return fallbackBn;
+    }
+    if (!isBn && /[\u0980-\u09FF]/.test(rawError)) {
+      return fallbackEn;
+    }
+    return rawError;
+  };
+
+  const [otpVerificationToken, setOtpVerificationToken] = useState('');
+
+  // Step 1: Request OTP for Account via Server
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     const raw = inputVal.trim();
     if (!raw) {
-      setError(isBn ? 'অনুগ্রহ করে আপনার নিবন্ধিত ইমেইল অ্যাড্রেস প্রদান করুন।' : 'Please enter your registered email address.');
+      setError(isBn ? 'অনুগ্রহ করে আপনার নিবন্ধিত ইমেইল ঠিকানা প্রদান করুন।' : 'Please enter your registered email address.');
       return;
     }
 
     if (!raw.includes('@') && (raw.toUpperCase().includes('BNB') || /^\d+$/.test(raw))) {
       setError(
         isBn
-          ? 'BNB কোড বা অ্যাকাউন্ট নম্বর দিয়ে পিন রিসেট করা সম্পূর্ণ নিষিদ্ধ। অনুগ্রহ করে আপনার নিবন্ধিত ইমেইল দিন।'
-          : 'Resetting PIN using BNB member code or account number is strictly forbidden. Please enter your registered email.'
+          ? 'মেম্বার আইডি বা অ্যাকাউন্ট নম্বর দিয়ে পিন রিসেট করা সম্পূর্ণ নিষিদ্ধ। অনুগ্রহ করে আপনার নিবন্ধিত ইমেইল দিন।'
+          : 'Resetting PIN using member ID or account number is strictly forbidden. Please enter your registered email.'
       );
       return;
     }
@@ -124,7 +160,7 @@ export default function ForgotPasswordModal({
     if (!raw.includes('@')) {
       setError(
         isBn
-          ? 'অনুগ্রহ করে সঠিক নিবন্ধিত ইমেইল অ্যাড্রেস দিন (যেমন: name@gmail.com)।'
+          ? 'অনুগ্রহ করে সঠিক নিবন্ধিত ইমেইল ঠিকানা দিন।'
           : 'Please enter a valid registered email address (e.g. name@gmail.com).'
       );
       return;
@@ -137,8 +173,8 @@ export default function ForgotPasswordModal({
       if (!user) {
         setError(
           isBn
-            ? 'এই ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি। আপনার নিবন্ধিত ইমেইল দিয়ে চেষ্টা করুন।'
-            : 'No account found with this email. Please provide your registered email address.'
+            ? 'এই ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি। নতুন অ্যাকাউন্ট খুলতে অনুগ্রহ করে নিবন্ধন করুন।'
+            : 'No account found with this email. Please sign up to create a new account.'
         );
         setLoading(false);
         return;
@@ -146,7 +182,6 @@ export default function ForgotPasswordModal({
 
       setTargetUser(user);
 
-      // Determine target email
       let userEmail = user.email ? user.email.trim().toLowerCase() : '';
       if (!userEmail && raw.includes('@')) {
         userEmail = raw.toLowerCase();
@@ -164,21 +199,30 @@ export default function ForgotPasswordModal({
 
       setResolvedEmail(userEmail);
       setMaskedEmail(maskEmailAddress(userEmail));
+      setGeneratedOtp('');
+      setOtpVerificationToken('');
 
-      // Generate authentic 6-digit OTP
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      setGeneratedOtp(code);
-
-      // Send single verified email OTP directly
-      sendEmailOtpDirect({
+      const otpDispatch = await sendEmailOtpDirect({
         email: userEmail,
-        otp: code,
+        otp: '',
         userName: user.name || (isBn ? 'সম্মানিত সদস্য' : 'Respected Member'),
         phone: user.phone || '',
         memberId: user.memberId || raw,
         userId: user.uid,
         reason: 'forgot_password'
-      }).catch(() => {});
+      });
+
+      if (!otpDispatch.success) {
+        setError(
+          localizeErrorText(
+            otpDispatch.error,
+            'ওটিপি পাঠাতে সমস্যা হয়েছে। অনুগ্রহ করে পুনরায় চেষ্টা করুন।',
+            'Failed to send OTP code. Please try again.'
+          )
+        );
+        setLoading(false);
+        return;
+      }
 
       setStep(2);
       setCountdown(60);
@@ -188,20 +232,22 @@ export default function ForgotPasswordModal({
           : `A 6-digit OTP code has been sent to your email: ${maskEmailAddress(userEmail)}`
       );
     } catch (err: any) {
-      console.error('[Forgot PIN Error]:', err);
+      if (import.meta.env.DEV) {
+        console.error('[Forgot PIN Error]:', err);
+      }
       setError(isBn ? 'ওটিপি পাঠাতে সমস্যা হয়েছে। পুনরায় চেষ্টা করুন।' : 'Failed to send OTP code. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  // Step 2: Verify OTP
+  // Step 2: Verify OTP strictly on the server
   const handleVerifyOtp = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setError('');
     const cleanOtp = convertBengaliToEnglishDigits(otpCode).trim();
 
-    if (cleanOtp.length !== 6) {
+    if (cleanOtp.length !== 6 || !/^\d{6}$/.test(cleanOtp)) {
       setError(isBn ? 'অনুগ্রহ করে ৬ সংখ্যার ওটিপি কোড দিন।' : 'Please enter the 6-digit OTP code.');
       return;
     }
@@ -209,72 +255,75 @@ export default function ForgotPasswordModal({
     setLoading(true);
 
     try {
-      let isVerified = false;
+      const resp = await fetch(apiUrl('/api/verify-otp'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: resolvedEmail,
+          otp: cleanOtp,
+          purpose: 'pin_reset'
+        })
+      });
+      const data = await resp.json().catch(() => null);
 
-      // 1. Check generated email OTP
-      if (generatedOtp && cleanOtp === generatedOtp.trim()) {
-        isVerified = true;
-      }
-
-      // 2. Authoritative server-side verification check
-      if (!isVerified) {
-        try {
-          const resp = await fetch(apiUrl('/api/verify-otp'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ identifier: resolvedEmail, otp: cleanOtp })
-          });
-          const data = await resp.json();
-          if (data && data.success) {
-            isVerified = true;
-          }
-        } catch (serverErr) {
-          console.warn('[Server OTP Check]:', serverErr);
+      if (resp.ok && data?.verified) {
+        setOtpVerificationToken(data.otpVerificationToken || '');
+        if (data.user && data.user.uid) {
+          setTargetUser(data.user);
         }
-      }
-
-      if (isVerified) {
         setStep(3);
         setError('');
         setSuccessMsg(
           isBn
-            ? 'ওটিপি যাচাই সফল হয়েছে! এখন আপনার নতুন সিকিউরিটি পিন সেট করুন।'
-            : 'OTP verified successfully! Now please set your new security PIN.'
+            ? 'ওটিপি যাচাই সফল হয়েছে! এখন আপনার নতুন 4 ডিজিট সিকিউরিটি পিন সেট করুন।'
+            : 'OTP verified successfully! Now please set your new 4-digit security PIN.'
         );
       } else {
         setError(
-          isBn
-            ? 'ভুল ওটিপি কোড! আপনার ইমেইল ইনবক্স চেক করে সঠিক ৬ সংখ্যার কোডটি দিন।'
-            : 'Invalid OTP code! Please check your email inbox and enter the correct 6-digit code.'
+          localizeErrorText(
+            data?.error,
+            'ভুল ওটিপি কোড! আপনার ইমেইল ইনবক্স চেক করে সঠিক ৬ সংখ্যার কোডটি দিন।',
+            'Invalid OTP code! Please check your email inbox and enter the correct 6-digit code.'
+          )
         );
       }
     } catch (err) {
-      console.error('[Verify OTP Error]:', err);
+      if (import.meta.env.DEV) {
+        console.error('[Verify OTP Error]:', err);
+      }
       setError(isBn ? 'ওটিপি যাচাই করতে ব্যর্থ হয়েছে। পুনরায় চেষ্টা করুন।' : 'Failed to verify OTP. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  // Resend OTP
+  // Resend OTP via Server
   const handleResendOtp = async () => {
     if (countdown > 0 || !resolvedEmail) return;
 
     setLoading(true);
     setError('');
     try {
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      setGeneratedOtp(code);
-
-      await sendEmailOtpDirect({
+      const otpDispatch = await sendEmailOtpDirect({
         email: resolvedEmail,
-        otp: code,
+        otp: '',
         userName: targetUser?.name || (isBn ? 'সম্মানিত সদস্য' : 'Respected Member'),
         phone: targetUser?.phone || '',
         memberId: targetUser?.memberId || '',
         userId: targetUser?.uid,
         reason: 'forgot_password'
       });
+
+      if (!otpDispatch.success) {
+        setError(
+          localizeErrorText(
+            otpDispatch.error,
+            'পুনরায় ওটিপি পাঠাতে ব্যর্থ হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।',
+            'Failed to resend OTP code. Please try again.'
+          )
+        );
+        return;
+      }
 
       setCountdown(60);
       setSuccessMsg(
@@ -289,7 +338,7 @@ export default function ForgotPasswordModal({
     }
   };
 
-  // Step 3: Save New Security PIN & Auto Login
+  // Step 3: Save New Security PIN on the Server (/api/auth/confirm-pin-reset-otp) & Auto Login
   const handleSavePinAndLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -297,52 +346,52 @@ export default function ForgotPasswordModal({
     const cleanPin = convertBengaliToEnglishDigits(newPin).replace(/\D/g, '').trim();
     const cleanConfirm = convertBengaliToEnglishDigits(confirmPin).replace(/\D/g, '').trim();
 
-    if (cleanPin.length < 4 || cleanPin.length > 6) {
-      setError(isBn ? 'সিকিউরিটি পিন ৪ থেকে ৬ সংখ্যার হতে হবে।' : 'Security PIN must be 4 to 6 numeric digits.');
+    if (cleanPin.length !== 4 || !/^\d{4}$/.test(cleanPin)) {
+      setError(isBn ? 'সিকিউরিটি পিন অবশ্যই 4 ডিজিটের হতে হবে।' : 'Security PIN must be exactly 4 digits.');
       return;
     }
 
     if (cleanPin !== cleanConfirm) {
-      setError(isBn ? 'নতুন পিন এবং কনফার্ম পিন মিলছে না!' : 'New PIN and Confirm PIN do not match!');
+      setError(isBn ? 'নতুন পিন এবং নিশ্চিত করা পিন দুটির মিল নেই!' : 'New PIN and Confirm PIN do not match!');
       return;
     }
 
-    if (!targetUser?.uid) {
-      setError(isBn ? 'ইউজারের তথ্য পাওয়া যায়নি। পুনরায় চেষ্টা করুন।' : 'User information not found. Please start from Step 1.');
+    if (!targetUser?.uid && !resolvedEmail) {
+      setError(isBn ? 'ব্যবহারকারীর তথ্য পাওয়া যায়নি। পুনরায় চেষ্টা করুন।' : 'User information not found. Please start from Step 1.');
       return;
     }
 
     setLoading(true);
 
     try {
-      const userRef = doc(db, 'users', targetUser.uid);
+      const cleanOtp = convertBengaliToEnglishDigits(otpCode).trim();
+      const resetRes = await fetch(apiUrl('/api/auth/confirm-pin-reset-otp'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          uid: targetUser?.uid || '',
+          email: resolvedEmail,
+          otp: cleanOtp,
+          newPin: cleanPin,
+          otpVerificationToken
+        })
+      });
+      const resetData = await resetRes.json().catch(() => null);
 
-      // Update PIN & credentials in Firestore
-      await updateDoc(userRef, {
-        pin: cleanPin,
-        pinSet: true,
-        password: cleanPin,
-        appLockCode: cleanPin,
-        updatedAt: new Date().toISOString()
-      }).catch(err => console.warn('Direct firestore update fallback:', err));
+      if (!resetRes.ok || !resetData?.success) {
+        setError(
+          localizeErrorText(
+            resetData?.error,
+            'পিন আপডেট করতে ব্যর্থ হয়েছে। পুনরায় চেষ্টা করুন।',
+            'Failed to update PIN. Please try again.'
+          )
+        );
+        return;
+      }
 
-      // In-app activity notification
-      addDoc(collection(db, 'user_notifications'), {
-        userId: targetUser.uid,
-        title: isBn ? '🔑 সিকিউরিটি পিন সফলভাবে পরিবর্তন হয়েছে' : '🔑 Security PIN Successfully Changed',
-        body: isBn
-          ? 'আপনার অ্যাকাউন্টের সিকিউরিটি পিন আপডেট করা হয়েছে এবং স্বয়ংক্রিয়ভাবে লগইন করা হয়েছে।'
-          : 'Your account security PIN has been updated and you have been logged in automatically.',
-        category: 'security',
-        createdAt: new Date().toISOString()
-      }).catch(() => {});
-
-      const updatedUser: User = {
-        ...targetUser,
-        pin: cleanPin,
-        pinSet: true,
-        password: cleanPin,
-        appLockCode: cleanPin
+      const updatedUser: User = resetData.user || {
+        ...targetUser!,
+        pinSet: true
       };
 
       setStep(4);
@@ -352,7 +401,6 @@ export default function ForgotPasswordModal({
           : 'Security PIN set successfully! Logging into your account automatically...'
       );
 
-      // Auto-login into software immediately
       setTimeout(() => {
         try {
           localStorage.setItem('amb_user_phone', updatedUser.phone || '');
@@ -366,9 +414,11 @@ export default function ForgotPasswordModal({
 
         onLoginSuccess(updatedUser);
         onClose();
-      }, 1200);
+      }, 1000);
     } catch (err: any) {
-      console.error('[Save PIN Error]:', err);
+      if (import.meta.env.DEV) {
+        console.error('[Save PIN Error]:', err);
+      }
       setError(isBn ? 'পিন আপডেট করতে ব্যর্থ হয়েছে। পুনরায় চেষ্টা করুন।' : 'Failed to update PIN. Please try again.');
     } finally {
       setLoading(false);
@@ -410,7 +460,7 @@ export default function ForgotPasswordModal({
 
             <div className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-emerald-950/40 text-emerald-200 border border-emerald-400/30 text-[11px] font-bold">
               <Shield className="w-3.5 h-3.5 text-emerald-400" />
-              <span>{isBn ? 'নিরাপদ রিকভারি' : 'Secure Recovery'}</span>
+              <span>{isBn ? 'নিরাপদ পুনরুদ্ধার' : 'Secure Recovery'}</span>
             </div>
           </div>
 
@@ -580,7 +630,7 @@ export default function ForgotPasswordModal({
 
                   <div>
                     <label className={`block text-xs font-extrabold mb-1.5 px-1 ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
-                      {isBn ? 'নিবন্ধিত ইমেইল অ্যাড্রেস *' : 'Registered Email Address *'}
+                      {isBn ? 'নিবন্ধিত ইমেইল ঠিকানা *' : 'Registered Email Address *'}
                     </label>
                     <div className="relative">
                       <div className={`absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>
@@ -591,7 +641,7 @@ export default function ForgotPasswordModal({
                         required
                         value={inputVal}
                         onChange={(e) => setInputVal(e.target.value)}
-                        placeholder={isBn ? 'আপনার ইমেইল দিন (যেমন: name@gmail.com)' : 'Enter your email (e.g. name@gmail.com)'}
+                        placeholder={isBn ? 'আপনার নিবন্ধিত ইমেইল লিখুন' : 'Enter your email (e.g. name@gmail.com)'}
                         className={`w-full pl-12 pr-4 py-3.5 border-2 rounded-2xl text-xs sm:text-sm font-bold focus:outline-none focus:ring-4 focus:ring-emerald-500/10 shadow-2xs transition ${
                           isDark
                             ? 'bg-slate-950 border-slate-700 text-white placeholder-slate-500 focus:border-emerald-500'
@@ -610,8 +660,8 @@ export default function ForgotPasswordModal({
                       </p>
                       <p className={`text-[11px] font-medium ${isDark ? 'text-amber-200/90' : 'text-amber-700'}`}>
                         {isBn
-                          ? 'BNB মেম্বার কোড বা অ্যাকাউন্ট নম্বর দিয়ে পিন রিসেট করা সম্পূর্ণ নিষিদ্ধ।'
-                          : 'Resetting PIN using BNB member code or account number is strictly prohibited.'}
+                          ? 'মেম্বার আইডি বা অ্যাকাউন্ট নম্বর দিয়ে পিন রিসেট করা সম্পূর্ণ নিষিদ্ধ।'
+                          : 'Resetting PIN using member ID or account number is strictly prohibited.'}
                       </p>
                     </div>
                   </div>
@@ -675,6 +725,7 @@ export default function ForgotPasswordModal({
 
                     <input
                       type="text"
+                      inputMode="numeric"
                       maxLength={6}
                       required
                       value={otpCode}
@@ -724,7 +775,7 @@ export default function ForgotPasswordModal({
                       >
                         {isBn ? 'পুনরায় পাঠান:' : 'Resend code in:'}{' '}
                         <span className={`font-mono font-extrabold ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>
-                          {countdown}s
+                          {countdown}{isBn ? ' সেকেন্ড' : 's'}
                         </span>
                       </span>
                     ) : (
@@ -758,16 +809,16 @@ export default function ForgotPasswordModal({
                   <div className={`border-b pb-3 ${isDark ? 'border-slate-800' : 'border-slate-100'}`}>
                     <h2 className={`text-base font-black flex items-center gap-2 ${isDark ? 'text-white' : 'text-slate-800'}`}>
                       <Lock className={`w-4 h-4 ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`} />
-                      <span>{isBn ? 'ধাপ ৩: নতুন সিকিউরিটি পিন দিন' : 'Step 3: Set New Security PIN'}</span>
+                      <span>{isBn ? 'ধাপ ৩: নতুন 4 ডিজিট পিন দিন' : 'Step 3: Set New 4-Digit PIN'}</span>
                     </h2>
                     <p className={`text-xs font-medium mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                      {isBn ? 'আপনার অ্যাকাউন্টের জন্য ৪ থেকে ৬ সংখ্যার পিন দিন' : 'Enter a 4 to 6 digit numeric PIN for your account'}
+                      {isBn ? 'আপনার অ্যাকাউন্টের জন্য নতুন 4 ডিজিট পিন সেট করুন' : 'Enter a new 4-digit numeric PIN for your account'}
                     </p>
                   </div>
 
                   <div>
                     <label className={`block text-xs font-extrabold mb-1 px-1 ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
-                      {isBn ? 'নতুন সিকিউরিটি পিন (৪-৬ সংখ্যা) *' : 'New Security PIN (4-6 Digits) *'}
+                      {isBn ? 'নতুন 4 ডিজিট পিন *' : 'New 4-Digit PIN *'}
                     </label>
                     <div className="relative">
                       <div className={`absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>
@@ -776,14 +827,16 @@ export default function ForgotPasswordModal({
                       <input
                         type={showPin ? 'text' : 'password'}
                         inputMode="numeric"
-                        maxLength={6}
+                        minLength={4}
+                        maxLength={4}
+                        pattern="\d{4}"
                         required
                         value={newPin}
                         onChange={(e) => {
-                          const val = convertBengaliToEnglishDigits(e.target.value).replace(/\D/g, '').slice(0, 6);
+                          const val = convertBengaliToEnglishDigits(e.target.value).replace(/\D/g, '').slice(0, 4);
                           setNewPin(val);
                         }}
-                        placeholder={isBn ? '৪ বা ৬ সংখ্যার পিন দিন' : 'Enter 4 or 6 digit PIN'}
+                        placeholder="••••"
                         className={`w-full pl-11 pr-11 py-3.5 border-2 rounded-2xl text-xs sm:text-sm font-bold focus:outline-none focus:ring-4 focus:ring-emerald-500/10 shadow-2xs font-mono transition ${
                           isDark
                             ? 'bg-slate-950 border-slate-700 text-white placeholder-slate-500 focus:border-emerald-500'
@@ -802,7 +855,7 @@ export default function ForgotPasswordModal({
 
                   <div>
                     <label className={`block text-xs font-extrabold mb-1 px-1 ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
-                      {isBn ? 'পুনরায় সিকিউরিটি পিন দিন *' : 'Confirm Security PIN *'}
+                      {isBn ? 'পুনরায় 4 ডিজিট পিন দিন *' : 'Confirm 4-Digit PIN *'}
                     </label>
                     <div className="relative">
                       <div className={`absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>
@@ -811,14 +864,16 @@ export default function ForgotPasswordModal({
                       <input
                         type={showPin ? 'text' : 'password'}
                         inputMode="numeric"
-                        maxLength={6}
+                        minLength={4}
+                        maxLength={4}
+                        pattern="\d{4}"
                         required
                         value={confirmPin}
                         onChange={(e) => {
-                          const val = convertBengaliToEnglishDigits(e.target.value).replace(/\D/g, '').slice(0, 6);
+                          const val = convertBengaliToEnglishDigits(e.target.value).replace(/\D/g, '').slice(0, 4);
                           setConfirmPin(val);
                         }}
-                        placeholder={isBn ? 'পুনরায় নতুন পিনটি লিখুন' : 'Re-enter your new PIN'}
+                        placeholder="••••"
                         className={`w-full pl-11 pr-11 py-3.5 border-2 rounded-2xl text-xs sm:text-sm font-bold focus:outline-none focus:ring-4 focus:ring-emerald-500/10 shadow-2xs font-mono transition ${
                           isDark
                             ? 'bg-slate-950 border-slate-700 text-white placeholder-slate-500 focus:border-emerald-500'
@@ -827,11 +882,11 @@ export default function ForgotPasswordModal({
                       />
                     </div>
                     {newPin && confirmPin && (
-                      <p className={`text-[11px] font-bold mt-1.5 px-1 ${newPin === confirmPin ? 'text-emerald-500' : 'text-red-500'}`}>
-                        {newPin === confirmPin
+                      <p className={`text-[11px] font-bold mt-1.5 px-1 ${newPin === confirmPin && newPin.length === 4 ? 'text-emerald-500' : 'text-red-500'}`}>
+                        {newPin === confirmPin && newPin.length === 4
                           ? isBn
-                            ? '✓ সিকিউরিটি পিন মিলেছে'
-                            : '✓ Security PINs match'
+                            ? '✓ 4 ডিজিট পিন মিলেছে'
+                            : '✓ 4-digit PINs match'
                           : isBn
                           ? '✗ পিন মিলছে না'
                           : '✗ PINs do not match'}
@@ -841,7 +896,7 @@ export default function ForgotPasswordModal({
 
                   <button
                     type="submit"
-                    disabled={loading || newPin.length < 4 || newPin !== confirmPin}
+                    disabled={loading || newPin.length !== 4 || newPin !== confirmPin}
                     className="w-full bg-[#0B532C] hover:bg-[#084223] active:bg-[#06331B] text-white font-black py-4 px-6 rounded-full text-sm sm:text-base shadow-md flex items-center justify-center gap-2 transition active:scale-98 cursor-pointer disabled:opacity-50 mt-3"
                   >
                     {loading ? (

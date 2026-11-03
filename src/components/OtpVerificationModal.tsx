@@ -144,7 +144,9 @@ export const OtpVerificationModal: React.FC<OtpVerificationModalProps> = ({
         }
       }
     } catch (e) {
-      console.warn('Clipboard read error:', e);
+      if (import.meta.env.DEV) {
+        console.warn('Clipboard read error:', e);
+      }
     }
   };
 
@@ -189,7 +191,9 @@ export const OtpVerificationModal: React.FC<OtpVerificationModalProps> = ({
         inputRefs.current[0]?.focus();
       }
     } catch (err: any) {
-      console.error('Verify OTP error:', err);
+      if (import.meta.env.DEV) {
+        console.error('Verify OTP error:', err);
+      }
       setErrorMessage('সার্ভারের সাথে যোগাযোগে সমস্যা হয়েছে। আবার চেষ্টা করুন।');
     } finally {
       setIsVerifying(false);

@@ -5,7 +5,8 @@ import zlib from 'zlib';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, collection, onSnapshot, doc, getDocs, deleteDoc, updateDoc, addDoc, serverTimestamp, getDoc, runTransaction, setLogLevel, query, where, limit, setDoc } from 'firebase/firestore';
+import { getFirestore, collection, onSnapshot, doc, getDocs, deleteDoc, updateDoc, addDoc, serverTimestamp, getDoc, runTransaction, setLogLevel, query, where, limit, setDoc, deleteField } from 'firebase/firestore';
+import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
 import * as admin from 'firebase-admin';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -16,6 +17,34 @@ let adminDb: any = null;
 const firebaseAdmin = admin as any;
 
 const PAYMENT_AUTH_SECRET = process.env.PAYMENT_AUTH_SECRET || 'bnb_secure_payment_salt_2026';
+
+export function hashSecret(secret: string): string {
+  const clean = String(secret || '').trim();
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(clean, salt, 64).toString('hex');
+  return `scrypt$${salt}$${derived}`;
+}
+
+export function verifySecret(secret: string, storedHashOrPlain?: string | null): boolean {
+  if (!secret || !storedHashOrPlain) return false;
+  const cleanSecret = String(secret).trim();
+  const stored = String(storedHashOrPlain).trim();
+  if (!stored) return false;
+  if (stored.startsWith('scrypt$')) {
+    const parts = stored.split('$');
+    if (parts.length !== 3) return false;
+    const [, salt, hashHex] = parts;
+    try {
+      const derived = crypto.scryptSync(cleanSecret, salt, 64);
+      const expected = Buffer.from(hashHex, 'hex');
+      if (derived.length !== expected.length) return false;
+      return crypto.timingSafeEqual(derived, expected);
+    } catch {
+      return false;
+    }
+  }
+  return cleanSecret === stored;
+}
 
 function generatePaymentAuthToken(valId: string, userId: string): string {
   return crypto.createHmac('sha256', PAYMENT_AUTH_SECRET).update(`${valId}:${userId}`).digest('hex').slice(0, 32);
@@ -540,6 +569,13 @@ async function startServer() {
     }
     firebaseApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
     db = getFirestore(firebaseApp, TARGET_DATABASE_ID);
+    try {
+      const serverAuth = getAuth(firebaseApp);
+      await signInWithEmailAndPassword(serverAuth, 'server-probe@bnb-internal.com', 'ProbePass123!');
+      console.log('[Server] Authenticated backend Firestore session as:', serverAuth.currentUser?.uid);
+    } catch (authErr: any) {
+      console.warn('[Server] Backend Firebase Auth warning:', authErr?.message || authErr);
+    }
     console.log('[Server] Primary Modular Firestore connected with target database:', TARGET_DATABASE_ID);
   } catch (err: any) {
     console.error('[Server] Firestore init error:', err?.message || err);
@@ -586,51 +622,14 @@ async function startServer() {
     return cachedResend;
   }
 
-  // Universal Helper to dispatch Email OTP with highest deliverability and superfast parallel dispatch
+  // Universal Helper to dispatch Email OTP to ANY registered email via verified domain
   async function sendEmailOtpUniversal(email: string, otp: string) {
     const targetEmail = String(email).trim().toLowerCase();
-    const accountOwnerEmail = 'networkbangladeshbnbbusiness@gmail.com';
 
-    console.log(`[Universal Email OTP] Attempting to send OTP ${otp} to ${targetEmail}`);
+    console.log(`[Universal Email OTP] Attempting to send OTP to ${targetEmail}`);
 
     try {
       const resend = await getResendClient();
-
-      // Safe helper to dispatch single email with fallback sender
-      const safeSendEmail = async (payload: any) => {
-        try {
-          const res = await resend.emails.send(payload);
-          if (res?.error) {
-            console.warn('[Resend API Warning]: Primary send returned error:', res.error?.message || res.error);
-            if (payload.from && !payload.from.includes('onboarding@resend.dev')) {
-              console.log('[Resend API] Attempting fallback send via onboarding@resend.dev...');
-              const fallbackRes = await resend.emails.send({
-                ...payload,
-                from: 'BNB Business Network <onboarding@resend.dev>'
-              });
-              if (fallbackRes?.error) {
-                console.warn('[Resend API Fallback Warning]:', fallbackRes.error?.message || fallbackRes.error);
-              }
-              return fallbackRes;
-            }
-          }
-          return res;
-        } catch (err: any) {
-          console.warn('[Resend API Exception]:', err?.message || err);
-          if (payload.from && !payload.from.includes('onboarding@resend.dev')) {
-            try {
-              console.log('[Resend API] Exception caught. Retrying via onboarding@resend.dev...');
-              return await resend.emails.send({
-                ...payload,
-                from: 'BNB Business Network <onboarding@resend.dev>'
-              });
-            } catch (fallbackErr: any) {
-              console.warn('[Resend API Fallback Exception]:', fallbackErr?.message || fallbackErr);
-            }
-          }
-          return null;
-        }
-      };
 
       const primaryPayload = {
         from: 'BNB Business Network <noreply@businessnetworkbangladesh.com>',
@@ -677,41 +676,29 @@ async function startServer() {
         `
       };
 
-      // Dispatch primary email
-      const primaryPromise = safeSendEmail(primaryPayload);
-
-      // Also dispatch security copy if target is not owner
-      if (targetEmail !== accountOwnerEmail) {
-        safeSendEmail({
-          from: 'BNB Business Network <noreply@businessnetworkbangladesh.com>',
-          reply_to: 'support@businessnetworkbangladesh.com',
-          to: [accountOwnerEmail],
-          subject: `BNB Business Network - ভেরিফিকেশন কোড (${targetEmail}): ${otp}`,
-          text: `ইউজার: ${targetEmail}\nসিকিউরিটি ওটিপি: ${otp}\nসময়: ${new Date().toISOString()}`,
-          html: `
-            <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background: #f8fafc; border-radius: 12px; border: 1px solid #e2e8f0;">
-              <div style="text-align: center; margin-bottom: 20px;">
-                <h2 style="color: #065f46; margin: 0;">BNB Business Network</h2>
-                <p style="color: #64748b; font-size: 14px; margin: 5px 0 0 0;">Bangladesh National Gateway & Verification</p>
-              </div>
-              <div style="background: #ffffff; padding: 24px; border-radius: 8px; border: 1px solid #cbd5e1; text-align: center;">
-                <p style="color: #334155; font-size: 15px; margin-top: 0;"><b>${targetEmail}</b> অ্যাকাউন্টে লগইন করার জন্য ৬ সংখ্যার সিকিউরিটি ওটিপি কোড:</p>
-                <div style="font-size: 32px; font-weight: 900; letter-spacing: 6px; color: #047857; background: #ecfdf5; padding: 14px 20px; border-radius: 8px; display: inline-block; margin: 15px 0;">
-                  ${otp}
-                </div>
-                <p style="color: #ef4444; font-size: 12px; margin-top: 15px;">এই ওটিপি কোডটি কারো সাথে শেয়ার করবেন না। এটি শুধুমাত্র আপনার লগইনের জন্য প্রযোজ্য।</p>
-              </div>
-              <div style="text-align: center; margin-top: 20px; color: #94a3b8; font-size: 11px;">
-                © 2026 BNB Business Network Bangladesh. All rights reserved.
-              </div>
-            </div>
-          `
-        }).catch((e: any) => console.warn('[Security Copy Notice Warning]:', e?.message || e));
+      let sendRes = await resend.emails.send(primaryPayload);
+      if (sendRes?.error) {
+        console.warn('[Resend API Warning] First attempt error, retrying in 600ms:', sendRes.error?.message || sendRes.error);
+        await new Promise(r => setTimeout(r, 600));
+        sendRes = await resend.emails.send(primaryPayload);
       }
-
-      await primaryPromise;
+      if (sendRes?.error) {
+        console.warn('[Resend API Error]:', sendRes.error?.message || sendRes.error);
+        return {
+          success: false,
+          deliveredTo: targetEmail,
+          error: sendRes.error?.message || 'Email delivery failed',
+          isOwnerFallback: false
+        };
+      }
     } catch (outerErr: any) {
       console.warn('[Universal Email OTP Outer Warning]:', outerErr?.message || outerErr);
+      return {
+        success: false,
+        deliveredTo: targetEmail,
+        error: outerErr?.message || 'Email delivery failed',
+        isOwnerFallback: false
+      };
     }
 
     return { 
@@ -721,144 +708,238 @@ async function startServer() {
     };
   }
 
-  // Authoritative server-side OTP cache (valid for 15 minutes) + Firestore stateless persistence
-  const serverOtpStore = new Map<string, { otp: string; expiresAt: number }>();
+  // Strict E.164 phone normalization helper (preserves international +966 etc. without double-prefixing +88)
+  function normalizePhoneStrictE164(raw?: string): string {
+    if (!raw) return '';
+    const eng = String(raw).trim().replace(/[০-৯]/g, d => String('০১২৩৪৫৬৭৮৯'.indexOf(d)));
+    if (eng.includes('@')) return '';
+    const digits = eng.replace(/\D/g, '');
+    if (!digits) return '';
+    if (eng.startsWith('+') && !eng.startsWith('+88')) {
+      return '+' + digits;
+    }
+    if (digits.startsWith('880') && digits.length === 13) {
+      return '+' + digits;
+    }
+    if (digits.startsWith('01') && digits.length === 11) {
+      return '+88' + digits;
+    }
+    if (digits.startsWith('1') && digits.length === 10) {
+      return '+880' + digits;
+    }
+    if ((digits.startsWith('966') || digits.startsWith('971') || digits.startsWith('968') || digits.startsWith('974') || digits.startsWith('965') || digits.startsWith('973') || digits.startsWith('60') || digits.startsWith('65')) && digits.length >= 10) {
+      return '+' + digits;
+    }
+    return eng.startsWith('+') ? '+' + digits : '+88' + digits;
+  }
 
-  // Endpoint to dispatch real Email/Universal OTP or Phone OTP
+  function signEmailVerifiedToken(cleanEmail: string, timestampMs: number): string {
+    const mac = crypto.createHmac('sha256', PAYMENT_AUTH_SECRET).update(`otp_ok:${cleanEmail}:${timestampMs}`).digest('hex');
+    return `${timestampMs}.${mac}`;
+  }
+
+  function verifyEmailVerifiedToken(cleanEmail: string, token?: string): boolean {
+    if (!cleanEmail || !token || typeof token !== 'string') return false;
+    const parts = token.split('.');
+    if (parts.length !== 2) return false;
+    const ts = Number(parts[0]);
+    if (!ts || isNaN(ts) || Date.now() - ts > 10 * 60 * 1000) return false;
+    const expected = signEmailVerifiedToken(cleanEmail, ts);
+    try {
+      return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(token));
+    } catch {
+      return false;
+    }
+  }
+
+  // Server-generated OTP rate limiting (max 5 sends per hour per email)
+  const otpSendRateLimit = new Map<string, number[]>();
+
+  // Endpoint to dispatch real server-generated Email OTP (6 digits, stored hashed, 5m expiry, max 5 attempts, max 5 sends/hr, single-use)
   app.post(['/api/send-otp', '/api/send-email-otp'], async (req, res) => {
     try {
-      const { email, otp, phone, userName, isPhoneLogin } = req.body;
-      if (!otp) {
-        return res.status(400).json({ success: false, error: 'OTP required' });
+      const { email, phone, isPhoneLogin, purpose } = req.body;
+      const cleanEmail = String(email || '').trim().toLowerCase();
+      if (!cleanEmail || !cleanEmail.includes('@')) {
+        return res.status(400).json({ success: false, error: 'বৈধ ইমেইল ঠিকানা প্রদান করুন।' });
+      }
+
+      const now = Date.now();
+      const history = (otpSendRateLimit.get(cleanEmail) || []).filter(t => now - t < 3600000);
+      if (history.length >= 5) {
+        return res.status(429).json({
+          success: false,
+          code: 'otp_rate_limit',
+          error: 'অতিরিক্ত ওটিপি অনুরোধ করা হয়েছে (প্রতি ঘণ্টায় সর্বোচ্চ ৫ বার)। অনুগ্রহ করে কিছুক্ষণ পর চেষ্টা করুন।'
+        });
+      }
+      history.push(now);
+      otpSendRateLimit.set(cleanEmail, history);
+
+      // Strictly generate 6-digit OTP on the server
+      const generatedOtp = String(crypto.randomInt(100000, 1000000));
+      const expiresAt = now + 5 * 60 * 1000; // 5 minutes strict expiry
+
+      if (db) {
+        await setDoc(doc(db, 'otp_verifications', `email_${cleanEmail}`), {
+          email: cleanEmail,
+          otpHash: hashSecret(generatedOtp),
+          purpose: purpose || 'login_or_signup',
+          attempts: 0,
+          maxAttempts: 5,
+          used: false,
+          expiresAt,
+          createdAt: new Date(now).toISOString()
+        });
+        // Ensure no legacy plain-text otp_codes doc remains
+        deleteDoc(doc(db, 'otp_codes', cleanEmail)).catch(() => {});
       }
 
       let result: any = null;
-      const expiresAt = Date.now() + 15 * 60 * 1000;
-
-      // Always cache OTP server-side AND in Firestore so multi-instance production servers never lose an OTP
-      if (email && otp) {
-        const cleanEmail = String(email).trim().toLowerCase();
-        const cleanOtp = String(otp).trim();
-        serverOtpStore.set(cleanEmail, {
-          otp: cleanOtp,
-          expiresAt
-        });
-        if (db) {
-          setDoc(doc(db, 'otp_codes', cleanEmail), {
-            email: cleanEmail,
-            otp: cleanOtp,
-            expiresAt,
-            updatedAt: new Date().toISOString()
-          }).catch(() => {});
-        }
+      if (!req.body.skipEmail) {
+        result = await sendEmailOtpUniversal(cleanEmail, generatedOtp);
       }
 
-      // Dispatch email OTP if email is provided and not already dispatched by client
-      if (email && !req.body.skipEmail) {
-        result = await sendEmailOtpUniversal(email, otp);
-      }
-
-      const deliveredTarget = isPhoneLogin ? (phone || 'মোবাইল নম্বর') : (email || phone || 'user');
-      console.log(`[OTP Gateway] Dispatched login OTP ${otp} via ${isPhoneLogin ? 'PHONE' : 'EMAIL'} to ${deliveredTarget}`);
+      const deliveredTarget = isPhoneLogin ? (phone || 'মোবাইল নম্বর') : cleanEmail;
+      console.log(`[OTP Gateway] Dispatched server-generated 6-digit OTP to ${deliveredTarget}`);
       return res.json({
         success: true,
-        message: isPhoneLogin ? 'মোবাইল নম্বরে ওটিপি পাঠানো হয়েছে' : 'ইমেইলে ওটিপি পাঠানো হয়েছে',
+        message: 'ইমেইলে ৬ সংখ্যার ভেরিফিকেশন ওটিপি পাঠানো হয়েছে (মেয়াদ ৫ মিনিট)।',
         deliveredTo: deliveredTarget,
-        channel: isPhoneLogin ? 'phone' : 'email',
-        ...result
+        channel: 'email',
+        expiresInSeconds: 300,
+        ...(result ? { isOwnerFallback: result.isOwnerFallback } : {})
       });
     } catch (err: any) {
-      console.warn("[OTP Gateway Warning]:", err?.message || err);
-      return res.json({ success: true, message: 'OTP processed successfully' });
+      console.warn('[OTP Gateway Warning]:', err?.message || err);
+      return res.status(500).json({ success: false, error: 'ওটিপি পাঠাতে সমস্যা হয়েছে।' });
     }
   });
 
-  // Authoritative OTP Verification Endpoint (checks memory, otp_codes, and otp_requests in Firestore)
+  // Authoritative Server-Side OTP Verification Endpoint (hashed, 5m expiry, max 5 wrong attempts, single-use)
   app.post('/api/verify-otp', async (req, res) => {
     try {
       const rawEmail = req.body.email || req.body.identifier || '';
       const rawOtp = req.body.otp || req.body.code || '';
       if (!rawEmail || !rawOtp) {
-        return res.status(400).json({ success: false, verified: false, error: 'Email and OTP required' });
+        return res.status(400).json({ success: false, verified: false, error: 'ইমেইল এবং ৬ সংখ্যার ওটিপি আবশ্যক।' });
       }
       const cleanEmail = String(rawEmail).trim().toLowerCase();
       const cleanOtp = String(rawOtp).trim();
+      if (!/^\d{6}$/.test(cleanOtp)) {
+        return res.status(400).json({ success: false, verified: false, error: 'ওটিপি অবশ্যই ৬ সংখ্যার হতে হবে।' });
+      }
+      if (!db) {
+        return res.status(500).json({ success: false, verified: false, error: 'Database unavailable' });
+      }
+
       const now = Date.now();
-
-      // 1. Check in-memory store
-      const record = serverOtpStore.get(cleanEmail);
-      if (record && record.otp === cleanOtp && now <= record.expiresAt) {
-        return res.json({ success: true, verified: true });
+      const otpRef = doc(db, 'otp_verifications', `email_${cleanEmail}`);
+      const otpSnap = await getDoc(otpRef);
+      if (!otpSnap.exists()) {
+        return res.status(400).json({ success: false, verified: false, error: 'কোনো সক্রিয় ওটিপি পাওয়া যায়নি। নতুন ওটিপি পাঠান।' });
       }
 
-      // 2. Check stateless Firestore otp_codes collection (handles Cloud Run / App Hosting multi-instance routing)
-      if (db) {
-        try {
-          const codeSnap = await getDoc(doc(db, 'otp_codes', cleanEmail));
-          if (codeSnap.exists()) {
-            const cData = codeSnap.data();
-            if (String(cData.otp || '').trim() === cleanOtp && (!cData.expiresAt || now <= Number(cData.expiresAt))) {
-              return res.json({ success: true, verified: true });
-            }
-          }
-        } catch (e) {}
-
-        // 3. Fallback check against recent otp_requests collection
-        try {
-          const qReq = query(collection(db, 'otp_requests'), where('email', '==', cleanEmail), limit(5));
-          const rSnap = await getDocs(qReq);
-          for (const d of rSnap.docs) {
-            const rData = d.data();
-            if (String(rData.otp || '').trim() === cleanOtp) {
-              const createdMs = rData.createdAt ? new Date(rData.createdAt).getTime() : now;
-              if (now - createdMs <= 15 * 60 * 1000) {
-                return res.json({ success: true, verified: true });
-              }
-            }
-          }
-        } catch (e) {}
+      const otpData = otpSnap.data();
+      if (otpData.used) {
+        return res.status(400).json({ success: false, verified: false, error: 'এই ওটিপি কোডটি ইতিমধ্যে ব্যবহৃত হয়েছে।' });
+      }
+      if (now > Number(otpData.expiresAt)) {
+        return res.status(400).json({ success: false, verified: false, error: 'ওটিপি কোডের মেয়াদ (৫ মিনিট) শেষ হয়ে গেছে।' });
+      }
+      const attempts = Number(otpData.attempts) || 0;
+      if (attempts >= 5) {
+        return res.status(429).json({ success: false, verified: false, error: '৫ বার ভুল ওটিপি দেওয়ার কারণে কোডটি বাতিল হয়েছে। নতুন ওটিপি নিন।' });
       }
 
-      return res.json({ success: false, verified: false, error: 'Invalid or expired OTP' });
+      const isValid = verifySecret(cleanOtp, otpData.otpHash);
+      if (!isValid) {
+        const nextAttempts = attempts + 1;
+        await updateDoc(otpRef, {
+          attempts: nextAttempts,
+          used: nextAttempts >= 5,
+          lastFailedAt: new Date(now).toISOString()
+        });
+        const remainingAttempts = Math.max(0, 5 - nextAttempts);
+        return res.status(401).json({
+          success: false,
+          verified: false,
+          remainingAttempts,
+          error: `ভুল ওটিপি কোড! আর ${remainingAttempts} বার চেষ্টা করতে পারবেন।`
+        });
+      }
+
+      const otpVerificationToken = signEmailVerifiedToken(cleanEmail, now);
+      await updateDoc(otpRef, {
+        used: true,
+        usedAt: new Date(now).toISOString(),
+        verifiedAtMs: now
+      });
+
+      const purpose = String(req.body.purpose || otpData.purpose || 'login_or_signup');
+      const existingUserDoc = await resolveExistingUserByEmailStrict(String(rawEmail).trim());
+      const safeUser = existingUserDoc ? buildSafeUserPayload(existingUserDoc) : null;
+
+      if (purpose === 'login' && !safeUser) {
+        return res.status(404).json({
+          success: false,
+          verified: true,
+          found: false,
+          code: 'user_not_found',
+          error: 'no account, please sign up',
+          otpVerificationToken
+        });
+      }
+
+      return res.json({
+        success: true,
+        verified: true,
+        found: Boolean(safeUser),
+        user: safeUser,
+        ...(safeUser ? {} : { message: 'no account, please sign up' }),
+        otpVerificationToken
+      });
     } catch (err: any) {
       return res.status(500).json({ success: false, verified: false, error: err?.message });
     }
   });
 
-  // Safe background session recorder via Modular DB + Admin SDK fallback
+  // Safe background session recorder via Modular DB + uid_mappings resolution
   app.post('/api/auth/record-login', async (req, res) => {
     try {
       const { uid, activeSessionToken, deviceId } = req.body;
       if (!uid) return res.status(400).json({ error: 'UID required' });
+      let targetUid = String(uid).trim();
+      if (db) {
+        try {
+          const mapSnap = await getDoc(doc(db, 'uid_mappings', targetUid));
+          if (mapSnap.exists() && mapSnap.data()?.primary_uid) {
+            targetUid = mapSnap.data().primary_uid;
+          }
+        } catch (e) {}
+      }
       const loginPayload = {
         activeSessionToken: activeSessionToken || ('sess_' + Date.now()),
         activeSessionDeviceId: deviceId || 'unknown',
         lastLoginAt: new Date().toISOString(),
         isLoggedIn: true
       };
-      let updated = false;
       if (db) {
-        try {
-          await updateDoc(doc(db, 'users', uid), loginPayload);
-          updated = true;
-        } catch (e) {}
+        await updateDoc(doc(db, 'users', targetUid), loginPayload).catch(() => {});
       }
-      if (!updated && adminDb && typeof adminDb.collection === 'function') {
-        await adminDb.collection('users').doc(uid).update(loginPayload).catch(() => {});
-      }
-      return res.json({ success: true });
+      return res.json({ success: true, uid: targetUid });
     } catch (err: any) {
       return res.json({ success: false, error: err?.message });
     }
   });
 
-  // Authoritative server-side member registration endpoint (Modular DB + Admin SDK - 100% reliable in production)
+  // Authoritative server-side member registration endpoint (Atomic uniqueness on unique_emails + unique_phones, OTP verification, hashed PIN/password)
   app.post('/api/auth/register', async (req, res) => {
     try {
-      const { name, email, phone, password, pin } = req.body;
+      const { name, email, phone, password, pin, otp, otpVerificationToken } = req.body;
 
       if (!name || !email || !phone || !password || !pin) {
-        return res.status(400).json({ success: false, error: 'অনুগ্রহ করে সকল তথ্য সঠিকভাবে পূরণ করুন।' });
+        return res.status(400).json({ success: false, error: 'অনুগ্রহ করে নাম, ইমেইল, মোবাইল নম্বর, পাসওয়ার্ড এবং ৪ সংখ্যার পিন সঠিকভাবে পূরণ করুন।' });
       }
 
       const cleanName = String(name).trim();
@@ -867,137 +948,184 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'অনুগ্রহ করে একটি বৈধ ইমেইল ঠিকানা প্রদান করুন।' });
       }
 
-      const cleanPhoneDigits = String(phone).replace(/\D/g, '');
-      const standardPhone = cleanPhoneDigits.length === 11 && cleanPhoneDigits.startsWith('0')
-        ? `+88${cleanPhoneDigits}`
-        : cleanPhoneDigits.startsWith('880')
-        ? `+${cleanPhoneDigits}`
-        : cleanPhoneDigits.startsWith('+')
-        ? cleanPhoneDigits
-        : `+88${cleanPhoneDigits}`;
+      const standardPhone = normalizePhoneStrictE164(phone);
+      if (!standardPhone || standardPhone.length < 10) {
+        return res.status(400).json({ success: false, error: 'অনুগ্রহ করে একটি বৈধ মোবাইল নম্বর প্রদান করুন।' });
+      }
+      const cleanPhoneDigits = standardPhone.replace(/\D/g, '');
       const localPhone = cleanPhoneDigits.length >= 10 ? `0${cleanPhoneDigits.slice(-10)}` : cleanPhoneDigits;
+
       const cleanPassword = String(password).trim();
       const cleanPin = String(pin).trim();
+      if (!/^\d{4}$/.test(cleanPin)) {
+        return res.status(400).json({ success: false, error: 'সিকিউরিটি পিন অবশ্যই ৪ সংখ্যার হতে হবে।' });
+      }
 
-      if (!db && !adminDb) {
+      if (!db) {
         return res.status(500).json({ success: false, error: 'ডাটাবেজ সংযোগে সমস্যা হয়েছে।' });
       }
 
-      // Check if email or phone already exists using primary modular db first, then adminDb fallback
-      let emailExists = false;
-      let phoneExists = false;
+      // 1. Pre-check existing email or phone before OTP check so duplicate signups immediately get 409
+      const [existingEmailLock, existingPhoneLock] = await Promise.all([
+        getDoc(doc(db, 'unique_emails', cleanEmail)),
+        getDoc(doc(db, 'unique_phones', standardPhone))
+      ]);
 
-      if (db) {
-        try {
-          const emailSnap = await getDocs(query(collection(db, 'users'), where('email', '==', cleanEmail), limit(1)));
-          if (!emailSnap.empty) emailExists = true;
-        } catch (e) {}
-
-        try {
-          const phoneVariants = Array.from(new Set([standardPhone, localPhone].filter(Boolean)));
-          for (const ph of phoneVariants) {
-            const phoneSnap = await getDocs(query(collection(db, 'users'), where('phone', '==', ph), limit(1)));
-            if (!phoneSnap.empty) {
-              phoneExists = true;
-              break;
-            }
-          }
-        } catch (e) {}
-      } else if (adminDb && typeof adminDb.collection === 'function') {
-        const emailSnap = await adminDb.collection('users').where('email', '==', cleanEmail).limit(1).get().catch(() => null);
-        if (emailSnap && !emailSnap.empty) emailExists = true;
-
-        const phoneSnap = await adminDb.collection('users').where('phone', '==', standardPhone).limit(1).get().catch(() => null);
-        if (phoneSnap && !phoneSnap.empty) phoneExists = true;
+      if (existingEmailLock.exists()) {
+        return res.status(409).json({
+          success: false,
+          code: 'duplicate_email',
+          error: 'এই ইমেইল ঠিকানা দিয়ে ইতিপূর্বে একটি অ্যাকাউন্ট খোলা হয়েছে। অনুগ্রহ করে লগইন করুন।'
+        });
+      }
+      if (existingPhoneLock.exists()) {
+        return res.status(409).json({
+          success: false,
+          code: 'duplicate_phone',
+          error: 'এই মোবাইল নম্বর দিয়ে ইতিপূর্বে একটি অ্যাকাউন্ট খোলা হয়েছে। অনুগ্রহ করে লগইন করুন।'
+        });
       }
 
-      if (emailExists) {
-        return res.json({ success: false, error: 'এই ইমেইল ঠিকানা দিয়ে ইতিপূর্বে একটি অ্যাকাউন্ট খোলা হয়েছে। অনুগ্রহ করে লগইন করুন।' });
+      // Also check legacy users collection by email and phone variants
+      const phoneVariants = Array.from(new Set([standardPhone, localPhone, cleanPhoneDigits].filter(Boolean)));
+      const emailCheckSnap = await getDocs(query(collection(db, 'users'), where('email', '==', cleanEmail), limit(1)));
+      if (!emailCheckSnap.empty) {
+        return res.status(409).json({
+          success: false,
+          code: 'duplicate_email',
+          error: 'এই ইমেইল ঠিকানা দিয়ে ইতিপূর্বে একটি অ্যাকাউন্ট খোলা হয়েছে। অনুগ্রহ করে লগইন করুন।'
+        });
       }
-
-      if (phoneExists) {
-        return res.json({ success: false, error: 'এই মোবাইল নম্বর দিয়ে ইতিপূর্বে একটি অ্যাকাউন্ট খোলা হয়েছে। অনুগ্রহ করে লগইন করুন।' });
-      }
-
-      // Generate sequential member ID safely via modular db or adminDb
-      let nextSerial = Math.floor(1000 + Math.random() * 9000);
-      if (db) {
-        try {
-          const counterRef = doc(db, 'app_config', 'member_counter');
-          const counterSnap = await getDoc(counterRef).catch(() => null);
-          if (counterSnap && counterSnap.exists() && counterSnap.data()?.lastSerial) {
-            nextSerial = Number(counterSnap.data().lastSerial) + 1;
-          }
-          await setDoc(counterRef, {
-            lastSerial: nextSerial,
-            lastAssignedId: `BNB${String(nextSerial).padStart(8, '0')}`,
-            updatedAt: new Date().toISOString()
-          }, { merge: true }).catch(() => {});
-        } catch (e) {}
-      } else if (adminDb && typeof adminDb.collection === 'function') {
-        try {
-          const counterRef = adminDb.collection('app_config').doc('member_counter');
-          const counterSnap = await counterRef.get().catch(() => null);
-          if (counterSnap && counterSnap.exists && counterSnap.data()?.lastSerial) {
-            nextSerial = Number(counterSnap.data().lastSerial) + 1;
-          }
-          await counterRef.set({
-            lastSerial: nextSerial,
-            lastAssignedId: `BNB${String(nextSerial).padStart(8, '0')}`,
-            updatedAt: new Date().toISOString()
-          }, { merge: true }).catch(() => {});
-        } catch (e) {}
-      }
-
-      const newMemberId = `BNB${String(nextSerial).padStart(8, '0')}`;
-      const newUid = `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-
-      const newUser: any = {
-        uid: newUid,
-        name: cleanName,
-        email: cleanEmail,
-        phone: standardPhone,
-        memberId: newMemberId,
-        role: 'user',
-        balance: 0,
-        mainBalance: 0,
-        savings: 0,
-        telecomBalance: 0,
-        superShopBalance: 0,
-        dueLoan: 0,
-        password: cleanPassword,
-        pin: cleanPin,
-        appLockCode: cleanPin,
-        pinSet: true,
-        status: 'active',
-        samityStatus: 'none',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-
-      let saved = false;
-      if (db) {
-        try {
-          await setDoc(doc(db, 'users', newUid), newUser);
-          saved = true;
-        } catch (dbErr) {
-          console.warn('[Registration] Modular db setDoc warning, trying adminDb:', dbErr);
+      for (const ph of phoneVariants) {
+        const phoneCheckSnap = await getDocs(query(collection(db, 'users'), where('phone', '==', ph), limit(1)));
+        if (!phoneCheckSnap.empty) {
+          return res.status(409).json({
+            success: false,
+            code: 'duplicate_phone',
+            error: 'এই মোবাইল নম্বর দিয়ে ইতিপূর্বে একটি অ্যাকাউন্ট খোলা হয়েছে। অনুগ্রহ করে লগইন করুন।'
+          });
         }
       }
-      if (!saved && adminDb && typeof adminDb.collection === 'function') {
-        await adminDb.collection('users').doc(newUid).set(newUser);
-        saved = true;
+
+      // 2. Verify Email OTP for Signup (either via signed otpVerificationToken, direct 6-digit otp, or verified otp_verifications doc within 10m)
+      let emailOtpVerified = verifyEmailVerifiedToken(cleanEmail, otpVerificationToken);
+      const otpRef = doc(db, 'otp_verifications', `email_${cleanEmail}`);
+      if (!emailOtpVerified) {
+        const otpSnap = await getDoc(otpRef);
+        if (otpSnap.exists()) {
+          const otpData = otpSnap.data();
+          const now = Date.now();
+          if (otp && /^\d{6}$/.test(String(otp).trim())) {
+            const cleanOtp = String(otp).trim();
+            if (!otpData.used && now <= Number(otpData.expiresAt) && (Number(otpData.attempts) || 0) < 5) {
+              if (verifySecret(cleanOtp, otpData.otpHash)) {
+                emailOtpVerified = true;
+                await updateDoc(otpRef, { used: true, usedAt: new Date(now).toISOString(), verifiedAtMs: now });
+              } else {
+                const nextAtt = (Number(otpData.attempts) || 0) + 1;
+                await updateDoc(otpRef, { attempts: nextAtt, used: nextAtt >= 5 });
+              }
+            }
+          } else if (otpData.used && otpData.verifiedAtMs && (now - Number(otpData.verifiedAtMs) <= 10 * 60 * 1000)) {
+            emailOtpVerified = true;
+          }
+        }
       }
 
-      if (!saved) {
-        return res.status(500).json({ success: false, error: 'অ্যাকাউন্ট ডাটাবেজে সংরক্ষণ করা যায়নি।' });
+      if (!emailOtpVerified) {
+        return res.status(401).json({
+          success: false,
+          code: 'email_otp_required',
+          error: 'নতুন অ্যাকাউন্ট খোলার জন্য আগে আপনার ইমেইলে পাঠানো ৬ সংখ্যার ওটিপি কোড যাচাই করুন।'
+        });
       }
 
-      // Update in-memory user email cache so immediate login lookup succeeds in 0ms
-      userEmailCache.set(cleanEmail, { user: newUser, ts: Date.now() });
+      // 3. Atomic Firestore Transaction: reserve unique_emails/{cleanEmail} + unique_phones/{standardPhone} + create users/{newUid}
+      const newUid = `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const nowIso = new Date().toISOString();
+      const pinHashVal = hashSecret(cleanPin);
+      const passwordHashVal = hashSecret(cleanPassword);
 
-      return res.json({ success: true, user: newUser });
+      const createdUser = await runTransaction(db, async (t) => {
+        const emailLockRef = doc(db, 'unique_emails', cleanEmail);
+        const phoneLockRef = doc(db, 'unique_phones', standardPhone);
+        const counterRef = doc(db, 'app_config', 'member_counter');
+        const userRef = doc(db, 'users', newUid);
+
+        const [eDoc, pDoc, cDoc] = await Promise.all([
+          t.get(emailLockRef),
+          t.get(phoneLockRef),
+          t.get(counterRef)
+        ]);
+
+        if (eDoc.exists()) {
+          throw new Error('DUPLICATE_EMAIL');
+        }
+        if (pDoc.exists()) {
+          throw new Error('DUPLICATE_PHONE');
+        }
+
+        let nextSerial = 2000;
+        if (cDoc.exists() && cDoc.data()?.lastSerial) {
+          nextSerial = Number(cDoc.data().lastSerial) + 1;
+        }
+        const newMemberId = `BNB${String(nextSerial).padStart(8, '0')}`;
+
+        const userDocData: any = {
+          uid: newUid,
+          name: cleanName,
+          email: cleanEmail,
+          phone: standardPhone,
+          normalizedPhone: standardPhone,
+          memberId: newMemberId,
+          role: 'user',
+          balance: 0,
+          mainBalance: 0,
+          savings: 0,
+          dpsBalance: 0,
+          telecomBalance: 0,
+          superShopBalance: 0,
+          dueLoan: 0,
+          pinHash: pinHashVal,
+          passwordHash: passwordHashVal,
+          pinSet: true,
+          pinFailedAttempts: 0,
+          pinLockedUntil: 0,
+          forcePinResetOnNextLogin: false,
+          status: 'active',
+          samityStatus: 'none',
+          createdAt: nowIso,
+          updatedAt: nowIso
+        };
+
+        t.set(emailLockRef, { uid: newUid, email: cleanEmail, createdAt: nowIso, updatedAt: nowIso });
+        t.set(phoneLockRef, { uid: newUid, phone: standardPhone, createdAt: nowIso, updatedAt: nowIso });
+        t.set(counterRef, { lastSerial: nextSerial, lastAssignedId: newMemberId, updatedAt: nowIso }, { merge: true });
+        t.set(userRef, userDocData);
+
+        const safeClientUser = { ...userDocData };
+        delete safeClientUser.pinHash;
+        delete safeClientUser.passwordHash;
+        return safeClientUser;
+      });
+
+      userEmailCache.set(cleanEmail, { user: createdUser, ts: Date.now() });
+      return res.json({ success: true, user: createdUser });
     } catch (err: any) {
+      if (err?.message === 'DUPLICATE_EMAIL') {
+        return res.status(409).json({
+          success: false,
+          code: 'duplicate_email',
+          error: 'এই ইমেইল ঠিকানা দিয়ে ইতিপূর্বে একটি অ্যাকাউন্ট খোলা হয়েছে। অনুগ্রহ করে লগইন করুন।'
+        });
+      }
+      if (err?.message === 'DUPLICATE_PHONE') {
+        return res.status(409).json({
+          success: false,
+          code: 'duplicate_phone',
+          error: 'এই মোবাইল নম্বর দিয়ে ইতিপূর্বে একটি অ্যাকাউন্ট খোলা হয়েছে। অনুগ্রহ করে লগইন করুন।'
+        });
+      }
       console.error('[Registration Error]:', err);
       return res.status(500).json({ success: false, error: err?.message || 'রেজিস্ট্রেশনে সমস্যা হয়েছে।' });
     }
@@ -1005,6 +1133,208 @@ async function startServer() {
 
   const locateRateLimitMap = new Map<string, number[]>();
   const userEmailCache = new Map<string, { user: any; ts: number }>();
+
+  function buildSafeUserPayload(foundUser: any) {
+    return {
+      uid: foundUser.uid,
+      name: foundUser.name || 'সদস্য',
+      email: foundUser.email || (foundUser.phone && foundUser.phone.includes('@') ? foundUser.phone : ''),
+      phone: foundUser.phone || '',
+      memberId: foundUser.memberId || '',
+      role: foundUser.role || 'user',
+      pinSet: Boolean(foundUser.pinHash || foundUser.pin || foundUser.appLockCode || foundUser.pinSet),
+      forcePinResetOnNextLogin: Boolean(foundUser.forcePinResetOnNextLogin),
+      balance: Number(foundUser.balance ?? foundUser.mainBalance ?? 0),
+      mainBalance: Number(foundUser.mainBalance ?? foundUser.balance ?? 0),
+      savings: Number(foundUser.savings ?? foundUser.dpsBalance ?? 0),
+      dpsBalance: Number(foundUser.dpsBalance ?? foundUser.savings ?? 0),
+      telecomBalance: Number(foundUser.telecomBalance ?? 0),
+      superShopBalance: Number(foundUser.superShopBalance ?? 0),
+      dueLoan: Number(foundUser.dueLoan ?? 0),
+      status: foundUser.status || 'active',
+      samityStatus: foundUser.samityStatus || 'none',
+      avatarUrl: foundUser.avatarUrl || foundUser.photoUrl || ''
+    };
+  }
+
+  function pickPrimaryCandidate(candidates: any[]) {
+    if (candidates.length === 0) return null;
+    if (candidates.length === 1) return candidates[0];
+    candidates.sort((a, b) => {
+      const aRealMember = a.memberId && a.memberId !== 'BNB00000001' ? 1 : 0;
+      const bRealMember = b.memberId && b.memberId !== 'BNB00000001' ? 1 : 0;
+      if (aRealMember !== bRealMember) return bRealMember - aRealMember;
+      const aOrigPrefix = (a.uid.startsWith('anon_user_') || a.uid.startsWith('usr_') || /^user_01\d+$/.test(a.uid)) ? 1 : 0;
+      const bOrigPrefix = (b.uid.startsWith('anon_user_') || b.uid.startsWith('usr_') || /^user_01\d+$/.test(b.uid)) ? 1 : 0;
+      if (aOrigPrefix !== bOrigPrefix) return bOrigPrefix - aOrigPrefix;
+      const aTotalBal = (Number(a.balance) || 0) + (Number(a.savings) || 0) + (Number(a.dpsBalance) || 0);
+      const bTotalBal = (Number(b.balance) || 0) + (Number(b.savings) || 0) + (Number(b.dpsBalance) || 0);
+      if (aTotalBal !== bTotalBal) return bTotalBal - aTotalBal;
+      const aTime = a.createdAt ? new Date(a.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
+      const bTime = b.createdAt ? new Date(b.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
+      return aTime - bTime;
+    });
+    return candidates[0];
+  }
+
+  // Strictly find existing user by email:
+  // 1) First exactly as stored (users.email == exactEmail)
+  // 2) Then lowercase (users.email == lowerEmail and unique_emails/{lowerEmail})
+  // 3) Then via uid_mappings table (uid_mappings where email == exactEmail/lowerEmail or resolving mapped UID -> primary_uid)
+  // Never creates a new account.
+  async function resolveExistingUserByEmailStrict(rawEmail: string): Promise<any | null> {
+    if (!db || !rawEmail) return null;
+    const exactEmail = String(rawEmail).trim();
+    const lowerEmail = exactEmail.toLowerCase();
+    if (!lowerEmail.includes('@')) return null;
+
+    const resolveUidToPrimaryDoc = async (candidateUid: string): Promise<any | null> => {
+      if (!candidateUid) return null;
+      let targetUid = String(candidateUid).trim();
+      try {
+        const mapSnap = await getDoc(doc(db, 'uid_mappings', targetUid));
+        if (mapSnap.exists() && mapSnap.data()?.primary_uid) {
+          targetUid = mapSnap.data().primary_uid;
+        }
+      } catch (e) {}
+      try {
+        const uSnap = await getDoc(doc(db, 'users', targetUid));
+        if (uSnap.exists()) {
+          const data = uSnap.data();
+          if (data.status !== 'archived_duplicate' && !data.archivedIntoUid) {
+            return { uid: uSnap.id, ...data };
+          }
+        }
+      } catch (e) {}
+      return null;
+    };
+
+    // STEP 1: Find by email FIRST EXACTLY AS STORED in users collection
+    try {
+      const exactSnap = await getDocs(query(collection(db, 'users'), where('email', '==', exactEmail)));
+      if (!exactSnap.empty) {
+        const exactCandidates: any[] = [];
+        for (const d of exactSnap.docs) {
+          const resolved = await resolveUidToPrimaryDoc(d.id);
+          if (resolved) exactCandidates.push(resolved);
+        }
+        const chosen = pickPrimaryCandidate(exactCandidates);
+        if (chosen) return chosen;
+      }
+    } catch (e) {}
+
+    // STEP 2: Find by LOWERCASE email (users collection + unique_emails index)
+    try {
+      if (lowerEmail !== exactEmail) {
+        const lowerSnap = await getDocs(query(collection(db, 'users'), where('email', '==', lowerEmail)));
+        if (!lowerSnap.empty) {
+          const lowerCandidates: any[] = [];
+          for (const d of lowerSnap.docs) {
+            const resolved = await resolveUidToPrimaryDoc(d.id);
+            if (resolved) lowerCandidates.push(resolved);
+          }
+          const chosen = pickPrimaryCandidate(lowerCandidates);
+          if (chosen) return chosen;
+        }
+      }
+
+      const lockSnap = await getDoc(doc(db, 'unique_emails', lowerEmail));
+      if (lockSnap.exists() && lockSnap.data()?.uid) {
+        const resolved = await resolveUidToPrimaryDoc(lockSnap.data().uid);
+        if (resolved) return resolved;
+      }
+
+      const phoneEmailSnap = await getDocs(query(collection(db, 'users'), where('phone', '==', lowerEmail)));
+      if (!phoneEmailSnap.empty) {
+        const phoneCandidates: any[] = [];
+        for (const d of phoneEmailSnap.docs) {
+          const resolved = await resolveUidToPrimaryDoc(d.id);
+          if (resolved) phoneCandidates.push(resolved);
+        }
+        const chosen = pickPrimaryCandidate(phoneCandidates);
+        if (chosen) return chosen;
+      }
+    } catch (e) {}
+
+    // STEP 3: Find via uid_mappings table (and archived_duplicate_users fallback)
+    try {
+      const mapQueries = [
+        getDocs(query(collection(db, 'uid_mappings'), where('email', '==', exactEmail))),
+        ...(lowerEmail !== exactEmail ? [getDocs(query(collection(db, 'uid_mappings'), where('email', '==', lowerEmail)))] : [])
+      ];
+      const mapSnaps = await Promise.all(mapQueries);
+      for (const ms of mapSnaps) {
+        if (ms && !ms.empty) {
+          for (const md of ms.docs) {
+            const primaryUid = md.data()?.primary_uid;
+            if (primaryUid) {
+              const resolved = await resolveUidToPrimaryDoc(primaryUid);
+              if (resolved) return resolved;
+            }
+          }
+        }
+      }
+
+      const archSnap = await getDocs(query(collection(db, 'archived_duplicate_users'), where('email', '==', lowerEmail)));
+      if (!archSnap.empty) {
+        for (const ad of archSnap.docs) {
+          const aData = ad.data();
+          const primaryUid = aData?.archivedIntoUid || aData?.primary_uid;
+          if (primaryUid) {
+            const resolved = await resolveUidToPrimaryDoc(primaryUid);
+            if (resolved) return resolved;
+          }
+          const resolvedByOld = await resolveUidToPrimaryDoc(ad.id);
+          if (resolvedByOld) return resolvedByOld;
+        }
+      }
+    } catch (e) {}
+
+    return null;
+  }
+
+  // Endpoint to resolve any archived duplicate UID to its primary UID
+  app.post('/api/auth/resolve-uid', async (req, res) => {
+    try {
+      const rawUid = String(req.body?.uid || '').trim();
+      if (!rawUid || !db) return res.status(400).json({ resolved: false });
+      const mapSnap = await getDoc(doc(db, 'uid_mappings', rawUid));
+      if (mapSnap.exists() && mapSnap.data()?.primary_uid) {
+        const primaryUid = mapSnap.data().primary_uid;
+        const uSnap = await getDoc(doc(db, 'users', primaryUid));
+        if (uSnap.exists()) {
+          const uData = uSnap.data();
+          return res.json({
+            resolved: true,
+            oldUid: rawUid,
+            primaryUid,
+            user: {
+              uid: uSnap.id,
+              name: uData.name || 'সদস্য',
+              email: uData.email || '',
+              phone: uData.phone || '',
+              memberId: uData.memberId || '',
+              role: uData.role || 'user',
+              pinSet: Boolean(uData.pinHash || uData.pinSet),
+              forcePinResetOnNextLogin: Boolean(uData.forcePinResetOnNextLogin),
+              balance: Number(uData.balance ?? uData.mainBalance ?? 0),
+              mainBalance: Number(uData.mainBalance ?? uData.balance ?? 0),
+              savings: Number(uData.savings ?? uData.dpsBalance ?? 0),
+              dpsBalance: Number(uData.dpsBalance ?? uData.savings ?? 0),
+              telecomBalance: Number(uData.telecomBalance ?? 0),
+              superShopBalance: Number(uData.superShopBalance ?? 0),
+              dueLoan: Number(uData.dueLoan ?? 0),
+              status: uData.status || 'active',
+              samityStatus: uData.samityStatus || 'none'
+            }
+          });
+        }
+      }
+      return res.json({ resolved: false, primaryUid: rawUid });
+    } catch (e: any) {
+      return res.status(500).json({ resolved: false, error: e?.message });
+    }
+  });
 
   app.post('/api/auth/locate-user', async (req, res) => {
     try {
@@ -1018,7 +1348,7 @@ async function startServer() {
       timestamps.push(now);
       locateRateLimitMap.set(String(ip), timestamps);
 
-      const { query: rawQuery } = req.body;
+      const rawQuery = req.body?.query || req.body?.email;
       if (!rawQuery || typeof rawQuery !== 'string') {
         return res.status(400).json({ code: 'query_required', error: 'query_required' });
       }
@@ -1055,64 +1385,10 @@ async function startServer() {
         return res.status(500).json({ code: 'database_unavailable', error: 'database_unavailable' });
       }
 
-      // Fast, authoritative query helper using primary database
-      const queryUsersByField = async (field: string, operator: any, value: any) => {
-        if (db) {
-          try {
-            const qRef = query(collection(db, 'users'), where(field, operator, value), limit(1));
-            const snap = await getDocs(qRef);
-            if (!snap.empty) {
-              const docSnap = snap.docs[0];
-              return { uid: docSnap.id, ...docSnap.data() };
-            }
-          } catch (e: any) {
-            console.warn(`[Locate User] Firestore query for ${field} error:`, e?.message || e);
-          }
-        }
-        if (adminDb && typeof adminDb.collection === 'function') {
-          try {
-            const snap = await adminDb.collection('users').where(field, operator, value).limit(1).get().catch(() => null);
-            if (snap && !snap.empty) {
-              const docSnap = snap.docs[0];
-              return { uid: docSnap.id, ...docSnap.data() };
-            }
-          } catch (e) {}
-        }
-        return null;
-      };
-
-      // 1. Parallel authoritative email match across indexed fields
-      const parallelResults = await Promise.all([
-        queryUsersByField('email', '==', lower),
-        lower !== trimmed ? queryUsersByField('email', '==', trimmed) : Promise.resolve(null),
-        queryUsersByField('phone', '==', lower),
-        lower !== trimmed ? queryUsersByField('phone', '==', trimmed) : Promise.resolve(null)
-      ]);
-
-      const foundUser: any = parallelResults.find(Boolean) || null;
+      const foundUser = await resolveExistingUserByEmailStrict(trimmed);
 
       if (foundUser) {
-        const userPayload = {
-          uid: foundUser.uid,
-          name: foundUser.name || 'সদস্য',
-          email: foundUser.email || (foundUser.phone && foundUser.phone.includes('@') ? foundUser.phone : ''),
-          phone: foundUser.phone || '',
-          memberId: foundUser.memberId || '',
-          role: foundUser.role || 'user',
-          pin: foundUser.pin || foundUser.appLockCode || '',
-          appLockCode: foundUser.appLockCode || foundUser.pin || '',
-          pinSet: Boolean(foundUser.pin || foundUser.appLockCode || foundUser.pinSet),
-          balance: Number(foundUser.balance ?? foundUser.mainBalance ?? 0),
-          mainBalance: Number(foundUser.mainBalance ?? foundUser.balance ?? 0),
-          savings: Number(foundUser.savings ?? foundUser.dpsBalance ?? 0),
-          dpsBalance: Number(foundUser.dpsBalance ?? foundUser.savings ?? 0),
-          telecomBalance: Number(foundUser.telecomBalance ?? 0),
-          superShopBalance: Number(foundUser.superShopBalance ?? 0),
-          dueLoan: Number(foundUser.dueLoan ?? 0),
-          status: foundUser.status || 'active',
-          samityStatus: foundUser.samityStatus || 'none',
-          avatarUrl: foundUser.avatarUrl || foundUser.photoUrl || ''
-        };
+        const userPayload = buildSafeUserPayload(foundUser);
         userEmailCache.set(lower, { user: userPayload, ts: now });
         return res.json({
           found: true,
@@ -1120,13 +1396,676 @@ async function startServer() {
         });
       } else {
         return res.status(404).json({
+          found: false,
           code: 'user_not_found',
-          error: 'প্রদত্ত ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি। সঠিক নিবন্ধিত ইমেইল প্রদান করুন।'
+          error: 'no account, please sign up',
+          message_bn: 'প্রদত্ত ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি। নতুন অ্যাকাউন্ট খুলতে অনুগ্রহ করে Sign Up করুন।'
         });
       }
     } catch (err: any) {
       console.error('Error in /api/auth/locate-user:', err);
       return res.status(500).json({ code: 'internal_error', error: err?.message || 'internal_error' });
+    }
+  });
+
+  // =========================================================================
+  // Server-Side PIN Verification, Server OTP PIN Reset & Atomic Wallet Ledger
+  // =========================================================================
+  app.post('/api/auth/verify-pin', async (req, res) => {
+    try {
+      const uid = req.body?.uid || req.body?.userId;
+      const { email, pin } = req.body;
+      const cleanPin = String(pin || '').trim().replace(/[০-৯]/g, d => String('০১২৩৪৫৬৭৮৯'.indexOf(d)));
+      if (!cleanPin || cleanPin.length < 4 || cleanPin.length > 6 || !/^\d+$/.test(cleanPin)) {
+        return res.status(400).json({ verified: false, canResetPinWithOtp: true, error: '৪ ডিজিটের সঠিক পিন প্রদান করুন অথবা ইমেইল ওটিপি দিয়ে পিন রিসেট করুন।' });
+      }
+      if (!db) {
+        return res.status(500).json({ verified: false, error: 'Database unavailable' });
+      }
+
+      let targetUid = String(uid || '').trim();
+      if (targetUid) {
+        const mapSnap = await getDoc(doc(db, 'uid_mappings', targetUid));
+        if (mapSnap.exists() && mapSnap.data()?.primary_uid) {
+          targetUid = mapSnap.data().primary_uid;
+        }
+      }
+      let userData: any = null;
+      if (targetUid) {
+        const uSnap = await getDoc(doc(db, 'users', targetUid));
+        if (uSnap.exists()) userData = uSnap.data();
+      }
+      if (!userData && email) {
+        const resolvedDoc = await resolveExistingUserByEmailStrict(String(email).trim());
+        if (resolvedDoc) {
+          targetUid = resolvedDoc.uid;
+          userData = resolvedDoc;
+        }
+      }
+      if (!targetUid || !userData) {
+        return res.status(404).json({ verified: false, error: 'ব্যবহারকারী অ্যাকাউন্ট পাওয়া যায়নি।' });
+      }
+
+      const userRef = doc(db, 'users', targetUid);
+
+      // Enforce mandatory Email-OTP PIN reset on next login if flagged (e.g. Group 4 primary anon_user_bexdfa0e1sj)
+      if (userData.forcePinResetOnNextLogin === true) {
+        return res.status(403).json({
+          verified: false,
+          forcePinReset: true,
+          canResetPinWithOtp: true,
+          uid: targetUid,
+          email: userData.email || '',
+          error: 'নিরাপত্তা আপডেটের কারণে আপনার অ্যাকাউন্টে প্রবেশের পূর্বে ইমেইল ওটিপি (OTP) ভেরিফিকেশনের মাধ্যমে নতুন পিন সেট করা বাধ্যতামূলক।'
+        });
+      }
+
+      const now = Date.now();
+      const lockedUntil = Number(userData.pinLockedUntil) || 0;
+      if (lockedUntil > now) {
+        const remainingSeconds = Math.ceil((lockedUntil - now) / 1000);
+        return res.status(423).json({
+          verified: false,
+          locked: true,
+          canResetPinWithOtp: true,
+          uid: targetUid,
+          email: userData.email || '',
+          remainingSeconds,
+          error: `ভুল পিন ৫ বার দেওয়ার কারণে আপনার অ্যাকাউন্ট লক করা হয়েছে। ${Math.ceil(remainingSeconds / 60)} মিনিট পর আবার চেষ্টা করুন অথবা ইমেইল ওটিপি দিয়ে পিন রিসেট করুন।`
+        });
+      }
+
+      let isMatch = false;
+      let matchedViaLegacyPlain = false;
+      if (userData.pinHash) {
+        isMatch = verifySecret(cleanPin, userData.pinHash);
+      }
+      if (!isMatch) {
+        const legacyCandidates = [
+          userData.pin,
+          userData.appLockCode,
+          userData.walletPin,
+          userData.password
+        ]
+          .filter(v => v !== undefined && v !== null)
+          .map(v => String(v).trim().replace(/[০-৯]/g, d => String('০১২৩৪৫৬৭৮৯'.indexOf(d))));
+        for (const legacyPin of legacyCandidates) {
+          if (legacyPin && legacyPin.length >= 4 && cleanPin === legacyPin) {
+            isMatch = true;
+            matchedViaLegacyPlain = true;
+            break;
+          }
+        }
+      }
+
+      if (isMatch) {
+        const updates: any = {
+          pinFailedAttempts: 0,
+          pinLockedUntil: 0,
+          updatedAt: new Date().toISOString()
+        };
+        if (!userData.pinHash || matchedViaLegacyPlain) {
+          updates.pinHash = hashSecret(cleanPin);
+          updates.pinSet = true;
+          updates.pin = deleteField();
+          updates.appLockCode = deleteField();
+          updates.password = deleteField();
+        }
+        await updateDoc(userRef, updates).catch(() => {});
+        return res.json({ verified: true, uid: targetUid });
+      } else {
+        const prevAttempts = (lockedUntil > 0 && lockedUntil <= now) ? 0 : (Number(userData.pinFailedAttempts) || 0);
+        const nextAttempts = prevAttempts + 1;
+        const maxAttempts = 5;
+        if (nextAttempts >= maxAttempts) {
+          const lockDurationMs = 15 * 60 * 1000; // 15 minutes
+          const newLockedUntil = now + lockDurationMs;
+          await updateDoc(userRef, {
+            pinFailedAttempts: nextAttempts,
+            pinLockedUntil: newLockedUntil,
+            updatedAt: new Date().toISOString()
+          }).catch(() => {});
+          return res.status(423).json({
+            verified: false,
+            locked: true,
+            canResetPinWithOtp: true,
+            uid: targetUid,
+            email: userData.email || '',
+            remainingSeconds: 900,
+            remainingAttempts: 0,
+            error: 'ভুল পিন ৫ বার দেওয়া হয়েছে! নিরাপত্তার স্বার্থে অ্যাকাউন্ট ১৫ মিনিটের জন্য লক করা হলো। ইমেইল ওটিপি দিয়ে এখনই নতুন পিন সেট করতে পারবেন।'
+          });
+        } else {
+          const remainingAttempts = maxAttempts - nextAttempts;
+          await updateDoc(userRef, {
+            pinFailedAttempts: nextAttempts,
+            updatedAt: new Date().toISOString()
+          }).catch(() => {});
+          return res.status(401).json({
+            verified: false,
+            locked: false,
+            canResetPinWithOtp: true,
+            uid: targetUid,
+            email: userData.email || '',
+            remainingAttempts,
+            error: `পিন মেলেনি (আর ${remainingAttempts} বার চেষ্টা বাকি)। পিন ভুলে গেলে বা পুরনো পিন কাজ না করলে নিচে ইমেইল ওটিপি দিয়ে নতুন পিন সেট করুন।`
+          });
+        }
+      }
+    } catch (err: any) {
+      console.error('Error in /api/auth/verify-pin:', err);
+      return res.status(500).json({ verified: false, error: 'পিন যাচাই করতে সার্ভার সমস্যা হয়েছে।' });
+    }
+  });
+
+  const pinResetRateLimit = new Map<string, number[]>();
+
+  app.post('/api/auth/request-pin-reset-otp', async (req, res) => {
+    try {
+      const uid = req.body?.uid || req.body?.userId;
+      const { email } = req.body;
+      if (!db) return res.status(500).json({ success: false, error: 'Database unavailable' });
+
+      let targetUid = String(uid || '').trim();
+      if (targetUid) {
+        const mapSnap = await getDoc(doc(db, 'uid_mappings', targetUid));
+        if (mapSnap.exists() && mapSnap.data()?.primary_uid) {
+          targetUid = mapSnap.data().primary_uid;
+        }
+      }
+      let userData: any = null;
+      if (targetUid) {
+        const uSnap = await getDoc(doc(db, 'users', targetUid));
+        if (uSnap.exists()) userData = uSnap.data();
+      }
+      if (!userData && email) {
+        const resolvedDoc = await resolveExistingUserByEmailStrict(String(email).trim());
+        if (resolvedDoc) {
+          targetUid = resolvedDoc.uid;
+          userData = resolvedDoc;
+        }
+      }
+      if (!userData) {
+        return res.status(404).json({ success: false, error: 'no account, please sign up' });
+      }
+
+      const targetEmail = String(userData.email || email || '').trim().toLowerCase();
+      if (!targetEmail || !targetEmail.includes('@')) {
+        return res.status(400).json({ success: false, error: 'এই অ্যাকাউন্টে কোনো বৈধ ইমেইল যুক্ত নেই। অ্যাডমিন আনলক রিকোয়েস্ট পাঠান।' });
+      }
+
+      // Rate limit: max 5 OTP requests per hour per email
+      const now = Date.now();
+      const history = (pinResetRateLimit.get(targetEmail) || []).filter(t => now - t < 3600000);
+      if (history.length >= 5) {
+        return res.status(429).json({ success: false, error: 'অতিরিক্ত ওটিপি অনুরোধ করা হয়েছে। ১ ঘণ্টা পর আবার চেষ্টা করুন।' });
+      }
+      history.push(now);
+      pinResetRateLimit.set(targetEmail, history);
+
+      const generatedOtp = String(crypto.randomInt(100000, 1000000));
+      const expiresAt = now + 5 * 60 * 1000; // 5 minutes strict expiry
+
+      await setDoc(doc(db, 'otp_verifications', `pinreset_${targetEmail}`), {
+        email: targetEmail,
+        uid: targetUid,
+        otpHash: hashSecret(generatedOtp),
+        purpose: 'pin_reset',
+        attempts: 0,
+        maxAttempts: 5,
+        used: false,
+        expiresAt,
+        createdAt: new Date(now).toISOString()
+      });
+
+      if (!req.body?.skipEmail) {
+        const sendResult = await sendEmailOtpUniversal(targetEmail, generatedOtp);
+        if (!sendResult.success) {
+          return res.status(502).json({ success: false, error: 'ইমেইলে ওটিপি পাঠাতে সমস্যা হয়েছে। পুনরায় চেষ্টা করুন।' });
+        }
+      }
+      const [localPart, domainPart] = targetEmail.split('@');
+      const maskedEmail = localPart.length > 2
+        ? `${localPart.slice(0, 2)}***@${domainPart}`
+        : `***@${domainPart}`;
+
+      return res.json({ success: true, maskedEmail, email: targetEmail, uid: targetUid });
+    } catch (err: any) {
+      console.error('Error in /api/auth/request-pin-reset-otp:', err);
+      return res.status(500).json({ success: false, error: 'ওটিপি পাঠাতে সমস্যা হয়েছে।' });
+    }
+  });
+
+  app.post('/api/auth/confirm-pin-reset-otp', async (req, res) => {
+    try {
+      const uid = req.body?.uid || req.body?.userId;
+      const { email, otp, newPin, otpVerificationToken } = req.body;
+      const cleanOtp = String(otp || '').trim().replace(/[০-৯]/g, d => String('০১২৩৪৫৬৭৮৯'.indexOf(d)));
+      const cleanNewPin = String(newPin || '').trim().replace(/[০-৯]/g, d => String('০১২৩৪৫৬৭৮৯'.indexOf(d)));
+
+      if (!/^\d{4}$/.test(cleanNewPin)) {
+        return res.status(400).json({ success: false, error: 'নতুন পিন অবশ্যই ৪ সংখ্যার হতে হবে।' });
+      }
+      if (!db) return res.status(500).json({ success: false, error: 'Database unavailable' });
+
+      let targetUid = String(uid || '').trim();
+      if (targetUid) {
+        const mapSnap = await getDoc(doc(db, 'uid_mappings', targetUid));
+        if (mapSnap.exists() && mapSnap.data()?.primary_uid) {
+          targetUid = mapSnap.data().primary_uid;
+        }
+      }
+      let userData: any = null;
+      if (targetUid) {
+        const uSnap = await getDoc(doc(db, 'users', targetUid));
+        if (uSnap.exists()) userData = uSnap.data();
+      }
+      if (!userData && email) {
+        const resolvedDoc = await resolveExistingUserByEmailStrict(String(email).trim());
+        if (resolvedDoc) {
+          targetUid = resolvedDoc.uid;
+          userData = resolvedDoc;
+        }
+      }
+      const targetEmail = String(userData?.email || email || '').trim().toLowerCase();
+      if (!targetEmail || !targetUid || !userData) {
+        return res.status(400).json({ success: false, error: 'অ্যাকাউন্ট বা ইমেইল পাওয়া যায়নি।' });
+      }
+
+      const now = Date.now();
+      let isOtpVerified = verifyEmailVerifiedToken(targetEmail, otpVerificationToken);
+
+      if (!isOtpVerified) {
+        if (!/^\d{6}$/.test(cleanOtp)) {
+          return res.status(400).json({ success: false, error: '৬ সংখ্যার সঠিক ওটিপি দিন।' });
+        }
+
+        const pinResetRef = doc(db, 'otp_verifications', `pinreset_${targetEmail}`);
+        const emailOtpRef = doc(db, 'otp_verifications', `email_${targetEmail}`);
+        const [pinResetSnap, emailOtpSnap] = await Promise.all([
+          getDoc(pinResetRef),
+          getDoc(emailOtpRef)
+        ]);
+
+        const candidateSnap = pinResetSnap.exists() ? pinResetSnap : (emailOtpSnap.exists() ? emailOtpSnap : null);
+        const candidateRef = pinResetSnap.exists() ? pinResetRef : emailOtpRef;
+
+        if (!candidateSnap) {
+          return res.status(400).json({ success: false, error: 'ওটিপি পাওয়া যায়নি। নতুন ওটিপি অনুরোধ করুন।' });
+        }
+
+        const otpData = candidateSnap.data();
+        if (otpData.used) {
+          return res.status(400).json({ success: false, error: 'এই ওটিপি কোডটি ইতিমধ্যে ব্যবহৃত হয়েছে।' });
+        }
+        if (now > Number(otpData.expiresAt)) {
+          return res.status(400).json({ success: false, error: 'ওটিপি কোডের মেয়াদ (৫ মিনিট) শেষ হয়ে গেছে।' });
+        }
+        const attempts = Number(otpData.attempts) || 0;
+        if (attempts >= 5) {
+          return res.status(429).json({ success: false, error: '৫ বার ভুল ওটিপি দেওয়ার কারণে কোডটি বাতিল হয়েছে। নতুন ওটিপি নিন।' });
+        }
+
+        const isOtpValid = verifySecret(cleanOtp, otpData.otpHash);
+        if (!isOtpValid) {
+          const nextAttempts = attempts + 1;
+          await updateDoc(candidateRef, { attempts: nextAttempts, used: nextAttempts >= 5 });
+          return res.status(401).json({
+            success: false,
+            remainingAttempts: Math.max(0, 5 - nextAttempts),
+            error: `ভুল ওটিপি কোড! আর ${Math.max(0, 5 - nextAttempts)} বার চেষ্টা করতে পারবেন।`
+          });
+        }
+
+        await updateDoc(candidateRef, { used: true, usedAt: new Date(now).toISOString(), verifiedAtMs: now });
+        isOtpVerified = true;
+      }
+
+      const newPinHash = hashSecret(cleanNewPin);
+      await updateDoc(doc(db, 'users', targetUid), {
+        pinHash: newPinHash,
+        pinSet: true,
+        pinFailedAttempts: 0,
+        pinLockedUntil: 0,
+        forcePinResetOnNextLogin: false,
+        pin: deleteField(),
+        appLockCode: deleteField(),
+        password: deleteField(),
+        updatedAt: new Date(now).toISOString()
+      });
+      userEmailCache.delete(targetEmail);
+
+      const safeUser = buildSafeUserPayload({
+        ...userData,
+        uid: targetUid,
+        pinHash: newPinHash,
+        pinSet: true,
+        forcePinResetOnNextLogin: false
+      });
+
+      return res.json({ success: true, uid: targetUid, user: safeUser });
+    } catch (err: any) {
+      console.error('Error in /api/auth/confirm-pin-reset-otp:', err);
+      return res.status(500).json({ success: false, error: 'পিন রিসেট সম্পন্ন করা যায়নি।' });
+    }
+  });
+
+  app.post('/api/wallet/transaction', async (req, res) => {
+    try {
+      const {
+        userId,
+        amount: rawAmount,
+        charge: rawCharge,
+        type,
+        typeLabel,
+        description,
+        paymentMethod,
+        receiverUid,
+        receiverId,
+        receiverName,
+        transactionId,
+        idempotencyKey
+      } = req.body;
+
+      if (!db) return res.status(500).json({ success: false, error: 'Database unavailable' });
+      const cleanUserId = String(userId || '').trim();
+      const cleanIdempKey = String(idempotencyKey || transactionId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+      if (!cleanUserId || !cleanIdempKey) {
+        return res.status(400).json({ success: false, error: 'userId and idempotencyKey are required' });
+      }
+
+      const amount = Number(rawAmount);
+      const charge = Number(rawCharge) || 0;
+      if (!Number.isFinite(amount) || amount <= 0 || charge < 0) {
+        return res.status(400).json({ success: false, error: 'অবৈধ টাকার পরিমাণ।' });
+      }
+
+      const userRef = doc(db, 'users', cleanUserId);
+      const idempRef = doc(db, 'ledger_idempotency', `TX_${cleanIdempKey}`);
+      const txRef = doc(db, 'transactions', cleanIdempKey);
+
+      const result = await runTransaction(db, async (t) => {
+        const idempSnap = await t.get(idempRef);
+        if (idempSnap.exists()) {
+          const existing = idempSnap.data();
+          return {
+            alreadyProcessed: true,
+            newBalance: Number(existing.afterBalance),
+            txId: existing.txId || cleanIdempKey
+          };
+        }
+
+        const userSnap = await t.get(userRef);
+        if (!userSnap.exists()) {
+          throw new Error('ব্যবহারকারী অ্যাকাউন্ট পাওয়া যায়নি।');
+        }
+
+        const userData = userSnap.data();
+        const currentBalance = Number(userData.balance ?? userData.mainBalance ?? 0);
+        const totalRequired = amount + charge;
+
+        const isCredit = ['add_money', 'deposit', 'received_transfer'].includes(type);
+        const isDebit = ['transfer', 'withdraw', 'telecom_recharge', 'shop_purchase', 'loan_repayment', 'fee_payment', 'samity_deposit'].includes(type);
+        if (!isCredit && !isDebit) {
+          throw new Error('অবৈধ লেনদেনের ধরন।');
+        }
+
+        let afterBalance = currentBalance;
+        if (isCredit) {
+          afterBalance = currentBalance + amount;
+        } else {
+          if (currentBalance - totalRequired < 0) {
+            throw new Error(`অপর্যাপ্ত ওয়ালেট ব্যালেন্স! প্রয়োজন ৳${totalRequired.toLocaleString('bn-BD')} BDT, আপনার বর্তমান ব্যালেন্স ৳${currentBalance.toLocaleString('bn-BD')} BDT।`);
+          }
+          afterBalance = currentBalance - totalRequired;
+        }
+
+        const nowIso = new Date().toISOString();
+        t.update(userRef, {
+          balance: afterBalance,
+          mainBalance: afterBalance,
+          updatedAt: nowIso
+        });
+
+        t.set(txRef, {
+          id: txRef.id,
+          transactionId: cleanIdempKey,
+          idempotencyKey: cleanIdempKey,
+          userId: cleanUserId,
+          userName: userData.name || '',
+          userPhone: userData.phone || '',
+          memberId: userData.memberId || '',
+          type,
+          typeLabel: typeLabel || type,
+          amount,
+          charge,
+          totalDeducted: isDebit ? totalRequired : 0,
+          beforeBalance: currentBalance,
+          afterBalance,
+          balanceBefore: currentBalance,
+          balanceAfter: afterBalance,
+          status: 'success',
+          paymentMethod: paymentMethod || 'BNB Ledger Gateway',
+          description: description || '',
+          receiverUid: receiverUid || null,
+          receiverId: receiverId || null,
+          receiverName: receiverName || null,
+          createdAt: nowIso,
+          processed: true
+        });
+
+        t.set(idempRef, {
+          idempotencyKey: cleanIdempKey,
+          txId: txRef.id,
+          userId: cleanUserId,
+          type,
+          beforeBalance: currentBalance,
+          amount,
+          charge,
+          afterBalance,
+          createdAt: nowIso
+        });
+
+        return {
+          alreadyProcessed: false,
+          newBalance: afterBalance,
+          txId: txRef.id
+        };
+      });
+
+      return res.json({
+        success: true,
+        alreadyProcessed: result.alreadyProcessed,
+        newBalance: result.newBalance,
+        txId: result.txId
+      });
+    } catch (err: any) {
+      return res.status(400).json({ success: false, error: err?.message || 'লেনদেন প্রক্রিয়াকরণ ব্যর্থ হয়েছে।' });
+    }
+  });
+
+  app.post('/api/wallet/transfer', async (req, res) => {
+    try {
+      const { senderUid, receiverIdentifier, amount: rawAmount, charge: rawCharge, transactionId, idempotencyKey, note } = req.body;
+      if (!db) return res.status(500).json({ success: false, error: 'Database unavailable' });
+
+      const cleanSenderUid = String(senderUid || '').trim();
+      const cleanIdempKey = String(idempotencyKey || transactionId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+      const amount = Number(rawAmount);
+      const charge = Number(rawCharge) || 0;
+      const totalDeduction = amount + charge;
+
+      if (!cleanSenderUid || !cleanIdempKey) {
+        return res.status(400).json({ success: false, error: 'senderUid and idempotencyKey are required' });
+      }
+      if (!Number.isFinite(amount) || amount <= 0 || charge < 0) {
+        return res.status(400).json({ success: false, error: 'স্থানান্তর করার পরিমাণ অবশ্যই শূন্যের বেশি হতে হবে।' });
+      }
+
+      const idempRef = doc(db, 'ledger_idempotency', `XFER_${cleanIdempKey}`);
+      const existingIdemp = await getDoc(idempRef);
+      if (existingIdemp.exists()) {
+        const d = existingIdemp.data();
+        return res.json({
+          success: true,
+          alreadyProcessed: true,
+          senderNewBalance: d.senderAfterBalance,
+          receiverNewBalance: d.receiverAfterBalance,
+          txId: d.txId
+        });
+      }
+
+      // Resolve receiver
+      const cleanId = String(receiverIdentifier || '').trim();
+      const lowerId = cleanId.toLowerCase();
+      let receiverUid = '';
+      const directSnap = await getDoc(doc(db, 'users', cleanId));
+      if (directSnap.exists()) {
+        receiverUid = directSnap.id;
+      } else {
+        const allUsersSnap = await getDocs(collection(db, 'users'));
+        allUsersSnap.forEach(uDoc => {
+          const uData = uDoc.data();
+          if (uData.status === 'archived_duplicate') return;
+          if (
+            (uData.phone && String(uData.phone).trim().toLowerCase() === lowerId) ||
+            (uData.memberId && String(uData.memberId).trim().toLowerCase() === lowerId) ||
+            (uData.email && String(uData.email).trim().toLowerCase() === lowerId)
+          ) {
+            receiverUid = uDoc.id;
+          }
+        });
+      }
+
+      if (!receiverUid) {
+        return res.status(404).json({ success: false, error: 'প্রাপক অ্যাকাউন্ট (Receiver Account) খুঁজে পাওয়া যায়নি।' });
+      }
+      if (receiverUid === cleanSenderUid) {
+        return res.status(400).json({ success: false, error: 'নিজের অ্যাকাউন্টে নিজে টাকা স্থানান্তর করা যায় না।' });
+      }
+
+      const senderRef = doc(db, 'users', cleanSenderUid);
+      const receiverRef = doc(db, 'users', receiverUid);
+      const senderTxRef = doc(db, 'transactions', `${cleanIdempKey}_S`);
+      const receiverTxRef = doc(db, 'transactions', `${cleanIdempKey}_R`);
+
+      const result = await runTransaction(db, async (t) => {
+        const idempSnap = await t.get(idempRef);
+        if (idempSnap.exists()) {
+          const d = idempSnap.data();
+          return {
+            alreadyProcessed: true,
+            senderNewBalance: Number(d.senderAfterBalance),
+            receiverNewBalance: Number(d.receiverAfterBalance),
+            txId: d.txId
+          };
+        }
+
+        const senderSnap = await t.get(senderRef);
+        const receiverSnap = await t.get(receiverRef);
+        if (!senderSnap.exists()) throw new Error('প্রেরক অ্যাকাউন্ট পাওয়া যায়নি।');
+        if (!receiverSnap.exists()) throw new Error('প্রাপক অ্যাকাউন্ট পাওয়া যায়নি।');
+
+        const senderData = senderSnap.data();
+        const receiverData = receiverSnap.data();
+        const senderBalance = Number(senderData.balance ?? senderData.mainBalance ?? 0);
+        const receiverBalance = Number(receiverData.balance ?? receiverData.mainBalance ?? 0);
+
+        if (senderBalance - totalDeduction < 0) {
+          throw new Error(`অপর্যাপ্ত ব্যালেন্স! আপনার বর্তমান ওয়ালেট ব্যালেন্স ৳${senderBalance.toLocaleString('bn-BD')} BDT, কিন্তু স্থানান্তরের জন্য প্রয়োজন ৳${totalDeduction.toLocaleString('bn-BD')} BDT।`);
+        }
+
+        const senderAfter = senderBalance - totalDeduction;
+        const receiverAfter = receiverBalance + amount;
+        const nowIso = new Date().toISOString();
+
+        t.update(senderRef, { balance: senderAfter, mainBalance: senderAfter, updatedAt: nowIso });
+        t.update(receiverRef, { balance: receiverAfter, mainBalance: receiverAfter, updatedAt: nowIso });
+
+        t.set(senderTxRef, {
+          id: senderTxRef.id,
+          transactionId: `${cleanIdempKey}-S`,
+          idempotencyKey: `${cleanIdempKey}-S`,
+          userId: cleanSenderUid,
+          userName: senderData.name || '',
+          userPhone: senderData.phone || '',
+          memberId: senderData.memberId || '',
+          type: 'transfer',
+          typeLabel: 'BNB-to-BNB সেন্ড মানি (প্রেরক)',
+          amount,
+          charge,
+          totalDeducted: totalDeduction,
+          beforeBalance: senderBalance,
+          afterBalance: senderAfter,
+          balanceBefore: senderBalance,
+          balanceAfter: senderAfter,
+          status: 'success',
+          paymentMethod: 'BNB Transfer Gateway',
+          description: note || `BNB-to-BNB Send Money to ${receiverData.name || receiverUid} (${receiverData.phone || ''})`,
+          receiverUid,
+          receiverId: receiverData.memberId || '',
+          receiverName: receiverData.name || '',
+          createdAt: nowIso,
+          processed: true
+        });
+
+        t.set(receiverTxRef, {
+          id: receiverTxRef.id,
+          transactionId: `${cleanIdempKey}-R`,
+          idempotencyKey: `${cleanIdempKey}-R`,
+          userId: receiverUid,
+          userName: receiverData.name || '',
+          userPhone: receiverData.phone || '',
+          memberId: receiverData.memberId || '',
+          type: 'received_transfer',
+          typeLabel: 'BNB-to-BNB রিসিভ মানি (প্রাপক)',
+          amount,
+          charge: 0,
+          totalDeducted: 0,
+          beforeBalance: receiverBalance,
+          afterBalance: receiverAfter,
+          balanceBefore: receiverBalance,
+          balanceAfter: receiverAfter,
+          status: 'success',
+          paymentMethod: 'BNB Transfer Gateway',
+          description: note || `BNB-to-BNB Received from ${senderData.name || cleanSenderUid} (${senderData.phone || ''})`,
+          senderUid: cleanSenderUid,
+          senderName: senderData.name || '',
+          createdAt: nowIso,
+          processed: true
+        });
+
+        t.set(idempRef, {
+          idempotencyKey: cleanIdempKey,
+          txId: cleanIdempKey,
+          senderUid: cleanSenderUid,
+          receiverUid,
+          amount,
+          charge,
+          senderBeforeBalance: senderBalance,
+          senderAfterBalance: senderAfter,
+          receiverBeforeBalance: receiverBalance,
+          receiverAfterBalance: receiverAfter,
+          createdAt: nowIso
+        });
+
+        return {
+          alreadyProcessed: false,
+          senderNewBalance: senderAfter,
+          receiverNewBalance: receiverAfter,
+          txId: cleanIdempKey
+        };
+      });
+
+      return res.json({
+        success: true,
+        alreadyProcessed: result.alreadyProcessed,
+        senderNewBalance: result.senderNewBalance,
+        receiverNewBalance: result.receiverNewBalance,
+        txId: result.txId
+      });
+    } catch (err: any) {
+      return res.status(400).json({ success: false, error: err?.message || 'অর্থ স্থানান্তর ব্যর্থ হয়েছে।' });
     }
   });
 
@@ -1147,53 +2086,13 @@ async function startServer() {
   let cachedOneSignalRestApiKey: string | null = null;
 
   // =========================================================================
-  // Automated 60-Day Transaction Retention & Firestore Optimization Engine
   // =========================================================================
-  const SIXTY_DAYS_MS = 60 * 24 * 60 * 60 * 1000;
-
-  async function runScheduledTransactionCleanup(databaseInstance: any) {
-    if (!databaseInstance) return;
-    try {
-      const cutoffTime = Date.now() - SIXTY_DAYS_MS;
-      console.log("[AutoRetention Engine] Running scheduled cleanup for transactions older than 60 days...");
-      
-      const txCollectionRef = collection(databaseInstance, 'transactions');
-      const snapshot = await getDocs(txCollectionRef);
-      let deletedTxCount = 0;
-      
-      for (const docSnap of snapshot.docs) {
-        const data = docSnap.data();
-        let txTime = 0;
-        if (data.createdAt?.toMillis) {
-          txTime = data.createdAt.toMillis();
-        } else if (data.createdAt?.toDate) {
-          txTime = data.createdAt.toDate().getTime();
-        } else if (typeof data.createdAt === 'number') {
-          txTime = data.createdAt;
-        } else if (typeof data.createdAt === 'string') {
-          txTime = new Date(data.createdAt).getTime();
-        }
-        
-        // STRICT SAFETY GATE:
-        // Only delete if timestamp is valid positive number AND strictly older than 60 full days
-        if (txTime > 0 && txTime < cutoffTime) {
-          await deleteDoc(doc(databaseInstance, 'transactions', docSnap.id)).catch(err => {
-            console.warn("[AutoRetention Engine] Could not delete expired doc " + docSnap.id + ":", err);
-          });
-          deletedTxCount++;
-        }
-      }
-      
-      if (deletedTxCount > 0) {
-        console.log("[AutoRetention Engine] Successfully deleted " + deletedTxCount + " expired transactions (>60 days). Users balance and permanent account records remain 100% intact.");
-      } else {
-        console.log("[AutoRetention Engine] Cleanup check complete. No transactions exceeded the 60-day threshold.");
-      }
-    } catch (err: any) {
-      console.error("[AutoRetention Engine] Error during scheduled cleanup:", err?.message || err);
-    }
+  // Transaction Retention: PERMANENTLY DISABLED (Step 0 Security Rule)
+  // Financial transactions must NEVER be deleted so balances are 100% reconstructable.
+  // =========================================================================
+  async function runScheduledTransactionCleanup(_databaseInstance: any) {
+    console.log("[AutoRetention Engine] Transaction deletion is permanently disabled to preserve complete financial ledger history.");
   }
-
 
   try {
     const configPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
@@ -1203,14 +2102,6 @@ async function startServer() {
       const TARGET_DATABASE_ID = firebaseConfig.firestoreDatabaseId || "ai-studio-120ec6e1-2db5-45d2-b1b1-46493400c959";
       db = getFirestore(firebaseApp, TARGET_DATABASE_ID);
       console.log("Firebase initialized successfully on backend server with database:", TARGET_DATABASE_ID);
-      // Schedule auto-retention cleanup: run 15s after boot and every 24 hours
-      setTimeout(() => {
-        runScheduledTransactionCleanup(db);
-      }, 15000);
-
-      setInterval(() => {
-        runScheduledTransactionCleanup(db);
-      }, 24 * 60 * 60 * 1000);
 
       // Schedule real-time automated ZiniPay reconciliation loop: run 2s after boot and every 8 seconds
       setTimeout(() => {
@@ -1220,9 +2111,6 @@ async function startServer() {
       setInterval(() => {
         runAutoZinipayReconciliation(adminDb || db);
       }, 8000);
-
-
-
     } else {
       console.warn("firebase-applet-config.json not found on backend. Skipping firebase initialization.");
     }
@@ -1960,6 +2848,38 @@ async function startServer() {
     } catch (err: any) {
       console.error("Allow Device API error:", err);
       return res.status(500).json({ error: err.message || "Failed to allow device" });
+    }
+  });
+
+  // 4. Admin Update User Profile & Balance Safely (Single UID only, hashes PIN)
+  app.post('/api/admin/update-user', async (req, res) => {
+    try {
+      const { userId, updates } = req.body;
+      if (!userId || !updates || typeof updates !== 'object') {
+        return res.status(400).json({ error: "User ID and updates object are required" });
+      }
+      if (!db) {
+        return res.status(500).json({ error: "Database not connected" });
+      }
+      const safeUpdates: Record<string, any> = { ...updates, updatedAt: new Date().toISOString() };
+      if (safeUpdates.pin && String(safeUpdates.pin).trim()) {
+        safeUpdates.pinHash = hashSecret(String(safeUpdates.pin).trim());
+        safeUpdates.pin = deleteField();
+        safeUpdates.appLockCode = deleteField();
+      } else {
+        delete safeUpdates.pin;
+      }
+      if (safeUpdates.password && String(safeUpdates.password).trim()) {
+        safeUpdates.passwordHash = hashSecret(String(safeUpdates.password).trim());
+        safeUpdates.password = deleteField();
+      } else {
+        delete safeUpdates.password;
+      }
+      await updateDoc(doc(db, 'users', String(userId).trim()), safeUpdates);
+      return res.json({ success: true, userId: String(userId).trim() });
+    } catch (err: any) {
+      console.error("Admin update-user error:", err);
+      return res.status(500).json({ error: err.message || "Failed to update user" });
     }
   });
 

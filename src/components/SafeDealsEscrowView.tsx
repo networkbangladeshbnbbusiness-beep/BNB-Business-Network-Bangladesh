@@ -55,39 +55,46 @@ interface SafeDealsEscrowViewProps {
 
 const SafeDealsBannerSlider = React.memo(function SafeDealsBannerSlider({ adSlides }: { adSlides: any[] }) {
   const [currentAdSlide, setCurrentAdSlide] = useState(0);
+  const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
+
+  const validSlides = (adSlides || []).filter((slide) => slide?.image && !failedImages[slide.image]);
 
   useEffect(() => {
-    if (!adSlides || adSlides.length <= 1) return;
+    if (validSlides.length <= 1) return;
     const interval = setInterval(() => {
-      setCurrentAdSlide((prev) => (prev + 1) % adSlides.length);
+      setCurrentAdSlide((prev) => (prev + 1) % validSlides.length);
     }, 4000);
     return () => clearInterval(interval);
-  }, [adSlides]);
+  }, [validSlides.length]);
 
-  if (!adSlides || adSlides.length === 0) return null;
+  if (validSlides.length === 0) return null;
+
+  const safeIdx = currentAdSlide % validSlides.length;
+  const activeImage = validSlides[safeIdx]?.image;
 
   return (
     <div className="relative rounded-none overflow-hidden aspect-video shadow-sm border border-slate-200/80 bg-slate-900 group w-full">
       <div className="absolute inset-0 w-full h-full">
         <img 
-          src={adSlides[currentAdSlide]?.image} 
+          src={activeImage} 
           alt="নিরাপদ লেনদেন ব্যানার"
           referrerPolicy="no-referrer"
           className="absolute inset-0 w-full h-full object-cover transition-opacity duration-300"
           loading="lazy"
+          onError={() => setFailedImages((prev) => ({ ...prev, [activeImage]: true }))}
         />
         <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent pointer-events-none" />
       </div>
-      {adSlides.length > 1 && (
+      {validSlides.length > 1 && (
         <div className="absolute bottom-3 left-1/2 transform -translate-x-1/2 flex items-center gap-1.5 z-20">
-          {adSlides.map((_, idx) => (
+          {validSlides.map((_, idx) => (
             <button
               key={idx}
               type="button"
               aria-label={'Slide ' + (idx + 1)}
               onClick={() => setCurrentAdSlide(idx)}
               className={'h-1.5 rounded-full transition-all duration-300 cursor-pointer ' + (
-                currentAdSlide === idx ? 'w-4 bg-[#1A56DB]' : 'w-1.5 bg-white/60'
+                safeIdx === idx ? 'w-4 bg-[#1A56DB]' : 'w-1.5 bg-white/60'
               )}
             />
           ))}

@@ -67,7 +67,7 @@ export function buildOtpEmailHtml(otp: string, userName = 'সম্মানি
  * 3. In-app user notification in 'user_notifications'
  */
 export async function sendEmailOtpDirect(options: SendOtpOptions): Promise<{ success: boolean; deliveredTo: string; error?: string }> {
-  const { email, otp, userName = 'সম্মানিত সদস্য', phone = '', memberId = '', userId = '', reason = 'login' } = options;
+  const { email, userName = 'সম্মানিত সদস্য', phone = '', memberId = '', userId = '', reason = 'login' } = options;
   const targetEmail = String(email || '').trim().toLowerCase();
 
   if (!targetEmail || !targetEmail.includes('@')) {
@@ -76,89 +76,54 @@ export async function sendEmailOtpDirect(options: SendOtpOptions): Promise<{ suc
 
   const payload = {
     email: targetEmail,
-    otp,
     userName,
     phone,
     accountNumber: memberId,
     memberId,
     userId,
     channel: 'email',
+    purpose: reason,
     reason,
     skipEmail: false
   };
 
-  // 1. Dispatch via authoritative backend server-side proxy
-  const dispatchViaBackend = async () => {
-    const endpoints = [apiUrl('/api/send-email-otp'), apiUrl('/api/send-otp')];
-    for (const url of endpoints) {
-      try {
-        if (typeof (window as any)?.Capacitor !== 'undefined' && CapacitorHttp?.post) {
-          const res = await CapacitorHttp.post({
-            url,
-            headers: { 'Content-Type': 'application/json' },
-            data: payload
-          });
-          if (res.status >= 200 && res.status < 300) {
-            console.log('[CapacitorHttp Backend OTP Success]:', res.data);
-            return true;
-          }
-        }
-      } catch (capErr) {
-        console.warn('[CapacitorHttp Backend Warning]:', capErr);
-      }
-
-      try {
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        if (res.ok) {
-          const data = await res.json().catch(() => null);
-          console.log('[Fetch Backend OTP Success]:', data);
-          return true;
-        }
-      } catch (fetchErr) {
-        console.warn('[Fetch Backend OTP Warning]:', fetchErr);
-      }
-    }
-    return false;
-  };
-
-  // Run backend dispatch in background / parallel
-  dispatchViaBackend().catch(() => {});
-
-  // 2. Real-time Firestore Queue Dispatch ('otp_requests')
-  if (db) {
+  const endpoints = [apiUrl('/api/send-email-otp'), apiUrl('/api/send-otp')];
+  for (const url of endpoints) {
     try {
-      addDoc(collection(db, 'otp_requests'), {
-        email: targetEmail,
-        phone,
-        otp,
-        userName,
-        memberId,
-        userId,
-        reason,
-        sent: false,
-        createdAt: new Date().toISOString()
-      }).catch(err => console.warn('[Firestore otp_requests error]:', err));
-    } catch (e) {}
+      if (typeof (window as any)?.Capacitor !== 'undefined' && CapacitorHttp?.post) {
+        const res = await CapacitorHttp.post({
+          url,
+          headers: { 'Content-Type': 'application/json' },
+          data: payload
+        });
+        if (res.status >= 200 && res.status < 300) {
+          return { success: true, deliveredTo: targetEmail };
+        }
+        if (res.status === 429) {
+          return { success: false, deliveredTo: '', error: res.data?.error || 'অতিরিক্ত ওটিপি অনুরোধ করা হয়েছে।' };
+        }
+      }
+    } catch (capErr) {
+      console.warn('[CapacitorHttp Backend Warning]:', capErr);
+    }
 
-    // 3. In-App User Notification
-    if (userId) {
-      try {
-        addDoc(collection(db, 'user_notifications'), {
-          userId,
-          title: reason === 'forgot_password' ? '🔐 পাসওয়ার্ড রিসেট ওটিপি কোড' : '🔐 BNB লগইন সিকিউরিটি ওটিপি কোড',
-          body: `আপনার ৬-সংখ্যার ওটিপি কোড: ${otp} (মেয়াদ ৫ মিনিট)।`,
-          otp,
-          email: targetEmail,
-          category: 'email_otp',
-          createdAt: new Date().toISOString()
-        }).catch(err => console.warn('[Firestore user_notifications error]:', err));
-      } catch (e) {}
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success) {
+        return { success: true, deliveredTo: targetEmail };
+      }
+      if (res.status === 429) {
+        return { success: false, deliveredTo: '', error: data?.error || 'অতিরিক্ত ওটিপি অনুরোধ করা হয়েছে।' };
+      }
+    } catch (fetchErr) {
+      console.warn('[Fetch Backend OTP Warning]:', fetchErr);
     }
   }
 
-  return { success: true, deliveredTo: targetEmail };
+  return { success: false, deliveredTo: '', error: 'ওটিপি পাঠাতে সমস্যা হয়েছে।' };
 }

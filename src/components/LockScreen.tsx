@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { BNBLogo } from './BNBLogo';
 import { getLockoutState, recordFailedAttempt, clearLockoutState, LockoutState } from '../lib/lockoutUtils';
 import LockoutScreen from './LockoutScreen';
+import { apiUrl } from '../config/api';
 
 // Comprehensive global country list with flags & dialed codes
 const countries = [
@@ -109,8 +110,37 @@ export default function LockScreen({
   onLanguageChange,
   darkMode = false
 }: LockScreenProps) {
+  const isBn = appLanguage !== 'en';
   const userIdentifier = user?.phone || user?.uid || '';
   const [lockoutInfo, setLockoutInfo] = useState<LockoutState>(() => getLockoutState(userIdentifier));
+
+  const localizeLockError = (raw: string | undefined, fallbackBn: string, fallbackEn: string): string => {
+    if (!raw) return isBn ? fallbackBn : fallbackEn;
+    let msg = raw.trim();
+    if (isBn) {
+      msg = msg.replace(/\s*\(no account,\s*please sign up\)/gi, '');
+      msg = msg.replace(/no account,\s*please sign up/gi, 'কোনো অ্যাকাউন্ট পাওয়া যায়নি, অনুগ্রহ করে নিবন্ধন করুন।');
+      msg = msg.replace(/৪ ডিজিট/g, '4 ডিজিট');
+      if (/^[A-Za-z0-9\s.,!?:;'"()\-_/]+$/.test(msg)) {
+        return fallbackBn;
+      }
+      return msg;
+    } else {
+      if (/ভুল পিন|সঠিক ৪|সঠিক 4/.test(msg)) {
+        return 'Incorrect PIN! Please enter your 4-digit PIN or reset it below.';
+      }
+      if (/লক করা/.test(msg)) {
+        return 'Too many incorrect PIN attempts! Your account is temporarily locked for 15 minutes.';
+      }
+      if (/ওটিপি/.test(msg)) {
+        return fallbackEn;
+      }
+      if (/[\u0980-\u09FF]/.test(msg)) {
+        return fallbackEn;
+      }
+      return msg;
+    }
+  };
 
   useEffect(() => {
     const status = getLockoutState(userIdentifier);
@@ -141,64 +171,137 @@ export default function LockScreen({
   const [showForgotCountryDropdown, setShowForgotCountryDropdown] = useState(false);
   const [forgotCountrySearch, setForgotCountrySearch] = useState('');
 
+  const [resetOtpSent, setResetOtpSent] = useState(false);
+  const [resetOtpCode, setResetOtpCode] = useState('');
+
+  // Automatically trigger mandatory Email-OTP PIN reset modal if user has forcePinResetOnNextLogin === true
+  useEffect(() => {
+    if ((user as any)?.forcePinResetOnNextLogin) {
+      setShowForgotPinModal(true);
+      setResetError(
+        isBn
+          ? 'নিরাপত্তা আপডেটের কারণে আপনার অ্যাকাউন্টে প্রবেশের পূর্বে ইমেইল ওটিপি ভেরিফিকেশনের মাধ্যমে নতুন 4 ডিজিট পিন সেট করা বাধ্যতামূলক।'
+          : 'For security reasons, you must set a new 4-digit PIN via email OTP verification before accessing your account.'
+      );
+    }
+  }, [user, isBn]);
+
+  const handleRequestPinResetOtp = async () => {
+    setResetError('');
+    setResetMessage('');
+    if (!user?.uid) {
+      setResetError(isBn ? 'ইউজার আইডি পাওয়া যায়নি!' : 'User ID not found!');
+      return;
+    }
+    setResetLoading(true);
+    try {
+      const resp = await fetch(apiUrl('/api/auth/request-pin-reset-otp'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: user.uid, email: user.email || '' })
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.success) {
+        setResetError(
+          localizeLockError(
+            data.error,
+            'ইমেইলে ওটিপি পাঠানো যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।',
+            'Failed to send OTP to email. Please try again.'
+          )
+        );
+      } else {
+        setResetOtpSent(true);
+        setResetMessage(
+          isBn
+            ? `আপনার নিবন্ধিত ইমেইলে (${data.maskedEmail || user.email || ''}) 6 সংখ্যার ভেরিফিকেশন কোড পাঠানো হয়েছে।`
+            : `A 6-digit verification code has been sent to your registered email (${data.maskedEmail || user.email || ''}).`
+        );
+      }
+    } catch (err: any) {
+      if (import.meta.env.DEV) {
+        console.error('Request PIN reset OTP error:', err);
+      }
+      setResetError(
+        isBn
+          ? 'সার্ভার সংযোগ সমস্যা। অনুগ্রহ করে আবার চেষ্টা করুন।'
+          : 'Server connection error. Please try again.'
+      );
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
   const handleResetPinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setResetError('');
     setResetMessage('');
 
-    if (newResetPin.length !== 4 || !/^\d+$/.test(newResetPin)) {
-      setResetError('নতুন পিন অবশ্যই 4 ডিজিটের সংখ্যা হতে হবে।');
+    const cleanOtp = convertBengaliToEnglishDigits(resetOtpCode).trim();
+    const cleanNewPin = convertBengaliToEnglishDigits(newResetPin).trim();
+    const cleanConfirmPin = convertBengaliToEnglishDigits(newResetPinConfirm).trim();
+
+    if (cleanOtp.length !== 6 || !/^\d{6}$/.test(cleanOtp)) {
+      setResetError(isBn ? 'ইমেইলে পাঠানো 6 সংখ্যার সঠিক ওটিপি কোডটি দিন।' : 'Please enter the valid 6-digit OTP sent to your email.');
       return;
     }
-    if (newResetPin !== newResetPinConfirm) {
-      setResetError('নতুন পিন এবং নিশ্চিত করা পিন দুটির মিল নেই!');
+    if (cleanNewPin.length !== 4 || !/^\d{4}$/.test(cleanNewPin)) {
+      setResetError(isBn ? 'নতুন পিন অবশ্যই 4 ডিজিটের সংখ্যা হতে হবে।' : 'New PIN must be a 4-digit number.');
+      return;
+    }
+    if (cleanNewPin !== cleanConfirmPin) {
+      setResetError(isBn ? 'নতুন পিন এবং নিশ্চিত করা পিন দুটির মিল নেই!' : 'New PIN and confirm PIN do not match!');
       return;
     }
 
     setResetLoading(true);
     try {
       if (!user?.uid) {
-        setResetError('ইউজার আইডি পাওয়া যায়নি!');
+        setResetError(isBn ? 'ইউজার আইডি পাওয়া যায়নি!' : 'User ID not found!');
         setResetLoading(false);
         return;
       }
 
-      // Direct update using the current user's authenticated UID - super simple and fast!
-      const targetUserRef = doc(db, 'users', user.uid);
-
-      await updateDoc(targetUserRef, {
-        pin: newResetPin,
-        appLockCode: newResetPin,
-        password: newResetPin,
-        pinSet: true,
-        updatedAt: new Date().toISOString()
+      const resp = await fetch(apiUrl('/api/auth/confirm-pin-reset-otp'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          uid: user.uid,
+          email: user.email || '',
+          otp: cleanOtp,
+          newPin: cleanNewPin
+        })
       });
-      if (user) {
-        user.pin = newResetPin;
-        user.appLockCode = newResetPin;
-        user.password = newResetPin;
-        user.pinSet = true;
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.success) {
+        setResetError(
+          localizeLockError(
+            data.error,
+            'পিন রিসেট ব্যর্থ হয়েছে। ওটিপি যাচাই করুন।',
+            'PIN reset failed. Please verify the OTP.'
+          )
+        );
+        setResetLoading(false);
+        return;
       }
-      try {
-        localStorage.setItem('amb_user_pin', newResetPin);
-        localStorage.setItem('bnb_user_pin', newResetPin);
-      } catch (e) {}
 
-      setResetMessage('আপনার সিকিউরিটি পিন সফলভাবে পরিবর্তন করা হয়েছে!');
+      clearLockoutState(userIdentifier);
+      setResetMessage(isBn ? 'আপনার 4 ডিজিট পিন সফলভাবে পরিবর্তন করা হয়েছে!' : 'Your 4-digit PIN has been updated successfully!');
       setPin('');
-      
-      // Auto close modal after 1.5s and unlock instantly!
+
       setTimeout(() => {
         setShowForgotPinModal(false);
+        setResetOtpSent(false);
+        setResetOtpCode('');
         setNewResetPin('');
         setNewResetPinConfirm('');
         setResetMessage('');
-        onUnlock(); // Auto-unlock after explicit successful PIN change
-      }, 1500);
-
+        onUnlock();
+      }, 1200);
     } catch (err: any) {
-      console.error(err);
-      setResetError(`পিন পরিবর্তন ব্যর্থ হয়েছেঃ ${err?.message || 'সার্ভার সংযোগ সমস্যা'}`);
+      if (import.meta.env.DEV) {
+        console.error(err);
+      }
+      setResetError(isBn ? 'পিন পরিবর্তন ব্যর্থ হয়েছে। ইন্টারনেট সংযোগ চেক করে আবার চেষ্টা করুন।' : 'Failed to change PIN. Please check your connection and try again.');
     } finally {
       setResetLoading(false);
     }
@@ -212,17 +315,18 @@ export default function LockScreen({
       if (snap.exists()) {
         const data = snap.data();
         if (data.appLockResetStatus === 'approved' && data.appLockResetRequested) {
-          // Admin approved active unlock request! Consume the status in Firestore and unlock
           updateDoc(userRef, {
             appLockResetStatus: 'consumed',
             appLockResetRequested: false
-          }).catch((e) => console.warn("Failed to consume unlock status:", e));
+          }).catch((e) => {
+            if (import.meta.env.DEV) console.warn("Failed to consume unlock status:", e);
+          });
           setHasActiveUnlockRequest(false);
           onUnlock();
         }
       }
     }, (err) => {
-      console.warn("LockScreen real-time user listener error:", err);
+      if (import.meta.env.DEV) console.warn("LockScreen real-time user listener error:", err);
     });
     return () => unsub();
   }, [user?.uid, hasActiveUnlockRequest, onUnlock]);
@@ -252,10 +356,20 @@ export default function LockScreen({
       }, { merge: true });
 
       setHasActiveUnlockRequest(true);
-      setResetMessage('আপনার আনলক রিকোয়েস্ট সফলভাবে এডমিনের কাছে পাঠানো হয়েছে! এডমিন যাচাই করে এপ্রুভ করার সাথে সাথে অ্যাপস আনলক হয়ে যাবে।');
+      setResetMessage(
+        isBn
+          ? 'আপনার আনলক রিকোয়েস্ট সফলভাবে এডমিনের কাছে পাঠানো হয়েছে! এডমিন যাচাই করে এপ্রুভ করার সাথে সাথে অ্যাপস আনলক হয়ে যাবে।'
+          : 'Your unlock request has been sent to the Admin! Your app will unlock automatically once approved.'
+      );
     } catch (err: any) {
-      console.error("Error sending admin unlock request:", err);
-      setResetError('রিকোয়েস্ট পাঠাতে সমস্যা হয়েছে। ইন্টারনেট চেক করে আবার চেষ্টা করুন।');
+      if (import.meta.env.DEV) {
+        console.error("Error sending admin unlock request:", err);
+      }
+      setResetError(
+        isBn
+          ? 'রিকোয়েস্ট পাঠাতে সমস্যা হয়েছে। ইন্টারনেট চেক করে আবার চেষ্টা করুন।'
+          : 'Failed to send request. Please check your internet connection and try again.'
+      );
     } finally {
       setResetLoading(false);
     }
@@ -318,117 +432,75 @@ export default function LockScreen({
     setLoading(true);
 
     try {
-      // 1. Check in-memory user object via verifyUserPin helper
-      let isVerified = verifyUserPin(user, targetPin);
+      const resp = await fetch(apiUrl('/api/auth/verify-pin'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          uid: user?.uid || '',
+          email: user?.email || '',
+          pin: targetPin
+        })
+      });
+      const data = await resp.json().catch(() => ({}));
 
-      // Check admin master PIN or emergency PIN fallbacks
-      const isAdmin = user?.role === 'admin' || user?.memberId === 'MAIN_ADMIN' || user?.phone === '+8800011112222';
-      const adminMasterPin = appConfig?.adminPin ? convertBengaliToEnglishDigits(String(appConfig.adminPin)).trim() : '6666';
-      if (isAdmin && (targetPin === '6666' || targetPin === adminMasterPin)) {
-        isVerified = true;
-      }
-
-      // Check user phone last 4 digits or member ID last 4 digits or default emergency PIN '1234'
-      const phoneDigits = user?.phone ? convertBengaliToEnglishDigits(String(user.phone)).replace(/\D/g, '') : '';
-      const phoneLast4 = phoneDigits.length >= 4 ? phoneDigits.slice(-4) : '';
-      const memberIdDigits = user?.memberId ? convertBengaliToEnglishDigits(String(user.memberId)).replace(/\D/g, '') : '';
-      const memberIdLast4 = memberIdDigits.length >= 4 ? memberIdDigits.slice(-4) : '';
-
-      if (!isVerified && (
-        (phoneLast4 && targetPin === phoneLast4) ||
-        (memberIdLast4 && targetPin === memberIdLast4) ||
-        targetPin === '1234' ||
-        targetPin === '6666'
-      )) {
-        isVerified = true;
-      }
-
-      // 2. If not verified in memory, fetch LIVE user profile from Firestore (prevents failure when user document hasn't loaded fully or has different doc ID)
-      if (!isVerified) {
-        try {
-          const lookupQuery = user?.phone || user?.memberId || user?.uid || '';
-          if (lookupQuery) {
-            const foundResult = await findUserInFirestoreByPhone(lookupQuery);
-            if (foundResult?.user && verifyUserPin(foundResult.user, targetPin)) {
-              isVerified = true;
-              if (user) {
-                user.pin = foundResult.user.pin || targetPin;
-                user.appLockCode = foundResult.user.appLockCode || targetPin;
-                user.password = foundResult.user.password || targetPin;
-                user.pinSet = true;
-              }
-            }
-          }
-
-          if (!isVerified && user?.uid) {
-            const freshSnap = await getDoc(doc(db, 'users', user.uid));
-            if (freshSnap.exists() && verifyUserPin(freshSnap.data(), targetPin)) {
-              isVerified = true;
-              const freshData = freshSnap.data();
-              if (user) {
-                user.pin = freshData.pin || targetPin;
-                user.appLockCode = freshData.appLockCode || targetPin;
-                user.password = freshData.password || targetPin;
-                user.pinSet = true;
-              }
-            }
-          }
-        } catch (fetchErr) {
-          console.warn("Firestore PIN verify fallback warning:", fetchErr);
-        }
-      }
-
-      if (isVerified) {
+      if (resp.ok && data.verified) {
         clearLockoutState(userIdentifier);
-        if (user) {
-          user.pin = targetPin;
-          user.appLockCode = targetPin;
-          user.password = targetPin;
-          user.pinSet = true;
-        }
-        try {
-          localStorage.setItem('amb_user_pin', targetPin);
-          localStorage.setItem('bnb_user_pin', targetPin);
-        } catch (e) {}
-
-        if (user?.uid) {
-          updateDoc(doc(db, 'users', user.uid), {
-            pin: targetPin,
-            appLockCode: targetPin,
-            password: targetPin,
-            pinSet: true,
-            updatedAt: new Date().toISOString()
-          }).catch(() => {});
-        }
-
         if (isLogoutMode) {
           onLogout();
         } else {
           onUnlock();
         }
+      } else if (data.forcePinReset) {
+        setPin('');
+        setShowForgotPinModal(true);
+        setResetError(
+          localizeLockError(
+            data.error,
+            'নিরাপত্তা আপডেটের কারণে ইমেইল ওটিপি ভেরিফিকেশনের মাধ্যমে নতুন 4 ডিজিট পিন সেট করা বাধ্যতামূলক।',
+            'For security reasons, setting a new 4-digit PIN via email OTP is required.'
+          )
+        );
       } else {
-        const result = recordFailedAttempt(userIdentifier, 'pin');
-        setLockoutInfo(result);
-        if (result.isLocked) {
-          setError('ভুল পিন ৩ বার দেওয়া হয়েছে! অ্যাকাউন্ট ১ ঘণ্টার জন্য লক করা হলো।');
+        if (data.locked) {
+          const remainingSec = Number(data.remainingSeconds) || 900;
+          setLockoutInfo({
+            isLocked: true,
+            remainingSeconds: remainingSec,
+            failedAttempts: 5,
+            pinAttempts: 5,
+            passwordAttempts: 0,
+            reason: 'pin'
+          });
+          setError(
+            localizeLockError(
+              data.error,
+              'ভুল পিন 5 বার দেওয়া হয়েছে! অ্যাকাউন্ট 15 মিনিটের জন্য লক করা হলো।',
+              'Incorrect PIN entered 5 times! Account locked for 15 minutes.'
+            )
+          );
         } else {
-          setError(`ভুল পিন! আর মাত্র ${result.remainingAttempts} বার চেষ্টা করতে পারবেন।`);
+          const rem = typeof data.remainingAttempts === 'number' ? data.remainingAttempts : undefined;
+          const fallbackBn = rem !== undefined ? `ভুল পিন! আর মাত্র ${rem} বার চেষ্টা করতে পারবেন।` : 'ভুল পিন! সঠিক 4 ডিজিট পিন দিন অথবা নিচে পিন রিসেট করুন।';
+          const fallbackEn = rem !== undefined ? `Incorrect PIN! ${rem} attempts remaining.` : 'Incorrect PIN! Please enter your 4-digit PIN or reset it below.';
+          setError(localizeLockError(data.error, fallbackBn, fallbackEn));
         }
         setPin('');
       }
     } catch (err) {
-      console.error("PIN verification error:", err);
-      setError('পিন যাচাই করতে সমস্যা হয়েছে');
+      if (import.meta.env.DEV) {
+        console.error("PIN verification error:", err);
+      }
+      setError(isBn ? 'পিন যাচাই করতে সমস্যা হয়েছে। ইন্টারনেট সংযোগ চেক করুন।' : 'Failed to verify PIN. Please check your internet connection.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleVerifySecretLock = (e?: React.FormEvent) => {
+  const handleVerifySecretLock = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    const cleanInput = secretCodeInput.trim();
-    if (!cleanInput) {
-      setError('অনুগ্রহ করে আপনার গোপন সিক্রেট পাসওয়ার্ড লিখুন!');
+    const cleanInput = convertBengaliToEnglishDigits(secretCodeInput).trim();
+    if (cleanInput.length !== 4 || !/^\d{4}$/.test(cleanInput)) {
+      setError(isBn ? 'অনুগ্রহ করে আপনার 4 ডিজিট পিন লিখুন!' : 'Please enter your 4-digit PIN!');
       return;
     }
 
@@ -442,19 +514,18 @@ export default function LockScreen({
     setLoading(true);
 
     try {
-      const userAppLockCode = user?.appLockCode ? String(user.appLockCode).trim() : '';
-      const userPin = user?.pin ? String(user.pin).trim() : '';
+      const resp = await fetch(apiUrl('/api/auth/verify-pin'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          uid: user?.uid || '',
+          email: user?.email || '',
+          pin: cleanInput
+        })
+      });
+      const data = await resp.json().catch(() => ({}));
 
-      let isAuthorized = false;
-      if (userAppLockCode.length > 0) {
-        // STRICT SECURITY: Must match the custom App Lock Password set during lock setup.
-        isAuthorized = cleanInput === userAppLockCode;
-      } else if (userPin.length > 0) {
-        // Fallback to user's registered PIN only if no separate appLockCode set yet
-        isAuthorized = cleanInput === userPin;
-      }
-
-      if (isAuthorized) {
+      if (resp.ok && data.verified) {
         clearLockoutState(userIdentifier);
         setSecretCodeInput('');
         setLoading(false);
@@ -462,37 +533,53 @@ export default function LockScreen({
         if (isLogoutMode) {
           onLogout();
         } else {
-          // Instant unlock (<0.05s) - fire & forget Firestore update in background
           if (user?.uid) {
             const userRef = doc(db, 'users', user.uid);
             updateDoc(userRef, {
               isAppLocked: false
-            }).catch((err) => console.error("Firestore app lock update error:", err));
+            }).catch((err) => {
+              if (import.meta.env.DEV) console.error("Firestore app lock update error:", err);
+            });
           }
           onUnlock();
         }
+      } else if (data.forcePinReset) {
+        setSecretCodeInput('');
+        setLoading(false);
+        setShowForgotPinModal(true);
+        setResetError(
+          localizeLockError(
+            data.error,
+            'ইমেইল ওটিপি ভেরিফিকেশনের মাধ্যমে 4 ডিজিট পিন রিসেট করুন।',
+            'Please reset your 4-digit PIN via email OTP verification.'
+          )
+        );
       } else {
         setLoading(false);
-        const result = recordFailedAttempt(userIdentifier, 'password');
-        setLockoutInfo(result);
-        if (result.isLocked) {
-          setError('ভুল পাসওয়ার্ড 3 বার দেওয়া হয়েছে! আপনার অ্যাকাউন্ট 1 ঘণ্টার জন্য সম্পূর্ণ লক করা হলো।');
-        } else {
-          if (userAppLockCode.length > 0) {
-            if (cleanInput === userPin) {
-              setError(`ভুল সিক্রেট পাসওয়ার্ড! এটি অ্যাপ্সের গোপন পাসওয়ার্ড, পিন নয়। আর মাত্র ${result.remainingAttempts} বার চেষ্টা করা যাবে।`);
-            } else {
-              setError(`ভুল সিক্রেট পাসওয়ার্ড! আর মাত্র ${result.remainingAttempts} বার সুযোগ বাকি।`);
-            }
-          } else {
-            setError(`ভুল গোপন পাসওয়ার্ড! আর মাত্র ${result.remainingAttempts} বার সুযোগ বাকি।`);
-          }
+        if (data.locked) {
+          setLockoutInfo({
+            isLocked: true,
+            remainingSeconds: Number(data.remainingSeconds) || 900,
+            failedAttempts: 5,
+            pinAttempts: 5,
+            passwordAttempts: 5,
+            reason: 'pin'
+          });
         }
+        setError(
+          localizeLockError(
+            data.error,
+            'ভুল পিন! সঠিক 4 ডিজিট পিন দিন অথবা নিচে পিন রিসেট করুন।',
+            'Incorrect PIN! Please enter your 4-digit PIN or reset it below.'
+          )
+        );
         setSecretCodeInput('');
       }
     } catch (err: any) {
-      console.error("Failed to verify secret lock code:", err);
-      setError('কোড যাচাই করতে সমস্যা হয়েছে। ইন্টারনেট চেক করুন।');
+      if (import.meta.env.DEV) {
+        console.error("Failed to verify secret lock code:", err);
+      }
+      setError(isBn ? 'পিন যাচাই করতে সমস্যা হয়েছে। ইন্টারনেট চেক করুন।' : 'Failed to verify PIN. Please check your internet connection.');
       setLoading(false);
     }
   };
@@ -552,7 +639,7 @@ export default function LockScreen({
 
         {isSecretLocked ? (
           /* ========================================================= */
-          /* 2ND STEP SECRET APP LOCK UI (6-12 ডিজিট/অক্ষরের গোপন পাসওয়ার্ড) */
+          /* 2ND STEP APP LOCK UI (4-DIGIT PIN) */
           /* ========================================================= */
           <div className="w-full bg-white rounded-3xl p-5 border border-slate-200/90 shadow-xl space-y-4 text-left relative overflow-hidden">
             <div className="flex items-center gap-3 border-b border-slate-100 pb-3">
@@ -561,16 +648,19 @@ export default function LockScreen({
               </div>
               <div>
                 <span className="text-[9px] font-black text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200 uppercase tracking-wider">
-                  🔒 2য় ধাপের গোপন অ্যাপ লক
+                  {isBn ? '🔒 অ্যাপ পিন লক' : '🔒 App PIN Lock'}
                 </span>
-                <h2 className="text-base font-black text-slate-900 mt-0.5">{user.name || 'গ্রাহক'}</h2>
+                <h2 className="text-base font-black text-slate-900 mt-0.5">{user.name || (isBn ? 'গ্রাহক' : 'Member')}</h2>
                 <p className="text-[11px] font-mono font-bold text-slate-600">ID: {user.memberId}</p>
               </div>
             </div>
 
             {/* Lock Instruction Banner */}
             <div className={`p-3 rounded-2xl text-[11px] leading-relaxed font-medium ${isLogoutMode ? 'bg-rose-50 border border-rose-200 text-rose-900' : 'bg-amber-50 border border-amber-200/80 text-amber-900'}`}>
-              ⚠️ <strong>{isLogoutMode ? 'লগআউট সিকিউরিটি যাচাই:' : 'সিক্রেট কোডে ব্লক করা আছে!'}</strong> {isLogoutMode ? 'অ্যাপ থেকে সম্পূর্ণ লগআউট হয়ে বের হতে আপনার সিক্রেট পাসওয়ার্ড কোডটি দিন। সঠিক কোড দিলেই স্বয়ংক্রিয়ভাবে লগআউট হয়ে যাবে।' : 'এই অ্যাকাউন্টটি সিক্রেট পাসওয়ার্ড কোডে লক করা হয়েছে। অ্যাপসের কোনো সেকশনে প্রবেশ করতে বা লেনদেন চালাতে পাসওয়ার্ডটি দিয়ে আগে আনলক করুন।'}
+              ⚠️ <strong>{isLogoutMode ? (isBn ? 'লগআউট সিকিউরিটি যাচাই:' : 'Logout Security Check:') : (isBn ? 'পিন লক সক্রিয় আছে!' : 'PIN Lock Active!')}</strong>{' '}
+              {isLogoutMode
+                ? (isBn ? 'অ্যাপ থেকে সম্পূর্ণ লগআউট হয়ে বের হতে আপনার 4 ডিজিট পিন দিন।' : 'Enter your 4-digit PIN to log out completely.')
+                : (isBn ? 'অ্যাপে প্রবেশ করতে আপনার 4 ডিজিট পিন দিয়ে আনলক করুন।' : 'Enter your 4-digit PIN to unlock and access the app.')}
             </div>
 
             {/* Pending Admin Unlock Request Banner */}
@@ -578,7 +668,10 @@ export default function LockScreen({
               <div className="bg-sky-50 border border-sky-200 p-3 rounded-2xl text-[11px] text-sky-900 leading-relaxed font-bold flex items-start gap-2 shadow-xs">
                 <div className="w-2.5 h-2.5 rounded-full bg-sky-500 animate-ping shrink-0 mt-1" />
                 <div>
-                  <strong>⏳ আনলক রিকোয়েস্ট পেন্ডিং:</strong> আপনার সিক্রেট পাসওয়ার্ড আনলক রিকোয়েস্ট এডমিনের পর্যালোচনায় রয়েছে। এডমিন যাচাই করে এপ্রুভ করার সাথে সাথে আপনার অ্যাপস স্বয়ংক্রিয়ভাবে আনলক হয়ে যাবে।
+                  <strong>{isBn ? '⏳ আনলক রিকোয়েস্ট পেন্ডিং:' : '⏳ Unlock Request Pending:'}</strong>{' '}
+                  {isBn
+                    ? 'আপনার আনলক রিকোয়েস্ট এডমিনের পর্যালোচনায় রয়েছে। এডমিন যাচাই করে এপ্রুভ করার সাথে সাথে আপনার অ্যাপস স্বয়ংক্রিয়ভাবে আনলক হয়ে যাবে।'
+                    : 'Your unlock request is under Admin review. Your app will unlock automatically once approved.'}
                 </div>
               </div>
             )}
@@ -595,16 +688,18 @@ export default function LockScreen({
             <form onSubmit={handleVerifySecretLock} className="space-y-3.5 pt-1">
               <div>
                 <label className="block text-xs font-black text-slate-700 mb-1">
-                  গোপন লকিং কোড (4 - 12 ডিজিট/অক্ষর)
+                  {isBn ? '4 ডিজিট পিন' : '4-Digit PIN'}
                 </label>
                 <div className="relative">
                   <input
                     type={showSecretCode ? 'text' : 'password'}
+                    inputMode="numeric"
+                    pattern="\d{4}"
                     value={secretCodeInput}
-                    onChange={(e) => setSecretCodeInput(e.target.value)}
-                    maxLength={12}
-                    placeholder="6-12 অক্ষরের পাসওয়ার্ড কোডটি লিখুন"
-                    className="w-full pl-10 pr-10 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                    onChange={(e) => setSecretCodeInput(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    maxLength={4}
+                    placeholder="••••"
+                    className="w-full pl-10 pr-10 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all tracking-widest"
                     autoFocus
                     required
                   />
@@ -618,14 +713,14 @@ export default function LockScreen({
                   </button>
                 </div>
                 <div className="flex justify-between items-center mt-1 text-[10px] text-slate-400 font-bold px-1">
-                  <span>সর্বনিম্ন 4, সর্বোচ্চ 12 ডিজিট/অক্ষর</span>
-                  <span>{secretCodeInput.length}/12</span>
+                  <span>{isBn ? '4 ডিজিট পিন' : '4-Digit PIN'}</span>
+                  <span>{secretCodeInput.length}/4</span>
                 </div>
               </div>
 
               <button
                 type="submit"
-                disabled={loading || secretCodeInput.length < 1}
+                disabled={loading || secretCodeInput.length !== 4}
                 className={`w-full py-3 px-4 disabled:opacity-50 text-white font-extrabold rounded-xl text-xs shadow-md transition-all cursor-pointer flex items-center justify-center gap-2 ${isLogoutMode ? 'bg-rose-600 hover:bg-rose-700 active:bg-rose-800 shadow-rose-600/20' : 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 shadow-emerald-600/20'}`}
               >
                 {loading ? (
@@ -633,7 +728,9 @@ export default function LockScreen({
                 ) : (
                   <>
                     <ShieldCheck className="w-4 h-4" />
-                    {isLogoutMode ? '🔒 পাসওয়ার্ড দিয়ে লগআউট করুন (Log Out)' : 'অ্যাপস আনলক করুন (Unlock App)'}
+                    {isLogoutMode
+                      ? (isBn ? '🔒 পিন দিয়ে লগআউট করুন' : '🔒 Log Out with PIN')
+                      : (isBn ? 'অ্যাপস আনলক করুন' : 'Unlock App')}
                   </>
                 )}
               </button>
@@ -646,17 +743,17 @@ export default function LockScreen({
                 onClick={onCancelLogout}
                 className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs rounded-xl transition cursor-pointer text-center"
               >
-                ❌ বাতিল করে অ্যাপে থাকুন
+                {isBn ? '❌ বাতিল করে অ্যাপে থাকুন' : '❌ Cancel & Stay in App'}
               </button>
             )}
 
-            {/* Forgot Lock Code WhatsApp Link */}
+            {/* Forgot Lock Code Link */}
             <button
               type="button"
               onClick={() => { setShowForgotPinModal(true); setResetError(''); setResetMessage(''); }}
               className="w-full text-center text-amber-900 hover:text-amber-950 text-[10.5px] font-extrabold tracking-wide cursor-pointer py-2 px-3 bg-amber-50 border border-amber-200/80 rounded-xl hover:bg-amber-100 transition-all block"
             >
-              🔑 সিক্রেট লক পাসওয়ার্ড ভুলে গেছেন? হেল্পলাইনে কথা বলুন (01865911728)
+              {isBn ? '🔑 পিন ভুলে গেছেন? রিসেট রিকোয়েস্ট পাঠান' : '🔑 Forgot PIN? Send Reset Request'}
             </button>
 
             {/* Logout button if NOT already in logout mode */}
@@ -668,7 +765,7 @@ export default function LockScreen({
                   className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-rose-600 font-bold cursor-pointer transition-colors"
                 >
                   <LogOut className="w-4 h-4" />
-                  অন্য অ্যাকাউন্ট দিয়ে লগইন
+                  {isBn ? 'অন্য অ্যাকাউন্ট দিয়ে লগইন' : 'Login with Another Account'}
                 </button>
               </div>
             )}
@@ -683,8 +780,10 @@ export default function LockScreen({
               <div className="w-13 h-13 bg-emerald-100/70 border border-emerald-200 rounded-full flex items-center justify-center text-emerald-700 shadow-xs mb-1">
                 <KeyRound className="w-6 h-6 text-emerald-700" />
               </div>
-              <span className="text-[10.5px] font-extrabold text-emerald-800 uppercase tracking-widest bg-emerald-50 px-3 py-0.5 rounded-full border border-emerald-200 shadow-2xs">নিরাপত্তা লক</span>
-              <h2 className="text-lg font-black text-slate-900 tracking-tight mt-1">{user.name || 'সদস্য'}</h2>
+              <span className="text-[10.5px] font-extrabold text-emerald-800 uppercase tracking-widest bg-emerald-50 px-3 py-0.5 rounded-full border border-emerald-200 shadow-2xs">
+                {isBn ? 'নিরাপত্তা লক' : 'Security Lock'}
+              </span>
+              <h2 className="text-lg font-black text-slate-900 tracking-tight mt-1">{user.name || (isBn ? 'সদস্য' : 'Member')}</h2>
               <div className="flex items-center gap-2 justify-center">
                 <p className="text-[11px] font-mono font-bold text-slate-800 bg-white px-3 py-0.5 rounded-full border border-slate-200 shadow-2xs">
                   {user.memberId || localStorage.getItem('amb_user_member_id') || 'BNB00000000'}
@@ -726,7 +825,7 @@ export default function LockScreen({
                   </motion.span>
                 ) : (
                   <span className="text-[11px] font-medium text-slate-400">
-                    ৪ ডিজিট ট্রানজেকশন পিন কোড দিন
+                    {isBn ? '4 ডিজিট পিন কোড দিন' : 'Enter 4-Digit PIN'}
                   </span>
                 )}
               </div>
@@ -779,7 +878,7 @@ export default function LockScreen({
               onClick={() => { setShowForgotPinModal(true); setResetError(''); setResetMessage(''); }}
               className="block text-amber-900 hover:text-amber-950 mt-0.5 mb-1 text-[10.5px] font-extrabold tracking-wide cursor-pointer mx-auto bg-amber-50 border border-amber-200/80 py-1.5 px-3.5 rounded-full hover:bg-amber-100 active:scale-95 transition-all shrink-0 text-center shadow-2xs"
             >
-              🔑 পিন ভুলে গেছেন? রিসেট রিকোয়েস্ট পাঠান (Forgot PIN)
+              {isBn ? '🔑 পিন ভুলে গেছেন? রিসেট রিকোয়েস্ট পাঠান' : '🔑 Forgot PIN? Send Reset Request'}
             </button>
 
             {/* Footer actions */}
@@ -790,7 +889,7 @@ export default function LockScreen({
                 className="flex items-center gap-1.5 text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-3 py-1.5 rounded-xl transition-all font-bold cursor-pointer active:scale-95 shadow-2xs"
               >
                 <LogOut className="w-3.5 h-3.5" />
-                অন্য অ্যাকাউন্ট
+                {isBn ? 'অন্য অ্যাকাউন্ট' : 'Switch Account'}
               </button>
               
               <button
@@ -801,17 +900,21 @@ export default function LockScreen({
               >
                 {loading ? (
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] font-bold animate-pulse text-emerald-800">অটো যাচাই হচ্ছে...</span>
+                    <span className="text-[11px] font-bold animate-pulse text-emerald-800">
+                      {isBn ? 'অটো যাচাই হচ্ছে...' : 'Verifying...'}
+                    </span>
                     <div className="w-4 h-4 border-2 border-emerald-800 border-t-transparent rounded-full animate-spin" />
                   </div>
                 ) : pin.length === 4 ? (
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] font-bold animate-pulse text-emerald-800">অটো লগইন...</span>
+                    <span className="text-[11px] font-bold animate-pulse text-emerald-800">
+                      {isBn ? 'অটো লগইন...' : 'Logging in...'}
+                    </span>
                     <div className="w-4 h-4 border-2 border-emerald-800 border-t-transparent rounded-full animate-spin" />
                   </div>
                 ) : (
                   <>
-                    প্রবেশ করুন
+                    {isBn ? 'প্রবেশ করুন' : 'Enter App'}
                     <ArrowRight className="w-4 h-4 animate-pulse" />
                   </>
                 )}
@@ -834,7 +937,9 @@ export default function LockScreen({
               <div className="bg-amber-900 text-white p-5 flex justify-between items-center">
                 <div className="flex items-center gap-2">
                   <ShieldAlert className="w-5 h-5 text-amber-300" />
-                  <span className="font-bold text-sm">সিকিউরিটি পিন রিসেট সার্ভিস</span>
+                  <span className="font-bold text-sm">
+                    {isBn ? 'সিকিউরিটি পিন রিসেট সার্ভিস' : 'Security PIN Reset Service'}
+                  </span>
                 </div>
                 <button 
                   onClick={() => setShowForgotPinModal(false)}
@@ -849,10 +954,14 @@ export default function LockScreen({
                   <KeyRound className="w-6 h-6" />
                 </div>
 
-                <div className="space-y-2">
-                  <h3 className="text-base font-black text-slate-900">এডমিন আনলক সার্ভিস</h3>
+                <div className="space-y-1.5">
+                  <h3 className="text-base font-black text-slate-900">
+                    {isBn ? 'ইমেইল ওটিপি দিয়ে পিন রিসেট' : 'Reset PIN via Email OTP'}
+                  </h3>
                   <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                    আপনি যদি পিন ভুলে গিয়ে থাকেন, তবে নিচে "এডমিনের কাছে আনলক রিকোয়েস্ট পাঠান" বাটনে ক্লিক করুন। এডমিন আপনার তথ্য ভেরিফাই করে এপ্রুভ করলেই অ্যাপস আনলক হয়ে যাবে।
+                    {isBn
+                      ? 'পিন ভুলে গেলে আপনার নিবন্ধিত জিমেইলে 6 সংখ্যার ওটিপি কোড পাঠিয়ে নতুন 4 ডিজিট পিন সেট করুন।'
+                      : 'Send a 6-digit OTP code to your registered email to set a new 4-digit PIN.'}
                   </p>
                 </div>
 
@@ -872,50 +981,122 @@ export default function LockScreen({
 
                 {user && (
                   <div className="bg-slate-50 border border-slate-100 p-3 rounded-2xl text-left font-sans text-xs text-slate-700 space-y-1">
-                    <p>👤 <strong>সদস্য নামঃ</strong> {user.name || 'সদস্য'}</p>
-                    <p>🆔 <strong>সদস্য আইডিঃ</strong> <span className="font-mono text-slate-900 font-black">{user.memberId}</span></p>
-                    <p>📞 <strong>মোবাইলঃ</strong> <span className="font-mono text-slate-900 font-black">{maskSecretPhone(user.phone)}</span></p>
+                    <p>👤 <strong>{isBn ? 'সদস্য নামঃ' : 'Member Name:'}</strong> {user.name || (isBn ? 'সদস্য' : 'Member')}</p>
+                    <p>🆔 <strong>{isBn ? 'সদস্য আইডিঃ' : 'Member ID:'}</strong> <span className="font-mono text-slate-900 font-black">{user.memberId}</span></p>
+                    {user.email && <p>✉️ <strong>{isBn ? 'ইমেইলঃ' : 'Email:'}</strong> <span className="font-mono text-slate-900 font-black">{user.email}</span></p>}
                   </div>
                 )}
 
-                {/* Primary Action 1: Send Request to Admin */}
+                {!resetOtpSent ? (
+                  <button
+                    type="button"
+                    onClick={handleRequestPinResetOtp}
+                    disabled={resetLoading}
+                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black text-xs rounded-2xl transition cursor-pointer shadow-md flex items-center justify-center gap-2 disabled:opacity-60"
+                  >
+                    {resetLoading ? (
+                      <span className="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                    ) : (
+                      <>
+                        <ShieldCheck className="w-4 h-4" />
+                        {isBn ? '📧 ইমেইলে পিন রিসেট ওটিপি পাঠান' : '📧 Send PIN Reset OTP to Email'}
+                      </>
+                    )}
+                  </button>
+                ) : (
+                  <form onSubmit={handleResetPinSubmit} className="space-y-2.5 text-left">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        {isBn ? 'ইমেইলের 6 সংখ্যার ওটিপি কোড' : '6-Digit Email OTP Code'}
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        value={resetOtpCode}
+                        onChange={(e) => setResetOtpCode(e.target.value)}
+                        placeholder={isBn ? '6 সংখ্যার ওটিপি দিন' : 'Enter 6-digit OTP'}
+                        className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        required
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          {isBn ? 'নতুন 4 ডিজিট পিন' : 'New 4-Digit PIN'}
+                        </label>
+                        <input
+                          type="password"
+                          inputMode="numeric"
+                          pattern="\d{4}"
+                          maxLength={4}
+                          value={newResetPin}
+                          onChange={(e) => setNewResetPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                          placeholder={isBn ? '4 ডিজিট পিন' : '4-digit PIN'}
+                          className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          {isBn ? 'পিন নিশ্চিত করুন' : 'Confirm PIN'}
+                        </label>
+                        <input
+                          type="password"
+                          inputMode="numeric"
+                          pattern="\d{4}"
+                          maxLength={4}
+                          value={newResetPinConfirm}
+                          onChange={(e) => setNewResetPinConfirm(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                          placeholder={isBn ? 'পুনরায় পিন' : 'Re-enter PIN'}
+                          className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                          required
+                        />
+                      </div>
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={resetLoading}
+                      className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black text-xs rounded-2xl transition cursor-pointer shadow-md flex items-center justify-center gap-2 disabled:opacity-60"
+                    >
+                      {resetLoading ? (
+                        <span className="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                      ) : (
+                        <>
+                          <Check className="w-4 h-4" />
+                          {isBn ? 'নতুন পিন সেট ও আনলক করুন' : 'Set New PIN & Unlock'}
+                        </>
+                      )}
+                    </button>
+                  </form>
+                )}
+
+                {/* Secondary Action: Send Request to Admin */}
                 <button
                   type="button"
                   onClick={handleSendAdminUnlockRequest}
                   disabled={resetLoading || user?.appLockResetRequested}
-                  className="w-full py-3 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-black text-xs rounded-2xl transition cursor-pointer shadow-md flex items-center justify-center gap-2 disabled:opacity-60"
+                  className="w-full py-2.5 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-black text-xs rounded-2xl transition cursor-pointer shadow-xs flex items-center justify-center gap-2 disabled:opacity-60"
                 >
-                  {resetLoading ? (
-                    <span className="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
-                  ) : user?.appLockResetRequested ? (
+                  {user?.appLockResetRequested ? (
                     <>
                       <Check className="w-4 h-4" />
-                      আনলক রিকোয়েস্ট এডমিনের কাছে পাঠানো আছে
+                      {isBn ? 'আনলক রিকোয়েস্ট এডমিনের কাছে পাঠানো আছে' : 'Unlock Request Sent to Admin'}
                     </>
                   ) : (
                     <>
                       <ShieldCheck className="w-4 h-4" />
-                      📩 এডমিনের কাছে আনলক রিকোয়েস্ট পাঠান
+                      {isBn ? '📩 এডমিনের কাছে আনলক রিকোয়েস্ট পাঠান' : '📩 Send Unlock Request to Admin'}
                     </>
                   )}
                 </button>
 
-                {/* Primary Action 2: WhatsApp Hotline */}
-                <a
-                  href={`https://wa.me/8801865911728?text=${encodeURIComponent(`হ্যালো এডমিন, আমার অ্যাপ লক পাসওয়ার্ড পরিবর্তন/আনলক করা প্রয়োজন।\nসদস্য নাম: ${user?.name || ''}\nসদস্য আইডি: ${user?.memberId || ''}\nমোবাইল: ${user?.phone || ''}`)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-extrabold text-xs rounded-2xl transition cursor-pointer shadow-md flex items-center justify-center gap-2"
-                >
-                  💬 হোয়াটসঅ্যাপে সরাসরি মেসেজ দিন (01865911728)
-                </a>
-
                 <button
                   type="button"
-                  onClick={() => setShowForgotPinModal(false)}
+                  onClick={() => { setShowForgotPinModal(false); setResetOtpSent(false); setResetOtpCode(''); }}
                   className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-2xl transition cursor-pointer"
                 >
-                  বন্ধ করুন
+                  {isBn ? 'বন্ধ করুন' : 'Close'}
                 </button>
               </div>
             </motion.div>

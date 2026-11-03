@@ -266,11 +266,17 @@ const DashboardBannerSlider = React.memo(function DashboardBannerSlider({
   bannerVal?: number;
 }) {
   const [currentAdSlide, setCurrentAdSlide] = useState(0);
+  const [failedUrls, setFailedUrls] = useState<Record<string, boolean>>({});
 
   // NOTE: User requested top YouTube 16:9 banner MUST NOT auto-rotate!
   // Customers can manually drag / swipe or click indicators to switch, but it will not slide automatically.
 
-  if (!activeSliders || activeSliders.length === 0) return null;
+  const validSliders = (activeSliders || []).filter((url) => url && !failedUrls[url]);
+
+  if (validSliders.length === 0) return null;
+
+  const safeIndex = currentAdSlide % validSliders.length;
+  const activeUrl = validSliders[safeIndex];
 
   let className = "relative w-full bg-slate-100 overflow-hidden border-t border-b border-slate-200/50 shadow-3xs";
   let style: React.CSSProperties = {};
@@ -301,23 +307,24 @@ const DashboardBannerSlider = React.memo(function DashboardBannerSlider({
   }
 
   const handlePrev = () => {
-    setCurrentAdSlide((prev) => (prev - 1 + activeSliders.length) % activeSliders.length);
+    setCurrentAdSlide((prev) => (prev - 1 + validSliders.length) % validSliders.length);
   };
 
   const handleNext = () => {
-    setCurrentAdSlide((prev) => (prev + 1) % activeSliders.length);
+    setCurrentAdSlide((prev) => (prev + 1) % validSliders.length);
   };
 
   return (
     <div className="w-full">
       <div className={className} style={style}>
         <img 
-          src={activeSliders[currentAdSlide]} 
+          src={activeUrl} 
           alt="Advertisement Banner" 
           className="w-full h-full object-cover select-none transition-opacity duration-300"
           loading="lazy"
+          onError={() => setFailedUrls((prev) => ({ ...prev, [activeUrl]: true }))}
         />
-        {activeSliders.length > 1 && (
+        {validSliders.length > 1 && (
           <>
             {/* Manual Navigation Arrows */}
             <button
@@ -339,14 +346,14 @@ const DashboardBannerSlider = React.memo(function DashboardBannerSlider({
 
             {/* Navigation Dots */}
             <div className="absolute bottom-3 right-4 flex items-center gap-1 bg-black/25 px-2.5 py-1.5 rounded-full backdrop-blur-xs z-10">
-              {activeSliders.map((_, index) => (
+              {validSliders.map((_, index) => (
                 <button
                   key={index}
                   type="button"
                   aria-label={'Slide ' + (index + 1)}
                   onClick={() => setCurrentAdSlide(index)}
                   className={'h-1.5 rounded-full transition-all duration-300 cursor-pointer ' + (
-                    currentAdSlide === index ? 'w-4.5 bg-[#00a884]' : 'w-1.5 bg-white/60 hover:bg-white'
+                    safeIndex === index ? 'w-4.5 bg-[#00a884]' : 'w-1.5 bg-white/60 hover:bg-white'
                   )}
                 />
               ))}
@@ -366,9 +373,10 @@ const DashboardBottomBannerSlider = React.memo(function DashboardBottomBannerSli
   onBannerClick?: () => void;
 }) {
   const [currentSlide, setCurrentSlide] = useState(0);
+  const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
 
   const customBanners = appConfig?.bottomBanners && appConfig.bottomBanners.length > 0
-    ? appConfig.bottomBanners
+    ? appConfig.bottomBanners.filter((b) => b?.image && !failedImages[b.image])
     : null;
 
   // Auto-rotate every 4 seconds as explicitly requested by user
@@ -378,10 +386,11 @@ const DashboardBottomBannerSlider = React.memo(function DashboardBottomBannerSli
       setCurrentSlide((prev) => (prev + 1) % customBanners.length);
     }, 4000);
     return () => clearInterval(timer);
-  }, [customBanners]);
+  }, [customBanners?.length]);
 
   if (customBanners && customBanners.length > 0) {
-    const activeItem = customBanners[currentSlide];
+    const safeIdx = currentSlide % customBanners.length;
+    const activeItem = customBanners[safeIdx];
     return (
       <div className="px-2 sm:px-3 py-2">
         <div 
@@ -393,6 +402,7 @@ const DashboardBottomBannerSlider = React.memo(function DashboardBottomBannerSli
             alt={activeItem.title || "BNB Bottom Banner"} 
             className="w-full h-full object-cover select-none"
             loading="lazy"
+            onError={() => setFailedImages((prev) => ({ ...prev, [activeItem.image]: true }))}
           />
           {customBanners.length > 1 && (
             <div className="absolute bottom-2.5 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-emerald-950/80 px-3 py-1 rounded-full backdrop-blur-xs border border-emerald-800/50">
@@ -405,7 +415,7 @@ const DashboardBottomBannerSlider = React.memo(function DashboardBottomBannerSli
                     setCurrentSlide(idx);
                   }}
                   className={`h-1.5 rounded-full transition-all duration-300 ${
-                    currentSlide === idx ? 'w-5 bg-emerald-400' : 'w-1.5 bg-white/70'
+                    safeIdx === idx ? 'w-5 bg-emerald-400' : 'w-1.5 bg-white/70'
                   }`}
                 />
               ))}
@@ -414,6 +424,11 @@ const DashboardBottomBannerSlider = React.memo(function DashboardBottomBannerSli
         </div>
       </div>
     );
+  }
+
+  // If custom banners were configured in appConfig but failed to load, hide the broken block
+  if (appConfig?.bottomBanners && appConfig.bottomBanners.length > 0) {
+    return null;
   }
 
   // Default Bottom Promo Banner matching user's uploaded image 1791971457389.jpg

@@ -19,14 +19,20 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
-        // Apply pure white window background BEFORE super.onCreate so there is zero black or green frame
+        final int splashGreen = Color.parseColor("#06822e");
+        // Apply branded green window & system bar background BEFORE super.onCreate so there is zero white or black frame
         try {
             Window preWindow = getWindow();
             if (preWindow != null) {
-                preWindow.setBackgroundDrawable(new ColorDrawable(Color.WHITE));
+                preWindow.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+                preWindow.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS);
+                preWindow.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
+                preWindow.setStatusBarColor(splashGreen);
+                preWindow.setNavigationBarColor(splashGreen);
+                preWindow.setBackgroundDrawable(new ColorDrawable(splashGreen));
                 View decor = preWindow.getDecorView();
                 if (decor != null) {
-                    decor.setBackgroundColor(Color.WHITE);
+                    decor.setBackgroundColor(splashGreen);
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         decor.setForceDarkAllowed(false);
                     }
@@ -67,26 +73,26 @@ public class MainActivity extends BridgeActivity {
         try {
             Window window = getWindow();
             if (window != null) {
-                window.setBackgroundDrawable(new ColorDrawable(Color.WHITE));
+                window.setBackgroundDrawable(new ColorDrawable(splashGreen));
                 if (window.getDecorView() != null) {
-                    window.getDecorView().setBackgroundColor(Color.WHITE);
+                    window.getDecorView().setBackgroundColor(splashGreen);
                 }
             }
             if (getBridge() != null && getBridge().getWebView() != null) {
                 WebView webView = getBridge().getWebView();
-                webView.setBackgroundColor(Color.WHITE);
+                webView.setBackgroundColor(splashGreen);
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     webView.setForceDarkAllowed(false);
                 }
                 if (webView.getParent() instanceof View) {
-                    ((View) webView.getParent()).setBackgroundColor(Color.WHITE);
+                    ((View) webView.getParent()).setBackgroundColor(splashGreen);
                 }
 
                 // Purge any stale cached index.html from WebView disk cache
                 SharedPreferences prefs = getSharedPreferences("bnb_native_prefs", Context.MODE_PRIVATE);
-                if (!prefs.getBoolean("cache_purged_v55", false)) {
+                if (!prefs.getBoolean("cache_purged_v56", false)) {
                     webView.clearCache(true);
-                    prefs.edit().putBoolean("cache_purged_v55", true).apply();
+                    prefs.edit().putBoolean("cache_purged_v56", true).apply();
                 }
                 WebSettings settings = webView.getSettings();
                 if (settings != null) {
@@ -106,7 +112,7 @@ public class MainActivity extends BridgeActivity {
             window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS);
             window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
 
-            int darkGreenColor = Color.parseColor("#005a36");
+            int darkGreenColor = Color.parseColor("#06822e");
             window.setStatusBarColor(darkGreenColor);
             window.setNavigationBarColor(darkGreenColor);
 
