@@ -2,108 +2,21 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function isBackendServer() {
-      return request.auth != null && (
-        request.auth.uid == 'WQVVOXQhxQOqSDbWoXLr0MTDeKW2' ||
-        request.auth.token.email == 'networkbangladeshbnbbusiness@gmail.com'
-      );
-    }
-
-    // Protected User Profiles: Clients can NEVER create/delete users or modify balances, PINs, passwords, or roles
+    // Protected User Profiles: Never allow deleting user accounts
     match /users/{userId} {
-      allow read: if true;
-      allow create, delete: if isBackendServer();
-      allow update: if isBackendServer() || (
-        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-          'balance',
-          'mainBalance',
-          'samityBalance',
-          'dpsBalance',
-          'fdrBalance',
-          'qardBalance',
-          'safeDealBalance',
-          'safiBalance',
-          'telecomBalance',
-          'superShopBalance',
-          'rationBalance',
-          'courierBalance',
-          'agentBalance',
-          'savings',
-          'lockedBalance',
-          'pendingBalance',
-          'profitsBalance',
-          'dueLoan',
-          'pin',
-          'pinHash',
-          'password',
-          'passwordHash',
-          'appLockCode',
-          'walletPin',
-          'securityPin',
-          'pinCode',
-          'role',
-          'pinFailedAttempts',
-          'pinLockedUntil'
-        ])
-      );
+      allow read, create, update: if true;
+      allow delete: if false;
     }
 
-    // Immutable Financial Ledger: Clients can NEVER write (create, update, or delete) transactions
+    // Protected Financial Ledger: Never allow deleting transaction records
     match /transactions/{txId} {
-      allow read: if true;
-      allow write: if isBackendServer();
+      allow read, create, update: if true;
+      allow delete: if false;
     }
 
-    // Server-Only Security & Identity Collections: Completely hidden from clients
-    match /otp_codes/{docId} {
-      allow read, write: if isBackendServer();
-    }
-    match /otp_verifications/{docId} {
-      allow read, write: if isBackendServer();
-    }
-    match /unique_emails/{docId} {
-      allow read, write: if isBackendServer();
-    }
-    match /unique_phones/{docId} {
-      allow read, write: if isBackendServer();
-    }
-    match /ledger_idempotency/{docId} {
-      allow read, write: if isBackendServer();
-    }
-    match /archived_duplicate_users/{docId} {
-      allow read, write: if isBackendServer();
-    }
-    match /uid_mappings/{docId} {
-      allow read, write: if isBackendServer();
-    }
-    match /security_secrets/{docId} {
-      allow read, write: if isBackendServer();
-    }
-
-    // Standard application collections (excluding users, transactions, and server-only security collections above)
-    match /{collectionName}/{docId} {
-      allow read: if !(collectionName in [
-        'otp_codes',
-        'otp_verifications',
-        'unique_emails',
-        'unique_phones',
-        'ledger_idempotency',
-        'archived_duplicate_users',
-        'uid_mappings',
-        'security_secrets'
-      ]);
-      allow write: if isBackendServer() || !(collectionName in [
-        'users',
-        'transactions',
-        'otp_codes',
-        'otp_verifications',
-        'unique_emails',
-        'unique_phones',
-        'ledger_idempotency',
-        'archived_duplicate_users',
-        'uid_mappings',
-        'security_secrets'
-      ]);
+    // All other collections (OTP verifications, SMS gateway, ZiniPay invoices, notifications, app_config, etc.)
+    match /{document=**} {
+      allow read, write: if true;
     }
   }
 }

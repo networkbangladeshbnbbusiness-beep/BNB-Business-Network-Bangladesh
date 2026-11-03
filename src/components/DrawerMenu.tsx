@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { User, AppConfig } from '../types';
-import { maskSecretPhone, getMembershipCategory } from '../lib/memberUtils';
+import { maskSecretPhone, getMembershipCategory, verifyPinUniversal, hashPinClientAsync, convertBengaliToEnglishDigits } from '../lib/memberUtils';
 import { 
   X, 
   Lock, 
@@ -365,25 +365,43 @@ export const DrawerMenu = React.memo(function DrawerMenu({
     e.preventDefault();
     setFeedback(null);
 
-    if (oldPin !== user.pin) {
-      setFeedback({ type: 'error', message: 'বর্তমান পিন নম্বরটি সঠিক নয়।' });
-      return;
-    }
+    const cleanOldPin = convertBengaliToEnglishDigits(oldPin).trim();
+    const cleanNewPin = convertBengaliToEnglishDigits(newPin).trim();
+    const cleanConfirmPin = convertBengaliToEnglishDigits(confirmPin).trim();
 
-    if (newPin.length !== 4 || !/^\d+$/.test(newPin)) {
+    if (cleanNewPin.length !== 4 || !/^\d{4}$/.test(cleanNewPin)) {
       setFeedback({ type: 'error', message: 'নতুন পিন অবশ্যই 4 ডিজিটের সংখ্যা হতে হবে।' });
       return;
     }
 
-    if (newPin !== confirmPin) {
+    if (cleanNewPin !== cleanConfirmPin) {
       setFeedback({ type: 'error', message: 'নতুন পিন এবং নিশ্চিত পিন মেলেনি।' });
       return;
     }
 
     setIsSubmitting(true);
     try {
+      const checkRes = await verifyPinUniversal(user.uid, user.email || '', cleanOldPin);
+      if (!checkRes.verified && (!user.pin || cleanOldPin !== user.pin)) {
+        setFeedback({ type: 'error', message: 'বর্তমান পিন নম্বরটি সঠিক নয়।' });
+        setIsSubmitting(false);
+        return;
+      }
+
+      const newPinHash = await hashPinClientAsync(cleanNewPin);
       const userRef = doc(db, 'users', user.uid);
-      await updateDoc(userRef, { pin: newPin });
+      await updateDoc(userRef, {
+        pinHash: newPinHash,
+        pinSet: true,
+        forcePinResetOnNextLogin: false,
+        pinFailedAttempts: 0,
+        pinLockedUntil: 0,
+        updatedAt: new Date().toISOString()
+      });
+      try {
+        sessionStorage.setItem('amb_verified_pin', cleanNewPin);
+        localStorage.setItem('amb_user_pin', cleanNewPin);
+      } catch (e) {}
       setFeedback({ type: 'success', message: 'সিকিউরিটি পিন নম্বরটি সফলভাবে পরিবর্তন করা হয়েছে!' });
       setOldPin('');
       setNewPin('');

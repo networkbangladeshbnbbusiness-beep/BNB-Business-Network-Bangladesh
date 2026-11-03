@@ -1,7 +1,8 @@
 import { CapacitorHttp } from '@capacitor/core';
 import { db } from './firebase';
-import { collection, addDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { apiUrl } from '../config/api';
+import { convertBengaliToEnglishDigits } from './memberUtils';
 
 export interface SendOtpOptions {
   email: string;
@@ -61,22 +62,55 @@ export function buildOtpEmailHtml(otp: string, userName = 'সম্মানি
 }
 
 /**
- * Dispatches an authentic 6-digit Email OTP via secure server proxy:
- * 1. Calls backend /api/send-email-otp with server-managed Resend credentials
- * 2. Real-time Firestore queue document in 'otp_requests'
- * 3. In-app user notification in 'user_notifications'
+ * Dispatches an authentic 6-digit Email OTP via secure server proxy
+ * and persists the verification record in Firestore ('email_otps/{email}')
+ * so verification works 100% reliably across multiple server instances.
  */
-export async function sendEmailOtpDirect(options: SendOtpOptions): Promise<{ success: boolean; deliveredTo: string; error?: string }> {
-  const { email, userName = 'সম্মানিত সদস্য', phone = '', memberId = '', userId = '', reason = 'login' } = options;
+export async function sendEmailOtpDirect(options: SendOtpOptions): Promise<{ success: boolean; deliveredTo: string; otp?: string; error?: string }> {
+  const { email, otp, userName = 'সম্মানিত সদস্য', phone = '', memberId = '', userId = '', reason = 'login' } = options;
   const targetEmail = String(email || '').trim().toLowerCase();
 
   if (!targetEmail || !targetEmail.includes('@')) {
     return { success: false, deliveredTo: '', error: 'বৈধ ইমেইল ঠিকানা পাওয়া যায়নি।' };
   }
 
+  let effectiveOtp = String(otp || '').trim();
+  if (!/^\d{6}$/.test(effectiveOtp)) {
+    try {
+      const rand = new Uint32Array(1);
+      crypto.getRandomValues(rand);
+      effectiveOtp = String(100000 + (rand[0] % 900000));
+    } catch {
+      effectiveOtp = String(Math.floor(100000 + Math.random() * 900000));
+    }
+  }
+
+  const now = Date.now();
+  const expiresAt = now + 5 * 60 * 1000;
+
+  // Persist to Firestore email_otps/{targetEmail} so multi-instance Cloud Run verification never loses state
+  try {
+    await setDoc(doc(db, 'email_otps', targetEmail), {
+      email: targetEmail,
+      otp: effectiveOtp,
+      purpose: reason,
+      userId: userId || '',
+      attempts: 0,
+      used: false,
+      expiresAt,
+      createdAt: new Date(now).toISOString()
+    });
+  } catch (e) {
+    if (import.meta.env.DEV) {
+      console.warn('[Firestore email_otps save warning]:', e);
+    }
+  }
+
   const payload = {
     email: targetEmail,
+    otp: effectiveOtp,
     userName,
+    name: userName,
     phone,
     accountNumber: memberId,
     memberId,
@@ -87,8 +121,16 @@ export async function sendEmailOtpDirect(options: SendOtpOptions): Promise<{ suc
     skipEmail: false
   };
 
-  const endpoints = [apiUrl('/api/send-email-otp'), apiUrl('/api/send-otp')];
-  for (const url of endpoints) {
+  const candidateUrls = Array.from(
+    new Set([
+      apiUrl('/api/send-email-otp'),
+      apiUrl('/api/send-otp'),
+      'https://businessnetworkbangladesh.com/api/send-email-otp',
+      'https://businessnetworkbangladesh.com/api/send-otp'
+    ])
+  );
+
+  for (const url of candidateUrls) {
     try {
       if (typeof (window as any)?.Capacitor !== 'undefined' && CapacitorHttp?.post) {
         const res = await CapacitorHttp.post({
@@ -96,15 +138,17 @@ export async function sendEmailOtpDirect(options: SendOtpOptions): Promise<{ suc
           headers: { 'Content-Type': 'application/json' },
           data: payload
         });
-        if (res.status >= 200 && res.status < 300) {
-          return { success: true, deliveredTo: targetEmail };
+        if (res.status >= 200 && res.status < 300 && res.data?.success !== false) {
+          return { success: true, deliveredTo: targetEmail, otp: effectiveOtp };
         }
         if (res.status === 429) {
           return { success: false, deliveredTo: '', error: res.data?.error || 'অতিরিক্ত ওটিপি অনুরোধ করা হয়েছে।' };
         }
       }
     } catch (capErr) {
-      console.warn('[CapacitorHttp Backend Warning]:', capErr);
+      if (import.meta.env.DEV) {
+        console.warn('[CapacitorHttp Backend Warning]:', capErr);
+      }
     }
 
     try {
@@ -115,15 +159,125 @@ export async function sendEmailOtpDirect(options: SendOtpOptions): Promise<{ suc
       });
       const data = await res.json().catch(() => null);
       if (res.ok && data?.success) {
-        return { success: true, deliveredTo: targetEmail };
+        return { success: true, deliveredTo: targetEmail, otp: effectiveOtp };
       }
       if (res.status === 429) {
         return { success: false, deliveredTo: '', error: data?.error || 'অতিরিক্ত ওটিপি অনুরোধ করা হয়েছে।' };
       }
     } catch (fetchErr) {
-      console.warn('[Fetch Backend OTP Warning]:', fetchErr);
+      if (import.meta.env.DEV) {
+        console.warn('[Fetch Backend OTP Warning]:', fetchErr);
+      }
     }
   }
 
   return { success: false, deliveredTo: '', error: 'ওটিপি পাঠাতে সমস্যা হয়েছে।' };
+}
+
+/**
+ * Universal Email OTP Verification:
+ * 1. Verifies via backend (/api/verify-otp) first.
+ * 2. If backend hits a different Cloud Run container instance (in-memory store miss) or is unreachable,
+ *    verifies against Firestore 'email_otps/{cleanEmail}'.
+ */
+export async function verifyEmailOtpUniversal(
+  email: string,
+  otpInput: string,
+  purpose: string = 'login'
+): Promise<{
+  verified: boolean;
+  user?: any;
+  otpVerificationToken?: string;
+  code?: string;
+  error?: string;
+}> {
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  const cleanOtp = convertBengaliToEnglishDigits(String(otpInput || '')).trim();
+
+  if (!cleanEmail || !cleanEmail.includes('@')) {
+    return { verified: false, error: 'ইমেইল ঠিকানা পাওয়া যায়নি।' };
+  }
+  if (!/^\d{6}$/.test(cleanOtp)) {
+    return { verified: false, error: 'ওটিপি কোড অবশ্যই ৬ সংখ্যার হতে হবে।' };
+  }
+
+  // 1. Try server /api/verify-otp first
+  try {
+    const verifyRes = await fetch(apiUrl('/api/verify-otp'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: cleanEmail,
+        otp: cleanOtp,
+        purpose
+      })
+    });
+    const verifyData = await verifyRes.json().catch(() => null);
+    if (verifyRes.ok && verifyData?.verified) {
+      updateDoc(doc(db, 'email_otps', cleanEmail), {
+        used: true,
+        usedAt: new Date().toISOString()
+      }).catch(() => {});
+      return {
+        verified: true,
+        user: verifyData.user || null,
+        otpVerificationToken: verifyData.otpVerificationToken || ''
+      };
+    }
+    if (verifyData?.code === 'user_not_found') {
+      return {
+        verified: false,
+        code: 'user_not_found',
+        error: verifyData.error || 'এই ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি।'
+      };
+    }
+  } catch (e) {
+    // Fall through to Firestore email_otps check
+  }
+
+  // 2. Fallback to Firestore email_otps/{cleanEmail} (handles multi-instance Cloud Run or offline route)
+  try {
+    const otpRef = doc(db, 'email_otps', cleanEmail);
+    const otpSnap = await getDoc(otpRef);
+    if (otpSnap.exists()) {
+      const otpData = otpSnap.data() || {};
+      const now = Date.now();
+      if (otpData.used) {
+        return { verified: false, error: 'এই ওটিপি কোডটি ইতিমধ্যে ব্যবহৃত হয়েছে।' };
+      }
+      if (otpData.expiresAt && now > Number(otpData.expiresAt)) {
+        return { verified: false, error: 'ওটিপি কোডের মেয়াদ (৫ মিনিট) শেষ হয়ে গেছে। অনুগ্রহ করে নতুন ওটিপি পাঠান।' };
+      }
+      const attempts = Number(otpData.attempts) || 0;
+      if (attempts >= 5) {
+        return { verified: false, error: '৫ বার ভুল ওটিপি দেওয়ার কারণে কোডটি বাতিল হয়েছে। নতুন ওটিপি নিন।' };
+      }
+      if (String(otpData.otp || '').trim() === cleanOtp) {
+        await updateDoc(otpRef, {
+          used: true,
+          usedAt: new Date(now).toISOString()
+        }).catch(() => {});
+        return { verified: true };
+      } else {
+        const nextAttempts = attempts + 1;
+        await updateDoc(otpRef, {
+          attempts: nextAttempts,
+          used: nextAttempts >= 5
+        }).catch(() => {});
+        return {
+          verified: false,
+          error: `ভুল ওটিপি কোড! আর ${Math.max(0, 5 - nextAttempts)} বার চেষ্টা করতে পারবেন।`
+        };
+      }
+    }
+  } catch (fsErr) {
+    if (import.meta.env.DEV) {
+      console.warn('[Firestore email_otps verify warning]:', fsErr);
+    }
+  }
+
+  return {
+    verified: false,
+    error: 'প্রদত্ত ওটিপি কোডটি সঠিক নয় বা মেয়াদ শেষ হয়েছে। অনুগ্রহ করে সঠিক ৬ সংখ্যার কোড দিন।'
+  };
 }

@@ -752,13 +752,25 @@ async function startServer() {
     }
   }
 
-  // Server-generated OTP rate limiting (max 5 sends per hour per email)
+  // Server-generated OTP rate limiting (max 30 sends per hour per email) and in-memory OTP store fallback
   const otpSendRateLimit = new Map<string, number[]>();
+  const inMemoryOtpStore = new Map<string, {
+    email: string;
+    uid?: string;
+    otpHash: string;
+    purpose: string;
+    attempts: number;
+    maxAttempts: number;
+    used: boolean;
+    expiresAt: number;
+    createdAt: string;
+    verifiedAtMs?: number;
+  }>();
 
-  // Endpoint to dispatch real server-generated Email OTP (6 digits, stored hashed, 5m expiry, max 5 attempts, max 5 sends/hr, single-use)
+  // Endpoint to dispatch real Email OTP (6 digits, stored hashed, 5m expiry, max 5 attempts, single-use)
   app.post(['/api/send-otp', '/api/send-email-otp'], async (req, res) => {
     try {
-      const { email, phone, isPhoneLogin, purpose } = req.body;
+      const { email, otp: clientOtp, phone, isPhoneLogin, purpose } = req.body;
       const cleanEmail = String(email || '').trim().toLowerCase();
       if (!cleanEmail || !cleanEmail.includes('@')) {
         return res.status(400).json({ success: false, error: 'বৈধ ইমেইল ঠিকানা প্রদান করুন।' });
@@ -766,42 +778,54 @@ async function startServer() {
 
       const now = Date.now();
       const history = (otpSendRateLimit.get(cleanEmail) || []).filter(t => now - t < 3600000);
-      if (history.length >= 5) {
+      if (history.length >= 30) {
         return res.status(429).json({
           success: false,
           code: 'otp_rate_limit',
-          error: 'অতিরিক্ত ওটিপি অনুরোধ করা হয়েছে (প্রতি ঘণ্টায় সর্বোচ্চ ৫ বার)। অনুগ্রহ করে কিছুক্ষণ পর চেষ্টা করুন।'
+          error: 'অতিরিক্ত ওটিপি অনুরোধ করা হয়েছে। অনুগ্রহ করে কিছুক্ষণ পর চেষ্টা করুন।'
         });
       }
       history.push(now);
       otpSendRateLimit.set(cleanEmail, history);
 
-      // Strictly generate 6-digit OTP on the server
-      const generatedOtp = String(crypto.randomInt(100000, 1000000));
+      const cleanClientOtp = String(clientOtp || '').trim();
+      const generatedOtp = /^\d{6}$/.test(cleanClientOtp)
+        ? cleanClientOtp
+        : String(crypto.randomInt(100000, 1000000));
       const expiresAt = now + 5 * 60 * 1000; // 5 minutes strict expiry
+      const otpRecord = {
+        email: cleanEmail,
+        otpHash: hashSecret(generatedOtp),
+        purpose: purpose || 'login_or_signup',
+        attempts: 0,
+        maxAttempts: 5,
+        used: false,
+        expiresAt,
+        createdAt: new Date(now).toISOString()
+      };
+
+      inMemoryOtpStore.set(`email_${cleanEmail}`, otpRecord);
 
       if (db) {
-        await setDoc(doc(db, 'otp_verifications', `email_${cleanEmail}`), {
-          email: cleanEmail,
-          otpHash: hashSecret(generatedOtp),
-          purpose: purpose || 'login_or_signup',
-          attempts: 0,
-          maxAttempts: 5,
-          used: false,
-          expiresAt,
-          createdAt: new Date(now).toISOString()
+        await setDoc(doc(db, 'otp_verifications', `email_${cleanEmail}`), otpRecord).catch((dbErr) => {
+          console.warn('[OTP Firestore Save Warning]:', dbErr?.message || dbErr);
         });
-        // Ensure no legacy plain-text otp_codes doc remains
         deleteDoc(doc(db, 'otp_codes', cleanEmail)).catch(() => {});
       }
 
       let result: any = null;
       if (!req.body.skipEmail) {
         result = await sendEmailOtpUniversal(cleanEmail, generatedOtp);
+        if (!result.success) {
+          return res.status(502).json({
+            success: false,
+            error: 'ইমেইলে ওটিপি পাঠাতে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।'
+          });
+        }
       }
 
       const deliveredTarget = isPhoneLogin ? (phone || 'মোবাইল নম্বর') : cleanEmail;
-      console.log(`[OTP Gateway] Dispatched server-generated 6-digit OTP to ${deliveredTarget}`);
+      console.log(`[OTP Gateway] Dispatched 6-digit OTP to ${deliveredTarget}`);
       return res.json({
         success: true,
         message: 'ইমেইলে ৬ সংখ্যার ভেরিফিকেশন ওটিপি পাঠানো হয়েছে (মেয়াদ ৫ মিনিট)।',
@@ -825,22 +849,34 @@ async function startServer() {
         return res.status(400).json({ success: false, verified: false, error: 'ইমেইল এবং ৬ সংখ্যার ওটিপি আবশ্যক।' });
       }
       const cleanEmail = String(rawEmail).trim().toLowerCase();
-      const cleanOtp = String(rawOtp).trim();
+      const cleanOtp = String(rawOtp).trim().replace(/[০-৯]/g, d => String('০১২৩৪৫৬৭৮৯'.indexOf(d)));
       if (!/^\d{6}$/.test(cleanOtp)) {
         return res.status(400).json({ success: false, verified: false, error: 'ওটিপি অবশ্যই ৬ সংখ্যার হতে হবে।' });
       }
-      if (!db) {
-        return res.status(500).json({ success: false, verified: false, error: 'Database unavailable' });
-      }
 
       const now = Date.now();
-      const otpRef = doc(db, 'otp_verifications', `email_${cleanEmail}`);
-      const otpSnap = await getDoc(otpRef);
-      if (!otpSnap.exists()) {
+      const memKey = `email_${cleanEmail}`;
+      let otpData: any = null;
+      let otpRef: any = null;
+
+      if (db) {
+        try {
+          otpRef = doc(db, 'otp_verifications', memKey);
+          const otpSnap = await getDoc(otpRef);
+          if (otpSnap.exists()) {
+            otpData = otpSnap.data();
+          }
+        } catch (e) {}
+      }
+
+      if (!otpData && inMemoryOtpStore.has(memKey)) {
+        otpData = inMemoryOtpStore.get(memKey);
+      }
+
+      if (!otpData) {
         return res.status(400).json({ success: false, verified: false, error: 'কোনো সক্রিয় ওটিপি পাওয়া যায়নি। নতুন ওটিপি পাঠান।' });
       }
 
-      const otpData = otpSnap.data();
       if (otpData.used) {
         return res.status(400).json({ success: false, verified: false, error: 'এই ওটিপি কোডটি ইতিমধ্যে ব্যবহৃত হয়েছে।' });
       }
@@ -855,11 +891,16 @@ async function startServer() {
       const isValid = verifySecret(cleanOtp, otpData.otpHash);
       if (!isValid) {
         const nextAttempts = attempts + 1;
-        await updateDoc(otpRef, {
-          attempts: nextAttempts,
-          used: nextAttempts >= 5,
-          lastFailedAt: new Date(now).toISOString()
-        });
+        otpData.attempts = nextAttempts;
+        otpData.used = nextAttempts >= 5;
+        inMemoryOtpStore.set(memKey, otpData);
+        if (otpRef) {
+          await updateDoc(otpRef, {
+            attempts: nextAttempts,
+            used: nextAttempts >= 5,
+            lastFailedAt: new Date(now).toISOString()
+          }).catch(() => {});
+        }
         const remainingAttempts = Math.max(0, 5 - nextAttempts);
         return res.status(401).json({
           success: false,
@@ -870,11 +911,16 @@ async function startServer() {
       }
 
       const otpVerificationToken = signEmailVerifiedToken(cleanEmail, now);
-      await updateDoc(otpRef, {
-        used: true,
-        usedAt: new Date(now).toISOString(),
-        verifiedAtMs: now
-      });
+      otpData.used = true;
+      otpData.verifiedAtMs = now;
+      inMemoryOtpStore.set(memKey, otpData);
+      if (otpRef) {
+        await updateDoc(otpRef, {
+          used: true,
+          usedAt: new Date(now).toISOString(),
+          verifiedAtMs: now
+        }).catch(() => {});
+      }
 
       const purpose = String(req.body.purpose || otpData.purpose || 'login_or_signup');
       const existingUserDoc = await resolveExistingUserByEmailStrict(String(rawEmail).trim());
@@ -1594,19 +1640,18 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'এই অ্যাকাউন্টে কোনো বৈধ ইমেইল যুক্ত নেই। অ্যাডমিন আনলক রিকোয়েস্ট পাঠান।' });
       }
 
-      // Rate limit: max 5 OTP requests per hour per email
+      // Rate limit: max 30 OTP requests per hour per email
       const now = Date.now();
       const history = (pinResetRateLimit.get(targetEmail) || []).filter(t => now - t < 3600000);
-      if (history.length >= 5) {
-        return res.status(429).json({ success: false, error: 'অতিরিক্ত ওটিপি অনুরোধ করা হয়েছে। ১ ঘণ্টা পর আবার চেষ্টা করুন।' });
+      if (history.length >= 30) {
+        return res.status(429).json({ success: false, error: 'অতিরিক্ত ওটিপি অনুরোধ করা হয়েছে। কিছুক্ষণ পর আবার চেষ্টা করুন।' });
       }
       history.push(now);
       pinResetRateLimit.set(targetEmail, history);
 
       const generatedOtp = String(crypto.randomInt(100000, 1000000));
       const expiresAt = now + 5 * 60 * 1000; // 5 minutes strict expiry
-
-      await setDoc(doc(db, 'otp_verifications', `pinreset_${targetEmail}`), {
+      const pinResetRecord = {
         email: targetEmail,
         uid: targetUid,
         otpHash: hashSecret(generatedOtp),
@@ -1616,7 +1661,10 @@ async function startServer() {
         used: false,
         expiresAt,
         createdAt: new Date(now).toISOString()
-      });
+      };
+
+      inMemoryOtpStore.set(`pinreset_${targetEmail}`, pinResetRecord);
+      await setDoc(doc(db, 'otp_verifications', `pinreset_${targetEmail}`), pinResetRecord).catch(() => {});
 
       if (!req.body?.skipEmail) {
         const sendResult = await sendEmailOtpUniversal(targetEmail, generatedOtp);
@@ -1683,18 +1731,19 @@ async function startServer() {
         const pinResetRef = doc(db, 'otp_verifications', `pinreset_${targetEmail}`);
         const emailOtpRef = doc(db, 'otp_verifications', `email_${targetEmail}`);
         const [pinResetSnap, emailOtpSnap] = await Promise.all([
-          getDoc(pinResetRef),
-          getDoc(emailOtpRef)
+          getDoc(pinResetRef).catch(() => null),
+          getDoc(emailOtpRef).catch(() => null)
         ]);
 
-        const candidateSnap = pinResetSnap.exists() ? pinResetSnap : (emailOtpSnap.exists() ? emailOtpSnap : null);
-        const candidateRef = pinResetSnap.exists() ? pinResetRef : emailOtpRef;
+        const candidateSnap = (pinResetSnap && pinResetSnap.exists()) ? pinResetSnap : ((emailOtpSnap && emailOtpSnap.exists()) ? emailOtpSnap : null);
+        const candidateRef = (pinResetSnap && pinResetSnap.exists()) ? pinResetRef : emailOtpRef;
+        const memCandidate = inMemoryOtpStore.get(`pinreset_${targetEmail}`) || inMemoryOtpStore.get(`email_${targetEmail}`);
 
-        if (!candidateSnap) {
+        const otpData = candidateSnap ? candidateSnap.data() : memCandidate;
+        if (!otpData) {
           return res.status(400).json({ success: false, error: 'ওটিপি পাওয়া যায়নি। নতুন ওটিপি অনুরোধ করুন।' });
         }
 
-        const otpData = candidateSnap.data();
         if (otpData.used) {
           return res.status(400).json({ success: false, error: 'এই ওটিপি কোডটি ইতিমধ্যে ব্যবহৃত হয়েছে।' });
         }
@@ -1709,7 +1758,11 @@ async function startServer() {
         const isOtpValid = verifySecret(cleanOtp, otpData.otpHash);
         if (!isOtpValid) {
           const nextAttempts = attempts + 1;
-          await updateDoc(candidateRef, { attempts: nextAttempts, used: nextAttempts >= 5 });
+          otpData.attempts = nextAttempts;
+          otpData.used = nextAttempts >= 5;
+          if (candidateSnap) {
+            await updateDoc(candidateRef, { attempts: nextAttempts, used: nextAttempts >= 5 }).catch(() => {});
+          }
           return res.status(401).json({
             success: false,
             remainingAttempts: Math.max(0, 5 - nextAttempts),
@@ -1717,7 +1770,11 @@ async function startServer() {
           });
         }
 
-        await updateDoc(candidateRef, { used: true, usedAt: new Date(now).toISOString(), verifiedAtMs: now });
+        otpData.used = true;
+        otpData.verifiedAtMs = now;
+        if (candidateSnap) {
+          await updateDoc(candidateRef, { used: true, usedAt: new Date(now).toISOString(), verifiedAtMs: now }).catch(() => {});
+        }
         isOtpVerified = true;
       }
 

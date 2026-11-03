@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, AppConfig } from '../types';
-import { maskSecretPhone, convertBengaliToEnglishDigits, verifyUserPin, findUserInFirestoreByPhone } from '../lib/memberUtils';
+import { maskSecretPhone, convertBengaliToEnglishDigits, verifyUserPin, findUserInFirestoreByPhone, verifyPinUniversal, hashPinClientAsync } from '../lib/memberUtils';
+import { sendEmailOtpDirect, verifyEmailOtpUniversal } from '../lib/emailOtpService';
 import { db } from '../lib/firebase';
 import { doc, getDoc, collection, query, where, getDocs, updateDoc, setDoc, onSnapshot } from 'firebase/firestore';
 import { KeyRound, LogOut, ArrowRight, ShieldAlert, Check, X, Search, Lock, ShieldCheck, Eye, EyeOff, LockKeyhole } from 'lucide-react';
@@ -117,6 +118,16 @@ export default function LockScreen({
   const localizeLockError = (raw: string | undefined, fallbackBn: string, fallbackEn: string): string => {
     if (!raw) return isBn ? fallbackBn : fallbackEn;
     let msg = raw.trim();
+    const lower = msg.toLowerCase();
+    if (
+      lower.includes('api route not found') ||
+      lower.includes('route_not_found') ||
+      lower.includes('cannot post') ||
+      lower.includes('failed to fetch') ||
+      lower.includes('networkerror')
+    ) {
+      return isBn ? fallbackBn : fallbackEn;
+    }
     if (isBn) {
       msg = msg.replace(/\s*\(no account,\s*please sign up\)/gi, '');
       msg = msg.replace(/no account,\s*please sign up/gi, 'কোনো অ্যাকাউন্ট পাওয়া যায়নি, অনুগ্রহ করে নিবন্ধন করুন।');
@@ -186,6 +197,21 @@ export default function LockScreen({
     }
   }, [user, isBn]);
 
+  const resolveUserEmailForReset = async (): Promise<string> => {
+    if (user?.email && user.email.includes('@')) {
+      return user.email.trim().toLowerCase();
+    }
+    if (user?.uid) {
+      try {
+        const snap = await getDoc(doc(db, 'users', user.uid));
+        if (snap.exists() && snap.data()?.email) {
+          return String(snap.data().email).trim().toLowerCase();
+        }
+      } catch (e) {}
+    }
+    return '';
+  };
+
   const handleRequestPinResetOtp = async () => {
     setResetError('');
     setResetMessage('');
@@ -195,26 +221,63 @@ export default function LockScreen({
     }
     setResetLoading(true);
     try {
-      const resp = await fetch(apiUrl('/api/auth/request-pin-reset-otp'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uid: user.uid, email: user.email || '' })
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok || !data.success) {
+      const targetEmail = await resolveUserEmailForReset();
+      let sentSuccess = false;
+      let displayEmail = targetEmail;
+
+      try {
+        const resp = await fetch(apiUrl('/api/auth/request-pin-reset-otp'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uid: user.uid, email: targetEmail || user.email || '' })
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (resp.ok && data.success) {
+          sentSuccess = true;
+          displayEmail = data.maskedEmail || targetEmail || user.email || '';
+        }
+      } catch (e) {}
+
+      if (!sentSuccess && targetEmail) {
+        const otpRes = await sendEmailOtpDirect({
+          email: targetEmail,
+          otp: '',
+          userName: user.name || 'সম্মানিত সদস্য',
+          phone: user.phone || '',
+          memberId: user.memberId || '',
+          userId: user.uid,
+          reason: 'forgot_password'
+        });
+        if (otpRes.success) {
+          sentSuccess = true;
+          const parts = targetEmail.split('@');
+          displayEmail = parts.length === 2 && parts[0].length > 2
+            ? `${parts[0].slice(0, 2)}••••${parts[0].slice(-1)}@${parts[1]}`
+            : targetEmail;
+        } else {
+          setResetError(
+            localizeLockError(
+              otpRes.error,
+              'ইমেইলে ওটিপি পাঠানো যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।',
+              'Failed to send OTP to email. Please try again.'
+            )
+          );
+          return;
+        }
+      }
+
+      if (!sentSuccess) {
         setResetError(
-          localizeLockError(
-            data.error,
-            'ইমেইলে ওটিপি পাঠানো যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।',
-            'Failed to send OTP to email. Please try again.'
-          )
+          isBn
+            ? 'ইমেইলে ওটিপি পাঠানো যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।'
+            : 'Failed to send OTP to email. Please try again.'
         );
       } else {
         setResetOtpSent(true);
         setResetMessage(
           isBn
-            ? `আপনার নিবন্ধিত ইমেইলে (${data.maskedEmail || user.email || ''}) 6 সংখ্যার ভেরিফিকেশন কোড পাঠানো হয়েছে।`
-            : `A 6-digit verification code has been sent to your registered email (${data.maskedEmail || user.email || ''}).`
+            ? `আপনার নিবন্ধিত ইমেইলে (${displayEmail}) 6 সংখ্যার ভেরিফিকেশন কোড পাঠানো হয়েছে।`
+            : `A 6-digit verification code has been sent to your registered email (${displayEmail}).`
         );
       }
     } catch (err: any) {
@@ -261,21 +324,62 @@ export default function LockScreen({
         return;
       }
 
-      const resp = await fetch(apiUrl('/api/auth/confirm-pin-reset-otp'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uid: user.uid,
-          email: user.email || '',
-          otp: cleanOtp,
-          newPin: cleanNewPin
-        })
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok || !data.success) {
+      const targetEmail = await resolveUserEmailForReset();
+      let resetConfirmed = false;
+      let resetErrText = '';
+
+      try {
+        const resp = await fetch(apiUrl('/api/auth/confirm-pin-reset-otp'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            uid: user.uid,
+            email: targetEmail || user.email || '',
+            otp: cleanOtp,
+            newPin: cleanNewPin
+          })
+        });
+        const data = await resp.json().catch(() => ({}));
+        const isRouteNotFound =
+          resp.status === 404 ||
+          data?.code === 'route_not_found' ||
+          String(data?.error || '').toLowerCase().includes('route not found');
+
+        if (resp.ok && data.success) {
+          resetConfirmed = true;
+        } else if (!isRouteNotFound && resp.status < 500) {
+          resetErrText = data?.error || '';
+        }
+      } catch (e) {}
+
+      if (!resetConfirmed && !resetErrText && targetEmail) {
+        const verifyData = await verifyEmailOtpUniversal(targetEmail, cleanOtp, 'pin_reset');
+        if (verifyData.verified) {
+          const pinHash = await hashPinClientAsync(cleanNewPin);
+          await updateDoc(doc(db, 'users', user.uid), {
+            pinHash,
+            pin: cleanNewPin,
+            appLockCode: cleanNewPin,
+            pinSet: true,
+            pinFailedAttempts: 0,
+            pinLockedUntil: 0,
+            forcePinResetOnNextLogin: false,
+            updatedAt: new Date().toISOString()
+          });
+          try {
+            sessionStorage.setItem('amb_verified_pin', cleanNewPin);
+            localStorage.setItem('amb_user_pin', cleanNewPin);
+          } catch (e) {}
+          resetConfirmed = true;
+        } else {
+          resetErrText = verifyData.error || '';
+        }
+      }
+
+      if (!resetConfirmed) {
         setResetError(
           localizeLockError(
-            data.error,
+            resetErrText,
             'পিন রিসেট ব্যর্থ হয়েছে। ওটিপি যাচাই করুন।',
             'PIN reset failed. Please verify the OTP.'
           )
@@ -432,18 +536,9 @@ export default function LockScreen({
     setLoading(true);
 
     try {
-      const resp = await fetch(apiUrl('/api/auth/verify-pin'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uid: user?.uid || '',
-          email: user?.email || '',
-          pin: targetPin
-        })
-      });
-      const data = await resp.json().catch(() => ({}));
+      const data = await verifyPinUniversal(user?.uid || '', user?.email || '', targetPin);
 
-      if (resp.ok && data.verified) {
+      if (data.verified) {
         clearLockoutState(userIdentifier);
         if (isLogoutMode) {
           onLogout();
@@ -514,18 +609,9 @@ export default function LockScreen({
     setLoading(true);
 
     try {
-      const resp = await fetch(apiUrl('/api/auth/verify-pin'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uid: user?.uid || '',
-          email: user?.email || '',
-          pin: cleanInput
-        })
-      });
-      const data = await resp.json().catch(() => ({}));
+      const data = await verifyPinUniversal(user?.uid || '', user?.email || '', cleanInput);
 
-      if (resp.ok && data.verified) {
+      if (data.verified) {
         clearLockoutState(userIdentifier);
         setSecretCodeInput('');
         setLoading(false);

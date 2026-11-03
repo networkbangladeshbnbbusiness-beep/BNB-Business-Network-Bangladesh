@@ -45,7 +45,7 @@ import {
   runTransaction
 } from 'firebase/firestore';
 import { User, Transaction, Notice, Offer, BapReport, BapGroup, BapAdminRequest, AppConfig, Product, UserNotification, CompanyFundAccount, AdminBroadcastLog, QardRuleItem, QardConfig, PhoneChangeRequest, SamityPolicyConfig, SamityFineTier, MemberNominee } from '../types';
-import { normalizeMemberId, formatBanglaAmount, normalizePhoneNumber, findUserInFirestoreByPhone, getNextSequentialMemberId, deleteUserCompletelyFromDatabase, convertBengaliToEnglishDigits } from '../lib/memberUtils';
+import { normalizeMemberId, formatBanglaAmount, normalizePhoneNumber, findUserInFirestoreByPhone, getNextSequentialMemberId, deleteUserCompletelyFromDatabase, convertBengaliToEnglishDigits, hashPinClientAsync } from '../lib/memberUtils';
 import { sortTransactionsNewestFirst, getTxTime } from '../lib/transactionUtils';
 import { saveAppConfig, DEFAULT_QARD_CONFIG } from '../lib/config';
 import { BNBLogo } from './BNBLogo';
@@ -4684,6 +4684,7 @@ export default function AdminPanel(props: AdminPanelProps) {
     }
 
     try {
+      const defaultResetPinHash = await hashPinClientAsync('1234');
       if (targetUid) {
         const userRef = doc(db, 'users', targetUid);
         await updateDoc(userRef, {
@@ -4694,6 +4695,11 @@ export default function AdminPanel(props: AdminPanelProps) {
           appLockResetStatus: 'approved',
           appLockResetRequestedAt: null as any,
           pin: '1234',
+          pinHash: defaultResetPinHash,
+          pinSet: true,
+          forcePinResetOnNextLogin: false,
+          pinFailedAttempts: 0,
+          pinLockedUntil: 0,
           appLockCode: '',
           appLockResetApprovedAt: new Date().toISOString()
         }).catch(async () => {
@@ -4708,6 +4714,11 @@ export default function AdminPanel(props: AdminPanelProps) {
                 pinResetRequested: false,
                 appLockResetStatus: 'approved',
                 pin: '1234',
+                pinHash: defaultResetPinHash,
+                pinSet: true,
+                forcePinResetOnNextLogin: false,
+                pinFailedAttempts: 0,
+                pinLockedUntil: 0,
                 appLockCode: ''
               });
             }
@@ -4727,6 +4738,11 @@ export default function AdminPanel(props: AdminPanelProps) {
             pinResetRequested: false,
             appLockResetStatus: 'approved',
             pin: '1234',
+            pinHash: defaultResetPinHash,
+            pinSet: true,
+            forcePinResetOnNextLogin: false,
+            pinFailedAttempts: 0,
+            pinLockedUntil: 0,
             appLockCode: ''
           });
         }
@@ -7919,13 +7935,18 @@ export default function AdminPanel(props: AdminPanelProps) {
       const userDocId = 'user_' + (normP || cleanNewDigits || Date.now().toString());
       const finalMemberId = newMemberId.trim() || await getNextSequentialMemberId();
 
-      const newUser: User = {
+      const cleanNewMemberPin = convertBengaliToEnglishDigits(newMemberPin.trim() || '1234').replace(/\D/g, '').slice(0, 4) || '1234';
+      const newMemberPinHash = await hashPinClientAsync(cleanNewMemberPin);
+
+      const newUser: any = {
         uid: userDocId,
         name: newMemberName.trim(),
         phone: newMemberPhone.trim(),
         normalizedPhone: normP,
         memberId: finalMemberId,
-        pin: newMemberPin.trim(),
+        pin: cleanNewMemberPin,
+        pinHash: newMemberPinHash,
+        pinSet: true,
         role: newRole,
         balance: Number(newMainsBal) || 0,
         telecomBalance: Number(newTelBal) || 0,
@@ -9079,7 +9100,10 @@ export default function AdminPanel(props: AdminPanelProps) {
         return String(val).trim();
       };
 
-      const updatedFields = {
+      const rawEditedPin = convertBengaliToEnglishDigits(safeTrim(editPin)).replace(/\D/g, '');
+      const editedPinHash = rawEditedPin.length === 4 ? await hashPinClientAsync(rawEditedPin) : undefined;
+
+      const updatedFields: Record<string, any> = {
         name: safeTrim(editUserName) || editingUser.name || 'সদস্য',
         memberId: safeTrim(editUserMemberId) || editingUser.memberId || '',
         phone: safeTrim(editUserPhone) || editingUser.phone || '',
@@ -9091,7 +9115,8 @@ export default function AdminPanel(props: AdminPanelProps) {
         savings: parseBal(editSavings),
         dpsBalance: parseBal(editSavings),
         dueLoan: parseBal(editDueLoan),
-        pin: safeTrim(editPin) || editingUser.pin || '1234',
+        pin: rawEditedPin || editingUser.pin || '1234',
+        ...(editedPinHash ? { pinHash: editedPinHash, pinSet: true, forcePinResetOnNextLogin: false, pinFailedAttempts: 0, pinLockedUntil: 0 } : {}),
         status: editUserStatus || 'active',
         role: editRole || 'user',
         subAdminPermissions: editSubAdminPermissions || [],

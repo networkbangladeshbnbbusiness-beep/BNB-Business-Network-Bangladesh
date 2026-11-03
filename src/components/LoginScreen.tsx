@@ -6,9 +6,9 @@ import { User, AppConfig } from '../types';
 import { ShieldCheck, UserPlus, LogIn, Mail, KeyRound, Globe, Lock, ArrowRight, AlertTriangle, CheckCircle2, User as UserIcon, Sparkles, Moon, Sun, ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { BNBLogo } from './BNBLogo';
-import { normalizeMemberId, normalizePhoneNumber, saveUserToLocalBackup, convertBengaliToEnglishDigits, getNextSequentialMemberId, getClientDeviceId, getDeviceFingerprint, findUserInFirestoreByPhone } from '../lib/memberUtils';
+import { normalizeMemberId, normalizePhoneNumber, saveUserToLocalBackup, convertBengaliToEnglishDigits, getNextSequentialMemberId, getClientDeviceId, getDeviceFingerprint, findUserInFirestoreByPhone, hashPinClientAsync } from '../lib/memberUtils';
 import ForgotPasswordModal from './ForgotPasswordModal';
-import { sendEmailOtpDirect } from '../lib/emailOtpService';
+import { sendEmailOtpDirect, verifyEmailOtpUniversal } from '../lib/emailOtpService';
 import { apiUrl } from '../config/api';
 
 interface LoginScreenProps {
@@ -114,6 +114,9 @@ export default function LoginScreen({
   const localizeErrorText = (rawError: string | undefined, fallbackBn: string, fallbackEn: string): string => {
     if (!rawError) return isBn ? fallbackBn : fallbackEn;
     const lower = rawError.toLowerCase();
+    if (lower.includes('api route not found') || lower.includes('route_not_found') || lower.includes('cannot post')) {
+      return isBn ? fallbackBn : fallbackEn;
+    }
     if (lower.includes('already') || lower.includes('exists') || rawError.includes('ইতিপূর্বে') || rawError.includes('আগেই')) {
       if (lower.includes('phone') || lower.includes('mobile') || rawError.includes('মোবাইল') || rawError.includes('ফোন')) {
         return isBn
@@ -199,7 +202,7 @@ export default function LoginScreen({
     }
   };
 
-  // Authoritative server lookup helper (exact email -> lowercase -> uid_mappings)
+  // Authoritative server lookup helper (exact email -> lowercase -> uid_mappings) with direct Firestore fallback
   const fetchUserFast = async (rawInput: string, silent = false): Promise<User | null> => {
     const trimmedInput = rawInput.trim();
     if (!trimmedInput || !trimmedInput.includes('@')) return null;
@@ -215,6 +218,7 @@ export default function LoginScreen({
 
     const lookupPromise = (async (): Promise<User | null> => {
       const requestUrl = apiUrl('/api/auth/locate-user');
+      let serverRespondedAuthoritatively = false;
       try {
         const res = await fetch(requestUrl, {
           method: 'POST',
@@ -236,11 +240,53 @@ export default function LoginScreen({
           cacheLocatedUser(cleanInput, located);
           return located;
         }
+        if (res.ok && data.found === false) {
+          serverRespondedAuthoritatively = true;
+        }
       } catch (e) {
         if (import.meta.env.DEV && !silent) {
           console.debug('[Auth] Lookup error:', e);
         }
       }
+
+      // Direct Firestore lookup fallback (if server returned 404/500 or user has legacy uppercase email)
+      try {
+        const exactSnap = await getDocs(query(collection(db, 'users'), where('email', '==', trimmedInput), limit(5)));
+        const activeExact = exactSnap.docs.filter(d => !d.data()?.isArchivedDuplicate);
+        if (activeExact.length > 0) {
+          const docSnap = activeExact[0];
+          const located = { ...(docSnap.data() as User), uid: docSnap.id };
+          cacheLocatedUser(cleanInput, located);
+          return located;
+        }
+
+        if (trimmedInput !== cleanInput) {
+          const lowerSnap = await getDocs(query(collection(db, 'users'), where('email', '==', cleanInput), limit(5)));
+          const activeLower = lowerSnap.docs.filter(d => !d.data()?.isArchivedDuplicate);
+          if (activeLower.length > 0) {
+            const docSnap = activeLower[0];
+            const located = { ...(docSnap.data() as User), uid: docSnap.id };
+            cacheLocatedUser(cleanInput, located);
+            return located;
+          }
+        }
+
+        if (!serverRespondedAuthoritatively) {
+          const mapSnap = await getDocs(query(collection(db, 'uid_mappings'), where('email', '==', cleanInput), limit(5)));
+          if (!mapSnap.empty) {
+            const primaryUid = mapSnap.docs[0].data()?.primaryUid;
+            if (primaryUid) {
+              const pDoc = await getDoc(doc(db, 'users', String(primaryUid)));
+              if (pDoc.exists() && !pDoc.data()?.isArchivedDuplicate) {
+                const located = { ...(pDoc.data() as User), uid: pDoc.id };
+                cacheLocatedUser(cleanInput, located);
+                return located;
+              }
+            }
+          }
+        }
+      } catch (fsErr) {}
+
       return null;
     })();
 
@@ -555,19 +601,14 @@ export default function LoginScreen({
         return;
       }
 
-      // Authoritative Server-Side OTP Verification (on login, server resolves existing user: exact -> lowercase -> uid_mappings)
-      const verifyRes = await fetch(apiUrl('/api/verify-otp'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: rawEnteredEmail || targetEmail,
-          otp: code,
-          purpose: isRegistering ? 'signup' : 'login'
-        })
-      });
-      const verifyData = await verifyRes.json().catch(() => null);
+      // Authoritative OTP Verification (with multi-instance Firestore email_otps fallback)
+      const verifyData = await verifyEmailOtpUniversal(
+        rawEnteredEmail || targetEmail,
+        code,
+        isRegistering ? 'signup' : 'login'
+      );
 
-      if (!isRegistering && (verifyRes.status === 404 || verifyData?.code === 'user_not_found')) {
+      if (!isRegistering && verifyData?.code === 'user_not_found') {
         setError(
           isBn
             ? 'এই ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি। নতুন অ্যাকাউন্ট খুলতে অনুগ্রহ করে নিবন্ধন করুন।'
@@ -576,7 +617,7 @@ export default function LoginScreen({
         return;
       }
 
-      if (!verifyRes.ok || !verifyData?.verified) {
+      if (!verifyData?.verified) {
         setError(
           localizeErrorText(
             verifyData?.error,

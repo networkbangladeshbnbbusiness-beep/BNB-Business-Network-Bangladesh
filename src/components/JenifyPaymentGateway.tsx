@@ -246,6 +246,49 @@ export const JenifyPaymentGateway: React.FC<JenifyPaymentGatewayProps> = ({
     } catch (err: any) {
       // Background polling silent catch
     }
+
+    // Direct Firestore fallback check on zinipay_invoices / deposits for instant real-time completion
+    try {
+      const invId = activeInvoice.invoice_id || activeInvoice.val_id;
+      if (invId) {
+        const invSnap = await getDoc(doc(db, 'zinipay_invoices', invId)).catch(() => null);
+        const depSnap = (!invSnap || !invSnap.exists()) && activeInvoice.val_id
+          ? await getDoc(doc(db, 'deposits', activeInvoice.val_id)).catch(() => null)
+          : null;
+        const docData = (invSnap && invSnap.exists()) ? invSnap.data() : ((depSnap && depSnap.exists()) ? depSnap.data() : null);
+
+        if (docData && (docData.status === 'completed' || docData.status === 'success')) {
+          const confirmedAmount = Number(docData.amount || activeInvoice.amount);
+          const trxId = docData.transactionId || docData.trxId || invId;
+          let newBal = Number(docData.newBalance || 0);
+          if (!newBal && targetUserId) {
+            const uSnap = await getDoc(doc(db, 'users', targetUserId)).catch(() => null);
+            if (uSnap && uSnap.exists()) {
+              newBal = Number(uSnap.data()?.balance || uSnap.data()?.mainBalance || 0);
+            }
+          }
+
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+          }
+          try { await Browser.close(); } catch (e) {}
+          try { localStorage.removeItem('amb_pending_zinipay_invoice'); } catch (e) {}
+
+          setSuccessDetails({ amount: confirmedAmount, newBalance: newBal, trxId });
+          setStep('success');
+          if (onPaymentSuccess) {
+            onPaymentSuccess(confirmedAmount, newBal, trxId);
+          }
+          try {
+            window.dispatchEvent(new CustomEvent('bnb_payment_completed_on_return', {
+              detail: { amount: confirmedAmount, newBalance: newBal, trxId }
+            }));
+            window.dispatchEvent(new CustomEvent('bnb_reveal_dashboard_balance'));
+          } catch (e) {}
+        }
+      }
+    } catch (fsErr) {}
   };
 
   // On mount: Check for recently saved pending invoice and verify status immediately

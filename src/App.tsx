@@ -6,7 +6,7 @@ import { User, AppConfig, getEffectiveBalance } from './types';
 import { processUserSamitySavingsAutoDeduction, getUnpaidSamityMonths } from './lib/samitySavingsEngine';
 import { loadAppConfig, DEFAULT_CONFIG } from './lib/config';
 import { executeHistoryRetentionCleanup } from './lib/retentionCleanup';
-import { normalizeMemberId, findUserInFirestoreByPhone, convertBengaliToEnglishDigits, getClientDeviceId, getDeviceFingerprint, isSameDevice, getNextSequentialMemberId, getDeviceBoundUser, saveUserToLocalBackup } from './lib/memberUtils';
+import { normalizeMemberId, findUserInFirestoreByPhone, convertBengaliToEnglishDigits, getClientDeviceId, getDeviceFingerprint, isSameDevice, getNextSequentialMemberId, getDeviceBoundUser, saveUserToLocalBackup, verifyPinUniversal } from './lib/memberUtils';
 import { restoreAndSeedDatabase } from './lib/databaseSeeder';
 import LoginScreen from './components/LoginScreen';
 import LockScreen from './components/LockScreen';
@@ -1687,7 +1687,7 @@ export default function App() {
               resolvedUserData = { ...(userSnap.data() as User), uid: userSnap.id };
             } else {
               try {
-                const resUid = await fetch('/api/auth/resolve-uid', {
+                const resUid = await fetch(apiUrl('/api/auth/resolve-uid'), {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ uid: targetUid })
@@ -1792,8 +1792,14 @@ export default function App() {
         uData.savings = effectiveSav;
         uData.dpsBalance = effectiveSav;
 
+        const sessionPin = uData.pin || (typeof window !== 'undefined' ? (sessionStorage.getItem('amb_verified_pin') || localStorage.getItem('amb_user_pin') || '') : '');
+        if (sessionPin) {
+          uData.pin = sessionPin;
+        }
+
         setCurrentUser((prev) => {
           if (!prev) return null;
+          const resolvedPin = uData.pin || prev.pin || '';
           // Skip redundant full-app re-render if core profile/balance fields are identical
           if (
             prev.balance === uData.balance &&
@@ -1804,13 +1810,13 @@ export default function App() {
             prev.role === uData.role &&
             prev.status === uData.status &&
             prev.samityStatus === uData.samityStatus &&
-            prev.pin === uData.pin &&
+            prev.pin === resolvedPin &&
             prev.name === uData.name &&
             (prev as any).avatarUrl === (uData as any).avatarUrl
           ) {
             return prev;
           }
-          return { ...prev, ...uData, uid: snap.id };
+          return { ...prev, ...uData, pin: resolvedPin, uid: snap.id };
         });
       }
     }, (err) => {
@@ -2112,13 +2118,8 @@ export default function App() {
     }
 
     try {
-      const resp = await fetch('/api/auth/verify-pin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uid: currentUser.uid, pin: cleanInput })
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (resp.ok && data.verified) {
+      const data = await verifyPinUniversal(currentUser.uid, currentUser.email || '', cleanInput);
+      if (data.verified) {
         localStorage.setItem('amb_admin_mode', 'true');
         setAdminOpen(true);
         setShowAdminPinModal(false);
@@ -2216,6 +2217,10 @@ export default function App() {
                 user={currentUser} 
                 onUnlock={() => {
                   sessionStorage.setItem('amb_session_unlocked', 'true');
+                  const verifiedPin = sessionStorage.getItem('amb_verified_pin') || localStorage.getItem('amb_user_pin') || '';
+                  if (verifiedPin) {
+                    setCurrentUser(prev => prev ? { ...prev, pin: verifiedPin } : null);
+                  }
                   setIsLocked(false);
                   setIsLoggingOutLock(false);
                   if (currentUser.role === 'admin' || currentUser.uid === 'admin_master') {

@@ -1207,6 +1207,441 @@ export function getEffectivePin(user: User | any): string {
   return '';
 }
 
+function sha256Blocks(msg: Uint8Array): Uint8Array {
+  const K = new Uint32Array([
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+  ]);
+  const rotr = (n: number, x: number) => (x >>> n) | (x << (32 - n));
+  const len = msg.length;
+  const bitLenHi = Math.floor((len * 8) / 0x100000000);
+  const bitLenLo = (len * 8) >>> 0;
+  const padLen = ((len + 9 + 63) & ~63);
+  const padded = new Uint8Array(padLen);
+  padded.set(msg);
+  padded[len] = 0x80;
+  const view = new DataView(padded.buffer);
+  view.setUint32(padLen - 8, bitLenHi, false);
+  view.setUint32(padLen - 4, bitLenLo, false);
+
+  let h0 = 0x6a09e667, h1 = 0xbb67ae85, h2 = 0x3c6ef372, h3 = 0xa54ff53a;
+  let h4 = 0x510e527f, h5 = 0x9b05688c, h6 = 0x1f83d9ab, h7 = 0x5be0cd19;
+  const W = new Uint32Array(64);
+
+  for (let offset = 0; offset < padLen; offset += 64) {
+    for (let i = 0; i < 16; i++) {
+      W[i] = view.getUint32(offset + i * 4, false);
+    }
+    for (let i = 16; i < 64; i++) {
+      const s0 = rotr(7, W[i - 15]) ^ rotr(18, W[i - 15]) ^ (W[i - 15] >>> 3);
+      const s1 = rotr(17, W[i - 2]) ^ rotr(19, W[i - 2]) ^ (W[i - 2] >>> 10);
+      W[i] = (W[i - 16] + s0 + W[i - 7] + s1) >>> 0;
+    }
+    let a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
+    for (let i = 0; i < 64; i++) {
+      const S1 = rotr(6, e) ^ rotr(11, e) ^ rotr(25, e);
+      const ch = (e & f) ^ (~e & g);
+      const temp1 = (h + S1 + ch + K[i] + W[i]) >>> 0;
+      const S0 = rotr(2, a) ^ rotr(13, a) ^ rotr(22, a);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const temp2 = (S0 + maj) >>> 0;
+      h = g; g = f; f = e; e = (d + temp1) >>> 0;
+      d = c; c = b; b = a; a = (temp1 + temp2) >>> 0;
+    }
+    h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0; h3 = (h3 + d) >>> 0;
+    h4 = (h4 + e) >>> 0; h5 = (h5 + f) >>> 0; h6 = (h6 + g) >>> 0; h7 = (h7 + h) >>> 0;
+  }
+
+  const out = new Uint8Array(32);
+  const outView = new DataView(out.buffer);
+  outView.setUint32(0, h0, false); outView.setUint32(4, h1, false);
+  outView.setUint32(8, h2, false); outView.setUint32(12, h3, false);
+  outView.setUint32(16, h4, false); outView.setUint32(20, h5, false);
+  outView.setUint32(24, h6, false); outView.setUint32(28, h7, false);
+  return out;
+}
+
+function hmacSha256(key: Uint8Array, data: Uint8Array): Uint8Array {
+  const blockSize = 64;
+  let k = key;
+  if (k.length > blockSize) {
+    k = sha256Blocks(k);
+  }
+  const oKeyPad = new Uint8Array(blockSize);
+  const iKeyPad = new Uint8Array(blockSize);
+  for (let i = 0; i < blockSize; i++) {
+    const kb = i < k.length ? k[i] : 0;
+    oKeyPad[i] = kb ^ 0x5c;
+    iKeyPad[i] = kb ^ 0x36;
+  }
+  const innerInput = new Uint8Array(blockSize + data.length);
+  innerInput.set(iKeyPad);
+  innerInput.set(data, blockSize);
+  const innerHash = sha256Blocks(innerInput);
+  const outerInput = new Uint8Array(blockSize + 32);
+  outerInput.set(oKeyPad);
+  outerInput.set(innerHash, blockSize);
+  return sha256Blocks(outerInput);
+}
+
+async function pbkdf2Sha256OneIter(passwordBytes: Uint8Array, saltBytes: Uint8Array, dkLen: number): Promise<Uint8Array> {
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    try {
+      const key = await crypto.subtle.importKey('raw', passwordBytes, { name: 'PBKDF2' }, false, ['deriveBits']);
+      const bits = await crypto.subtle.deriveBits(
+        { name: 'PBKDF2', salt: saltBytes, iterations: 1, hash: 'SHA-256' },
+        key,
+        dkLen * 8
+      );
+      return new Uint8Array(bits);
+    } catch (e) {
+      // Fallback to pure JS HMAC-SHA256 below
+    }
+  }
+  const blocksNeeded = Math.ceil(dkLen / 32);
+  const out = new Uint8Array(blocksNeeded * 32);
+  const saltWithIndex = new Uint8Array(saltBytes.length + 4);
+  saltWithIndex.set(saltBytes);
+  const view = new DataView(saltWithIndex.buffer);
+  for (let i = 1; i <= blocksNeeded; i++) {
+    view.setUint32(saltBytes.length, i, false);
+    const u1 = hmacSha256(passwordBytes, saltWithIndex);
+    out.set(u1, (i - 1) * 32);
+  }
+  return out.subarray(0, dkLen);
+}
+
+/**
+ * RFC 7914 scrypt implementation matching Node crypto.scryptSync(pin, salt, 64) defaults (N=16384, r=8, p=1, dkLen=64).
+ */
+export async function scryptHexAsync(password: string, salt: string): Promise<string> {
+  const N = 16384, r = 8, p = 1, dkLen = 64;
+  const enc = new TextEncoder();
+  const passBytes = enc.encode(password);
+  const saltBytes = enc.encode(salt);
+
+  const B = await pbkdf2Sha256OneIter(passBytes, saltBytes, p * 128 * r);
+  const B32 = new Uint32Array(B.buffer, B.byteOffset, B.byteLength / 4);
+  const V = new Uint32Array(N * 32 * r);
+  const XY = new Uint32Array(64 * r);
+  const x = new Uint32Array(16);
+
+  function salsa20_8(B16: Uint32Array) {
+    for (let i = 0; i < 16; i++) x[i] = B16[i];
+    for (let i = 8; i > 0; i -= 2) {
+      let u = (x[0] + x[12]) | 0; x[4] ^= (u << 7) | (u >>> 25);
+      u = (x[4] + x[0]) | 0; x[8] ^= (u << 9) | (u >>> 23);
+      u = (x[8] + x[4]) | 0; x[12] ^= (u << 13) | (u >>> 19);
+      u = (x[12] + x[8]) | 0; x[0] ^= (u << 18) | (u >>> 14);
+
+      u = (x[5] + x[1]) | 0; x[9] ^= (u << 7) | (u >>> 25);
+      u = (x[9] + x[5]) | 0; x[13] ^= (u << 9) | (u >>> 23);
+      u = (x[13] + x[9]) | 0; x[1] ^= (u << 13) | (u >>> 19);
+      u = (x[1] + x[13]) | 0; x[5] ^= (u << 18) | (u >>> 14);
+
+      u = (x[10] + x[6]) | 0; x[14] ^= (u << 7) | (u >>> 25);
+      u = (x[14] + x[10]) | 0; x[2] ^= (u << 9) | (u >>> 23);
+      u = (x[2] + x[14]) | 0; x[6] ^= (u << 13) | (u >>> 19);
+      u = (x[6] + x[2]) | 0; x[10] ^= (u << 18) | (u >>> 14);
+
+      u = (x[15] + x[11]) | 0; x[3] ^= (u << 7) | (u >>> 25);
+      u = (x[3] + x[15]) | 0; x[7] ^= (u << 9) | (u >>> 23);
+      u = (x[7] + x[3]) | 0; x[11] ^= (u << 13) | (u >>> 19);
+      u = (x[11] + x[7]) | 0; x[15] ^= (u << 18) | (u >>> 14);
+
+      u = (x[0] + x[3]) | 0; x[1] ^= (u << 7) | (u >>> 25);
+      u = (x[1] + x[0]) | 0; x[2] ^= (u << 9) | (u >>> 23);
+      u = (x[2] + x[1]) | 0; x[3] ^= (u << 13) | (u >>> 19);
+      u = (x[3] + x[2]) | 0; x[0] ^= (u << 18) | (u >>> 14);
+
+      u = (x[5] + x[4]) | 0; x[6] ^= (u << 7) | (u >>> 25);
+      u = (x[6] + x[5]) | 0; x[7] ^= (u << 9) | (u >>> 23);
+      u = (x[7] + x[6]) | 0; x[4] ^= (u << 13) | (u >>> 19);
+      u = (x[4] + x[7]) | 0; x[5] ^= (u << 18) | (u >>> 14);
+
+      u = (x[10] + x[9]) | 0; x[11] ^= (u << 7) | (u >>> 25);
+      u = (x[11] + x[10]) | 0; x[8] ^= (u << 9) | (u >>> 23);
+      u = (x[8] + x[11]) | 0; x[9] ^= (u << 13) | (u >>> 19);
+      u = (x[9] + x[8]) | 0; x[10] ^= (u << 18) | (u >>> 14);
+
+      u = (x[15] + x[14]) | 0; x[12] ^= (u << 7) | (u >>> 25);
+      u = (x[12] + x[15]) | 0; x[13] ^= (u << 9) | (u >>> 23);
+      u = (x[13] + x[12]) | 0; x[14] ^= (u << 13) | (u >>> 19);
+      u = (x[14] + x[13]) | 0; x[15] ^= (u << 18) | (u >>> 14);
+    }
+    for (let i = 0; i < 16; i++) B16[i] = (B16[i] + x[i]) | 0;
+  }
+
+  const X16 = new Uint32Array(16);
+  function blockmix_salsa8(BY: Uint32Array, Yi: number) {
+    for (let i = 0; i < 16; i++) X16[i] = BY[(2 * r - 1) * 16 + i];
+    for (let i = 0; i < 2 * r; i++) {
+      for (let j = 0; j < 16; j++) X16[j] ^= BY[i * 16 + j];
+      salsa20_8(X16);
+      for (let j = 0; j < 16; j++) BY[Yi + i * 16 + j] = X16[j];
+    }
+    for (let i = 0; i < r; i++) {
+      for (let j = 0; j < 16; j++) BY[i * 16 + j] = BY[Yi + (i * 2) * 16 + j];
+    }
+    for (let i = 0; i < r; i++) {
+      for (let j = 0; j < 16; j++) BY[(i + r) * 16 + j] = BY[Yi + (i * 2 + 1) * 16 + j];
+    }
+  }
+
+  const len32 = 32 * r;
+  const Yi = 32 * r;
+  for (let k = 0; k < p; k++) {
+    const Bi = k * len32;
+    for (let i = 0; i < len32; i++) XY[i] = B32[Bi + i];
+    for (let i = 0; i < N; i++) {
+      const vOff = i * len32;
+      for (let j = 0; j < len32; j++) V[vOff + j] = XY[j];
+      blockmix_salsa8(XY, Yi);
+    }
+    for (let i = 0; i < N; i++) {
+      const j = XY[(2 * r - 1) * 16] & (N - 1);
+      const vOff = j * len32;
+      for (let m = 0; m < len32; m++) XY[m] ^= V[vOff + m];
+      blockmix_salsa8(XY, Yi);
+    }
+    for (let i = 0; i < len32; i++) B32[Bi + i] = XY[i];
+  }
+
+  const outBytes = await pbkdf2Sha256OneIter(passBytes, new Uint8Array(B32.buffer, B32.byteOffset, B32.byteLength), dkLen);
+  return Array.from(outBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+export async function hashPinClientAsync(pin: string): Promise<string> {
+  const cleanPin = convertBengaliToEnglishDigits(String(pin)).trim();
+  const saltBytes = new Uint8Array(16);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    crypto.getRandomValues(saltBytes);
+  } else {
+    for (let i = 0; i < 16; i++) saltBytes[i] = Math.floor(Math.random() * 256);
+  }
+  const saltHex = Array.from(saltBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+  const derivedHex = await scryptHexAsync(cleanPin, saltHex);
+  return `scrypt$${saltHex}$${derivedHex}`;
+}
+
+export interface VerifyPinResult {
+  verified: boolean;
+  locked?: boolean;
+  remainingSeconds?: number;
+  remainingAttempts?: number;
+  forcePinReset?: boolean;
+  error?: string;
+}
+
+/**
+ * Universal PIN Verification:
+ * 1. Attempts verification via the backend server (/api/auth/verify-pin).
+ * 2. If the backend endpoint returns 404 (e.g. older production revision on businessnetworkbangladesh.com) or network error,
+ *    automatically verifies against the user's Firestore document using RFC 7914 scrypt (pinHash) and legacy PIN fields.
+ *    NEVER exposes "API route not found" to the user.
+ */
+export async function verifyPinUniversal(uid: string, email: string, inputPin: string): Promise<VerifyPinResult> {
+  const cleanPin = convertBengaliToEnglishDigits(String(inputPin || '')).trim();
+  if (!cleanPin || !/^\d{4}$/.test(cleanPin)) {
+    return {
+      verified: false,
+      error: 'ভুল পিন! সঠিক 4 ডিজিট পিন দিন।'
+    };
+  }
+
+  // Step 1: Try server endpoint first
+  try {
+    const resp = await fetch(apiUrl('/api/auth/verify-pin'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        uid: uid || '',
+        email: email || '',
+        pin: cleanPin
+      })
+    });
+    const data = await resp.json().catch(() => ({}));
+    const rawErr = String(data?.error || '');
+    const isRouteNotFound =
+      resp.status === 404 ||
+      data?.code === 'route_not_found' ||
+      rawErr.toLowerCase().includes('route not found') ||
+      rawErr.toLowerCase().includes('cannot post');
+
+    if (resp.ok && data?.verified === true) {
+      try {
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem('amb_verified_pin', cleanPin);
+          localStorage.setItem('amb_user_pin', cleanPin);
+        }
+      } catch (e) {}
+      return { verified: true };
+    }
+
+    if (!isRouteNotFound && (resp.status === 400 || resp.status === 401 || resp.status === 403 || resp.status === 423)) {
+      return {
+        verified: false,
+        locked: Boolean(data?.locked),
+        remainingSeconds: data?.remainingSeconds,
+        remainingAttempts: data?.remainingAttempts,
+        forcePinReset: Boolean(data?.forcePinReset),
+        error: rawErr || 'ভুল পিন! সঠিক 4 ডিজিট পিন দিন অথবা নিচে পিন রিসেট করুন।'
+      };
+    }
+  } catch (e) {
+    // Network error or unreachable server — fall through to direct Firestore verification
+  }
+
+  // Step 2: Authoritative Firestore verification fallback
+  try {
+    let userSnap: any = null;
+    let targetUid = (uid || '').trim();
+
+    if (targetUid) {
+      const snap = await getDoc(doc(db, 'users', targetUid));
+      if (snap.exists() && !snap.data()?.isArchivedDuplicate) {
+        userSnap = snap;
+      } else {
+        const mapSnap = await getDoc(doc(db, 'uid_mappings', targetUid));
+        if (mapSnap.exists() && mapSnap.data()?.primaryUid) {
+          const primarySnap = await getDoc(doc(db, 'users', String(mapSnap.data().primaryUid)));
+          if (primarySnap.exists()) {
+            userSnap = primarySnap;
+            targetUid = primarySnap.id;
+          }
+        }
+      }
+    }
+
+    if (!userSnap && email && email.includes('@')) {
+      const cleanEmail = email.trim().toLowerCase();
+      const qExact = await getDocs(query(collection(db, 'users'), where('email', '==', email.trim())));
+      const activeExact = qExact.docs.filter(d => !d.data()?.isArchivedDuplicate);
+      if (activeExact.length > 0) {
+        userSnap = activeExact[0];
+        targetUid = userSnap.id;
+      } else {
+        const qLower = await getDocs(query(collection(db, 'users'), where('email', '==', cleanEmail)));
+        const activeLower = qLower.docs.filter(d => !d.data()?.isArchivedDuplicate);
+        if (activeLower.length > 0) {
+          userSnap = activeLower[0];
+          targetUid = userSnap.id;
+        }
+      }
+    }
+
+    if (!userSnap || !userSnap.exists()) {
+      return {
+        verified: false,
+        error: 'অ্যাকাউন্ট পাওয়া যায়নি। অনুগ্রহ করে পুনরায় লগইন করুন।'
+      };
+    }
+
+    const userData = userSnap.data() || {};
+    const now = Date.now();
+    const lockedUntil = Number(userData.pinLockedUntil || 0);
+    if (lockedUntil > now) {
+      const remainingSeconds = Math.ceil((lockedUntil - now) / 1000);
+      return {
+        verified: false,
+        locked: true,
+        remainingSeconds,
+        error: `ভুল পিন দেওয়ার কারণে অ্যাকাউন্ট লক করা হয়েছে। ${Math.ceil(remainingSeconds / 60)} মিনিট পর চেষ্টা করুন অথবা নিচে পিন রিসেট করুন।`
+      };
+    }
+
+    if (userData.forcePinResetOnNextLogin === true) {
+      return {
+        verified: false,
+        forcePinReset: true,
+        error: 'নিরাপত্তা আপডেটের কারণে আপনার অ্যাকাউন্টে প্রবেশের পূর্বে ইমেইল ওটিপি ভেরিফিকেশনের মাধ্যমে নতুন 4 ডিজিট পিন সেট করা বাধ্যতামূলক।'
+      };
+    }
+
+    let matched = false;
+    const storedHash = String(userData.pinHash || '').trim();
+    if (storedHash.startsWith('scrypt$')) {
+      const parts = storedHash.split('$');
+      if (parts.length === 3 && parts[1] && parts[2]) {
+        const computedHex = await scryptHexAsync(cleanPin, parts[1]);
+        if (computedHex === parts[2].toLowerCase()) {
+          matched = true;
+        }
+      }
+    }
+
+    if (!matched) {
+      const legacyCandidates = [
+        userData.pin,
+        userData.appLockCode,
+        userData.walletPin,
+        userData.securityPin,
+        userData.password
+      ];
+      for (const cand of legacyCandidates) {
+        if (cand !== undefined && cand !== null) {
+          const engCand = convertBengaliToEnglishDigits(String(cand)).trim();
+          if (/^\d{4}$/.test(engCand) && engCand === cleanPin) {
+            matched = true;
+            break;
+          }
+        }
+      }
+    }
+
+    if (matched) {
+      const updates: Record<string, any> = {
+        pinFailedAttempts: 0,
+        pinLockedUntil: 0
+      };
+      if (!storedHash.startsWith('scrypt$')) {
+        try {
+          updates.pinHash = await hashPinClientAsync(cleanPin);
+          updates.pinSet = true;
+        } catch (e) {}
+      }
+      await updateDoc(doc(db, 'users', targetUid), updates).catch(() => {});
+      try {
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem('amb_verified_pin', cleanPin);
+          localStorage.setItem('amb_user_pin', cleanPin);
+        }
+      } catch (e) {}
+      return { verified: true };
+    }
+
+    const failedAttempts = (Number(userData.pinFailedAttempts) || 0) + 1;
+    const isNowLocked = failedAttempts >= 5;
+    const newLockedUntil = isNowLocked ? now + 15 * 60 * 1000 : 0;
+    await updateDoc(doc(db, 'users', targetUid), {
+      pinFailedAttempts: failedAttempts,
+      pinLockedUntil: newLockedUntil
+    }).catch(() => {});
+
+    const remainingAttempts = Math.max(0, 5 - failedAttempts);
+    return {
+      verified: false,
+      locked: isNowLocked,
+      remainingSeconds: isNowLocked ? 900 : 0,
+      remainingAttempts,
+      error: isNowLocked
+        ? 'ভুল পিন 5 বার দেওয়া হয়েছে! অ্যাকাউন্ট 15 মিনিটের জন্য লক করা হলো।'
+        : `ভুল পিন! আর মাত্র ${remainingAttempts} বার চেষ্টা করতে পারবেন। পিন ভুলে গেলে নিচে ইমেইল ওটিপি দিয়ে রিসেট করুন।`
+    };
+  } catch (err) {
+    return {
+      verified: false,
+      error: 'পিন যাচাই করতে সমস্যা হয়েছে। ইন্টারনেট সংযোগ চেক করুন।'
+    };
+  }
+}
+
 
 
 

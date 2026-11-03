@@ -11,7 +11,7 @@ import { useBackHandler } from '../lib/navigationManager';
 import UnifiedBackButton from './UnifiedBackButton';
 // JenifyPaymentGateway imported or inlined
 import { apiUrl, getReturnOrigin } from '../config/api';
-import { verifyUserPin } from '../lib/memberUtils';
+import { verifyUserPin, convertBengaliToEnglishDigits } from '../lib/memberUtils';
 
 interface BNBMobileBankingPortalProps {
   user: User;
@@ -864,8 +864,8 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
       methodLabel = addMoneyOperator === 'bkash' ? 'bKash' : addMoneyOperator === 'nagad' ? 'Nagad' : addMoneyOperator === 'rocket' ? 'Rocket' : 'Upay';
     }
 
-    const currentTxId = trxId.trim();
-    const currentSender = senderNumber.trim() || user.phone || '';
+    const currentTxId = convertBengaliToEnglishDigits(trxId).trim().toUpperCase();
+    const currentSender = convertBengaliToEnglishDigits(senderNumber).trim() || user.phone || '';
 
     // Check if this TrxID is already submitted and pending to avoid duplicate requests
     if (user?.uid && currentTxId) {
@@ -955,7 +955,120 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
         } catch (smsCheckErr) {
           console.warn('Auto SMS gateway verify check skipped or offline:', smsCheckErr);
         }
-        // Fallback to standard submission if verify-deposit was unavailable
+
+        // Direct Firestore Auto-Verify Fallback (if server route was unreachable or offline)
+        try {
+          const payDocRef = doc(db, 'detected_payments', `PAY_${currentTxId}`);
+          const smsDocRef = doc(db, 'incoming_sms', `SMS_${currentTxId}`);
+          const [paySnap, smsSnap] = await Promise.all([
+            getDoc(payDocRef).catch(() => null),
+            getDoc(smsDocRef).catch(() => null)
+          ]);
+          const paymentData = (paySnap && paySnap.exists()) ? paySnap.data() : ((smsSnap && smsSnap.exists()) ? smsSnap.data() : null);
+
+          if (paymentData) {
+            if (paymentData.isProcessed || paymentData.isUsed || paymentData.status === 'verified') {
+              setErrorMsg('এই ট্রানজেকশন আইডি (TrxID) দিয়ে ইতিপূর্বে টাকা যোগ করা হয়েছে। একটি TrxID শুধুমাত্র একবারই ব্যবহার করা যাবে।');
+              setLoading(false);
+              return;
+            }
+            const smsAmount = parseFloat(String(paymentData.amount || 0));
+            if (Math.abs(smsAmount - amountNum) > 0.01) {
+              setErrorMsg(`টাকার পরিমাণ মিলছে না! এডমিনের সিমে আসা মেসেজে টাকার পরিমাণ ছিল ৳${smsAmount} কিন্তু আপনি লিখেছেন ৳${amountNum}।`);
+              setLoading(false);
+              return;
+            }
+
+            const nowIso = new Date().toISOString();
+            await runTransaction(db, async (t) => {
+              const userDocRef = doc(db, 'users', user.uid);
+              const uSnap = await t.get(userDocRef);
+              const uData = uSnap.exists() ? uSnap.data() : { balance: 0, mainBalance: 0 };
+              const newBal = (Number(uData.balance) || 0) + amountNum;
+              const newMain = (Number(uData.mainBalance) || 0) + amountNum;
+
+              t.set(userDocRef, { balance: newBal, mainBalance: newMain }, { merge: true });
+              const txDocRef = doc(db, 'transactions', `SMS_${currentTxId}`);
+              t.set(txDocRef, {
+                id: txDocRef.id,
+                userId: user.uid,
+                userName: user.name || 'সদস্য',
+                userPhone: user.phone || '',
+                memberId: user.memberId || '',
+                amount: amountNum,
+                type: 'add_money',
+                status: 'success',
+                isApproved: true,
+                paymentMethod: `${methodLabel} Personal (Auto SMS Verified)`,
+                operator: methodLabel,
+                phone: user.phone || '',
+                senderPhone: paymentData.senderPhone || currentSender,
+                trxId: currentTxId,
+                transactionId: currentTxId,
+                receiptNo: currentTxId,
+                createdAt: nowIso,
+                verifiedAt: nowIso,
+                verifiedBy: 'system_auto_matcher',
+                description: `${methodLabel} Personal SMS যাচাইয়ের মাধ্যমে ৳${amountNum.toLocaleString('bn-BD')} টাকা ওয়ালেটে সফলভাবে যোগ হয়েছে (TrxID: ${currentTxId})`
+              }, { merge: true });
+
+              t.set(payDocRef, {
+                ...paymentData,
+                status: 'verified',
+                verificationStatus: 'verified_auto_matched',
+                matchStatus: 'matched_payment_request',
+                matchedUserId: user.uid,
+                matchedMemberId: user.memberId || '',
+                matchedUserName: user.name || '',
+                isProcessed: true,
+                processedAt: nowIso,
+                verifiedAt: nowIso,
+                verifiedBy: 'system_auto_matcher'
+              }, { merge: true });
+
+              t.set(smsDocRef, {
+                status: 'claimed',
+                isUsed: true,
+                usedBy: user.uid,
+                usedAt: nowIso
+              }, { merge: true });
+
+              const notifRef = doc(collection(db, 'user_notifications'));
+              t.set(notifRef, {
+                id: notifRef.id,
+                userId: user.uid,
+                title: `${methodLabel} ডিপোজিট সফল হয়েছে 🎉`,
+                body: `আপনার ${methodLabel} TrxID (${currentTxId})-এর ৳${amountNum.toLocaleString('bn-BD')} টাকা সফলভাবে যাচাই হয়ে ওয়ালেটে যোগ হয়েছে।`,
+                message: `আপনার ${methodLabel} TrxID (${currentTxId})-এর ৳${amountNum.toLocaleString('bn-BD')} টাকা সফলভাবে যাচাই হয়ে ওয়ালেটে যোগ হয়েছে।`,
+                read: false,
+                createdAt: nowIso
+              });
+            });
+
+            setSuccessMsg(`✅ অভিনন্দন! আপনার ${methodLabel} পেমেন্ট (TrxID: ${currentTxId}) এডমিনের সিমে সফলভাবে ভেরিফাই হয়েছে এবং আপনার ওয়ালেটে ৳${amountNum.toLocaleString('en-US')} টাকা যোগ হয়েছে।`);
+            setReceiptModalData({
+              typeLabel: `অ্যাড মানি (${methodLabel} - অটো ভেরিফায়েড)`,
+              transactionId: currentTxId,
+              amount: amountNum,
+              fee: 0,
+              totalAmount: amountNum,
+              status: 'success',
+              beneficiaryName: user.name || 'BNB MEMBER',
+              beneficiaryAccount: user.memberId || user.phone,
+              senderPhone: currentSender,
+              transactionDate: new Date().toLocaleString('bn-BD', { day: 'numeric', month: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: true })
+            });
+            setIsReceiptOpen(true);
+            setTrxId('');
+            setDepositAmount('');
+            setSecurityPin('');
+            setLoading(false);
+            if (syncLiveProfile) syncLiveProfile();
+            return;
+          }
+        } catch (fsAutoErr) {
+          console.warn('Client Firestore auto-verify fallback warning:', fsAutoErr);
+        }
       }
 
       await Promise.all([

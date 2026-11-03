@@ -1,4 +1,5 @@
 import { db, handleFirestoreError, OperationType } from './firebase';
+import { apiUrl } from '../config/api';
 import { 
   doc, 
   getDoc, 
@@ -50,7 +51,7 @@ export const getEffectiveBalance = (u: any): number => {
  */
 export async function processWalletTransaction(req: WalletTransactionRequest): Promise<{ success: boolean; newBalance: number; txId: string }> {
   const txId = req.transactionId || `TXN${Date.now()}${Math.floor(Math.random() * 1000)}`;
-  const resp = await fetch('/api/wallet/transaction', {
+  const resp = await fetch(apiUrl('/api/wallet/transaction'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -85,7 +86,7 @@ export interface AmbTransferRequest {
  */
 export async function processAmbTransfer(req: AmbTransferRequest): Promise<{ success: boolean; senderNewBalance: number; receiverNewBalance: number; txId: string }> {
   const txId = req.transactionId || `BNBTXN${Date.now()}${Math.floor(Math.random() * 1000)}`;
-  const resp = await fetch('/api/wallet/transfer', {
+  const resp = await fetch(apiUrl('/api/wallet/transfer'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

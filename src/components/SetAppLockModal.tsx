@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { User } from '../types';
 import { db } from '../lib/firebase';
 import { doc, updateDoc } from 'firebase/firestore';
+import { hashPinClientAsync } from '../lib/memberUtils';
 import { Lock, Eye, EyeOff, ShieldCheck, X, AlertTriangle, KeyRound } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -51,30 +52,24 @@ export default function SetAppLockModal({
 
     setLoading(true);
 
-    // Save to Firestore asynchronously
+    // Save hashed PIN to Firestore
     if (user?.uid) {
       try {
+        const pinHash = await hashPinClientAsync(cleanCode);
         const userRef = doc(db, 'users', user.uid);
         await updateDoc(userRef, {
-          pin: cleanCode,
-          appLockCode: cleanCode,
-          password: cleanCode,
+          pinHash,
           pinSet: true,
           isAppLocked: true,
+          pinFailedAttempts: 0,
+          pinLockedUntil: 0,
           appLockResetRequested: false,
           appLockResetStatus: '',
           appLockUpdatedAt: new Date().toISOString()
         });
         if (user) {
-          user.pin = cleanCode;
-          user.appLockCode = cleanCode;
-          user.password = cleanCode;
           user.pinSet = true;
         }
-        try {
-          localStorage.setItem('amb_user_pin', cleanCode);
-          localStorage.setItem('bnb_user_pin', cleanCode);
-        } catch (e) {}
       } catch (err) {
         if (import.meta.env.DEV) {
           console.error("Failed to save app lock code to Firestore:", err);
