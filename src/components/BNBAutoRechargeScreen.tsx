@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { User, Transaction, AppConfig, generateBNBTrxId, formatShortTrxId } from '../types';
+import { User, Transaction, AppConfig, getEffectiveBalance, generateBNBTrxId, formatShortTrxId } from '../types';
 import { db } from '../lib/firebase';
 import UnifiedBackButton from './UnifiedBackButton';
-import { doc, updateDoc, setDoc, addDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, updateDoc, setDoc, addDoc, collection, query, where, getDocs, runTransaction } from 'firebase/firestore';
+import { apiUrl } from '../config/api';
 import { 
   Smartphone, 
   CheckCircle, 
@@ -202,7 +203,7 @@ export default function BNBAutoRechargeScreen({
       return;
     }
 
-    if (amt > (user.balance || 0)) {
+    if (amt > getEffectiveBalance(user)) {
       setAddBalanceMsg({ text: 'আপনার মেইন ওয়ালেটে পর্যাপ্ত ব্যালেন্স নেই!', type: 'error' });
       return;
     }
@@ -217,11 +218,13 @@ export default function BNBAutoRechargeScreen({
       const commission = amt * 0.02; // 2% bonus (হাজারে ২০ টাকা)
       const totalToAdd = amt + commission;
       
-      const newMainBalance = (user.balance || 0) - amt;
+      const currentMainBal = getEffectiveBalance(user);
+      const newMainBalance = currentMainBal - amt;
       const newTelecomBalance = (user.telecomBalance || 0) + totalToAdd;
 
       // Optimistic state update
       user.balance = newMainBalance;
+      (user as any).mainBalance = newMainBalance;
       user.telecomBalance = newTelecomBalance;
 
       const txId = `tx-addbal-${Date.now()}`;
@@ -252,12 +255,23 @@ export default function BNBAutoRechargeScreen({
         createdAt: new Date().toISOString()
       };
 
-      // Background Firestore save
+      // Background Firestore save using atomic transaction
       (async () => {
         try {
-          await updateDoc(doc(db, 'users', user.uid), {
-            balance: newMainBalance,
-            telecomBalance: newTelecomBalance
+          const userRef = doc(db, 'users', user.uid);
+          await runTransaction(db, async (t) => {
+            const uSnap = await t.get(userRef);
+            if (!uSnap.exists()) return;
+            const uData = uSnap.data();
+            const liveBal = getEffectiveBalance(uData);
+            if (liveBal < amt) throw new Error('Insufficient balance');
+            const updatedMain = liveBal - amt;
+            const updatedTel = (Number(uData.telecomBalance) || 0) + totalToAdd;
+            t.update(userRef, {
+              balance: updatedMain,
+              mainBalance: updatedMain,
+              telecomBalance: updatedTel
+            });
           });
           await setDoc(doc(db, 'transactions', newTx.id), newTx, { merge: true });
 
@@ -307,79 +321,72 @@ export default function BNBAutoRechargeScreen({
       return;
     }
 
-    const availableTelecom = user.telecomBalance || 0;
-    if (availableTelecom < reloadAmt) {
-      setErrorMessage(`অপর্যাপ্ত রিচার্জ ব্যালেন্স (আছে: ৳${availableTelecom.toLocaleString('en-US')})! দয়া করে উপরে "+ Add" বাটনে ক্লিক করে মেইন থেকে রিচার্জ ব্যালেন্সে টাকা যুক্ত করুন (২% বোনাস সহ)।`);
+    // PIN verification
+    const inputPinClean = rechargePin.trim();
+    const storedPin = String(user.pin || '').trim();
+    if (!inputPinClean || (storedPin && inputPinClean !== storedPin)) {
+      setErrorMessage('ভুল সিকিউরিটি পিন নম্বর! পুনরায় সঠিক পিন দিন।');
       return;
     }
 
-    if (rechargePin !== user.pin) {
-      setErrorMessage('ভুল সিকিউরিটি পিন নম্বর! পুনরায় সঠিক পিন দিন।');
-      return;
+    const availableTelecom = Number(user.telecomBalance) || 0;
+    const availableMain = getEffectiveBalance(user);
+
+    let autoTransferred = false;
+    let autoTransferAmount = 0;
+    let autoTransferBonus = 0;
+
+    if (availableTelecom < reloadAmt) {
+      const neededFromMain = reloadAmt - availableTelecom;
+      if (availableMain < neededFromMain) {
+        setErrorMessage(`অপর্যাপ্ত ব্যালেন্স! আপনার রিচার্জ ওয়ালেটে ৳${availableTelecom.toLocaleString('en-US')} এবং মেইন ওয়ালেটে ৳${availableMain.toLocaleString('en-US')} আছে। মোট প্রয়োজন ৳${reloadAmt.toLocaleString('en-US')}।`);
+        return;
+      }
+      autoTransferred = true;
+      autoTransferAmount = neededFromMain;
+      autoTransferBonus = neededFromMain * 0.02;
     }
 
     try {
       setIsProcessing(true);
 
-      const remainingTelecom = availableTelecom - reloadAmt;
-      user.telecomBalance = remainingTelecom;
-      const updateFields = { telecomBalance: remainingTelecom };
+      // Trigger server-authoritative Success TopUp Gateway
+      const res = await fetch(apiUrl('/api/recharge'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.uid,
+          number: cleanCashNumber,
+          operator: operator,
+          type: 'prepaid',
+          amount: reloadAmt,
+          pin: inputPinClean,
+          accountNumber: user.memberId || user.phone
+        })
+      });
 
-      const ambTrxId = generateBNBTrxId('BN');
-      const txId = `tx-auto-${ambTrxId}`;
-      const typeLabel = 'অটো মোবাইল রিচার্জ';
+      const data = await res.json().catch(() => null);
 
-      const description = `${operator} নম্বরে (${cleanCashNumber}) ৳${reloadAmt.toLocaleString('en-US')} ইনস্ট্যান্ট অটো রিচার্জের রিকোয়েস্ট সম্পন্ন হয়েছে (রিচার্জ ব্যালেন্স থেকে প্রদেয়)।`;
-          
-      const newTx: Transaction = {
-        id: txId,
-        transactionId: ambTrxId,
-        receiptNo: ambTrxId,
-        userId: user.uid,
-        userName: user.name,
-        memberId: user.memberId,
-        type: 'telecom_recharge',
-        typeLabel: typeLabel,
-        amount: reloadAmt,
-        status: 'pending',
-        description: description,
-        createdAt: new Date().toISOString(),
-        phone: cleanCashNumber,
-        receiverPhone: cleanCashNumber,
-        paymentMethod: 'রিচার্জ ব্যালেন্স',
-        operator: operator
-      } as any;
+      if (!res.ok || !data || data.success === false) {
+        throw new Error(data?.error || data?.message || 'সার্ভার থেকে রিচার্জ গ্রহণ করা যায়নি।');
+      }
+
+      // Optimistic balance deduction after successful submission
+      if (availableMain >= reloadAmt) {
+        user.balance = availableMain - reloadAmt;
+        (user as any).mainBalance = availableMain - reloadAmt;
+      } else {
+        user.telecomBalance = availableTelecom - reloadAmt;
+      }
 
       setPurchaseSuccess(true);
       setIsProcessing(false);
       syncLiveProfile();
-      
-      // Async background save to Firestore
-      (async () => {
-        try {
-          await updateDoc(doc(db, 'users', user.uid), updateFields);
-          await setDoc(doc(db, 'transactions', newTx.id), newTx, { merge: true });
-          addDoc(collection(db, 'admin_notifications'), {
-            title: '⚡ নতুন BNB অটো রিচার্জ রিকোয়েস্ট',
-            message: `${user.name || 'সদস্য'} (${user.memberId || 'N/A'}) ${operator} নম্বরে (${cleanCashNumber}) ৳${reloadAmt.toLocaleString('en-US')} টাকা অটো রিচার্জের আবেদন করেছেন।`,
-            userId: user.uid,
-            userName: user.name || '',
-            memberId: user.memberId || '',
-            recipientPhone: cleanCashNumber,
-            operator: operator,
-            amount: reloadAmt,
-            type: 'telecom_recharge',
-            read: false,
-            createdAt: new Date().toISOString()
-          }).catch(e => console.warn('Admin notif error:', e));
-        } catch (dbErr) {
-          console.error("Firestore auto recharge save error:", dbErr);
-        }
-      })();
 
       // Show Full-Screen Transaction Receipt Modal
+      const ambTrxId = data.trxid || generateBNBTrxId('ST');
       setReceiptModalData({
-        typeLabel: typeLabel,
+        typeLabel: 'স্বয়ংক্রিয় অটো মোবাইল রিচার্জ (Success TopUp)',
         transactionId: ambTrxId,
         amount: reloadAmt,
         fee: 0,
@@ -388,8 +395,8 @@ export default function BNBAutoRechargeScreen({
         beneficiaryName: user.name,
         beneficiaryAccount: user.memberId || user.phone,
         senderPhone: cleanCashNumber,
-        paymentMethod: `${operator} (রিচার্জ ব্যালেন্স)`,
-        description: description,
+        paymentMethod: `${operator} (Success TopUp Gateway)`,
+        description: `${operator} নম্বরে (${cleanCashNumber}) ৳${reloadAmt.toLocaleString('en-US')} ইনস্ট্যান্ট অটো রিচার্জ সফলভাবে সার্ভারে প্রেরণ করা হয়েছে।`,
         transactionDate: new Date().toLocaleString('bn-BD', {
           day: 'numeric',
           month: 'numeric',
@@ -403,7 +410,7 @@ export default function BNBAutoRechargeScreen({
       setIsReceiptOpen(true);
     } catch (err: any) {
       console.error(err);
-      setErrorMessage(`রিচার্জ সম্পন্নকরণে ত্রুটি ঘটেছেঃ ${err?.message || 'সার্ভার সংযোগ সমস্যা'}`);
+      setErrorMessage(`অটো রিচার্জ ব্যর্থ হয়েছেঃ ${err?.message || 'সার্ভার সংযোগ সমস্যা'}`);
       setIsProcessing(false);
     }
   };
@@ -449,8 +456,37 @@ export default function BNBAutoRechargeScreen({
             </div>
           </div>
 
-          {/* Right section: Recharge Balance & History Button */}
+          {/* Right section: Recharge Balance & Add + History Buttons */}
           <div className="flex items-center gap-1.5 shrink-0">
+            {/* Recharge Balance Pill */}
+            <div 
+              onClick={() => {
+                setAddBalanceAmount('');
+                setAddBalanceMsg(null);
+                setShowAddBalanceModal(true);
+              }}
+              className="inline-flex items-center gap-1 bg-black/20 border border-amber-300/40 px-2 py-0.5 rounded-full text-[9px] font-bold text-amber-200 cursor-pointer transition active:scale-95 shadow-3xs hover:bg-black/30"
+              title="রিচার্জ ব্যালেন্স (২% বোনাসসহ অ্যাড করতে ক্লিক করুন)"
+            >
+              <span className="text-[7.5px] text-amber-300 uppercase font-extrabold">রিচার্জঃ</span>
+              <span className="font-mono text-white font-bold">৳{(user.telecomBalance || 0).toLocaleString('en-US')}</span>
+            </div>
+
+            {/* Add Balance Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setAddBalanceAmount('');
+                setAddBalanceMsg(null);
+                setShowAddBalanceModal(true);
+              }}
+              className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-2 py-1.5 rounded-xl text-[10px] font-black flex items-center gap-0.5 transition active:scale-95 cursor-pointer shadow-sm"
+              title="মেইন থেকে রিচার্জ ব্যালেন্সে টাকা অ্যাড করুন (২% বোনাসসহ)"
+            >
+              <Plus className="w-3.5 h-3.5 stroke-[3]" />
+              <span>+ Add</span>
+            </button>
+
             {/* History Button */}
             <button
               type="button"
@@ -493,22 +529,75 @@ export default function BNBAutoRechargeScreen({
           </p>
         </div>
 
-        {/* Error Alert */}
+        {/* Error Alert with Quick Add Button */}
         {errorMessage && (
-          <div className="bg-rose-50 border border-rose-250 text-rose-800 p-3 rounded-2xl text-xs font-bold flex items-center justify-between shadow-3xs">
-            <div className="flex items-center gap-2">
-              <span>⚠️</span>
-              <span>{errorMessage}</span>
+          <div className="bg-rose-50 border border-rose-250 text-rose-800 p-3.5 rounded-2xl text-xs font-bold space-y-2.5 shadow-3xs">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span>⚠️</span>
+                <span>{errorMessage}</span>
+              </div>
+              <button type="button" onClick={() => setErrorMessage('')} className="text-rose-500 font-black cursor-pointer p-0.5">
+                <X className="w-4 h-4" />
+              </button>
             </div>
-            <button type="button" onClick={() => setErrorMessage('')} className="text-rose-500 font-black cursor-pointer">
-              <X className="w-4 h-4" />
-            </button>
+            {errorMessage.includes('ব্যালেন্স') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setAddBalanceAmount(rechargeAmount || '');
+                  setAddBalanceMsg(null);
+                  setShowAddBalanceModal(true);
+                  setErrorMessage('');
+                }}
+                className="w-full py-2 bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-700 hover:to-rose-800 text-white rounded-xl text-xs font-black shadow-xs flex items-center justify-center gap-1.5 transition active:scale-98 cursor-pointer"
+              >
+                <Plus className="w-4 h-4 stroke-[3]" />
+                <span>মেইন ওয়ালেট থেকে রিচার্জ ব্যালেন্স অ্যাড করুন (২% বোনাসসহ)</span>
+              </button>
+            )}
           </div>
         )}
 
         <div className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200 shadow-sm space-y-4">
           
           <form onSubmit={handleSubmit} className="space-y-4 text-left">
+            
+            {/* Wallet Balances Overview */}
+            <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2.5 rounded-2xl border border-slate-200/80">
+              <div className="bg-white p-2 rounded-xl border border-slate-200/60 shadow-3xs">
+                <div className="text-[9px] font-bold text-slate-500 flex items-center justify-between">
+                  <span>মেইন ওয়ালেট</span>
+                  <span className="text-[7.5px] bg-emerald-100 text-emerald-800 font-extrabold px-1 py-0.2 rounded">মূল</span>
+                </div>
+                <div className="text-xs sm:text-sm font-black text-emerald-700 font-mono mt-0.5">
+                  ৳{(user.balance || 0).toLocaleString('en-US')}
+                </div>
+              </div>
+              <div className="bg-white p-2 rounded-xl border border-slate-200/60 shadow-3xs">
+                <div className="text-[9px] font-bold text-slate-500 flex items-center justify-between">
+                  <span>রিচার্জ ওয়ালেট</span>
+                  <span className="text-[7.5px] bg-amber-100 text-amber-800 font-extrabold px-1 py-0.2 rounded">+২% বোনাস</span>
+                </div>
+                <div className="flex items-center justify-between mt-0.5">
+                  <span className="text-xs sm:text-sm font-black text-rose-700 font-mono">
+                    ৳{(user.telecomBalance || 0).toLocaleString('en-US')}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddBalanceAmount(rechargeAmount || '');
+                      setAddBalanceMsg(null);
+                      setShowAddBalanceModal(true);
+                    }}
+                    className="bg-amber-400 hover:bg-amber-500 text-slate-950 text-[9px] font-black px-1.5 py-0.5 rounded flex items-center gap-0.5 transition active:scale-95 shadow-3xs cursor-pointer"
+                  >
+                    <Plus className="w-2.5 h-2.5 stroke-[3]" />
+                    <span>অ্যাড</span>
+                  </button>
+                </div>
+              </div>
+            </div>
             
             {/* Operator Selection Grid */}
             <div className="space-y-1.5">
@@ -617,217 +706,228 @@ export default function BNBAutoRechargeScreen({
       {/* ================= MODAL 1: ADD MONEY TO RECHARGE BALANCE (2% BONUS / হাজারে ২০ টাকা) ================= */}
       <AnimatePresence>
         {showAddBalanceModal && (
-          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 15 }} 
-              animate={{ opacity: 1, scale: 1, y: 0 }} 
-              exit={{ opacity: 0, scale: 0.95, y: 15 }} 
-              className="bg-white w-full max-w-sm rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-100 text-slate-800 font-sans"
-            >
-              {/* Header */}
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center font-black">
-                    <Plus className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-black text-slate-900">রিচার্জ ব্যালেন্স অ্যাড মানি</h3>
-                    <p className="text-[10px] text-emerald-600 font-black">মেইন ব্যালেন্স থেকে ২% বোনাস (হাজারে ২০ টাকা)</p>
-                  </div>
-                </div>
-                <button 
-                  type="button" 
-                  onClick={() => setShowAddBalanceModal(false)}
-                  className="w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
+          <motion.div 
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className="fixed inset-0 z-[100] bg-white flex flex-col font-sans"
+          >
+            {/* Top Spacer for Notification Bar */}
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
 
-              {/* Status Message */}
-              {addBalanceMsg && (
-                <div className={`p-3 rounded-2xl text-xs font-bold mb-3 flex items-center justify-between ${
-                  addBalanceMsg.type === 'error' ? 'bg-rose-50 text-rose-800 border border-rose-200' : 'bg-emerald-50 text-emerald-900 border border-emerald-200'
-                }`}>
-                  <span className="leading-snug">{addBalanceMsg.text}</span>
-                  <button type="button" onClick={() => setAddBalanceMsg(null)} className="text-slate-500 hover:text-slate-700 ml-2">×</button>
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-white sticky top-0 z-10">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center font-black">
+                  <Plus className="w-4 h-4" />
                 </div>
-              )}
-
-              {/* Wallet Summary */}
-              <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 mb-4 grid grid-cols-2 gap-2 text-center">
-                <div className="bg-white p-2 rounded-xl border border-slate-150">
-                  <span className="text-[9px] font-bold text-slate-500 block">মেইন ওয়ালেট</span>
-                  <span className="text-xs font-black text-emerald-700 font-mono">৳{(user.balance || 0).toLocaleString('en-US')}</span>
-                </div>
-                <div className="bg-white p-2 rounded-xl border border-slate-150">
-                  <span className="text-[9px] font-bold text-slate-500 block">বর্তমান রিচার্জ</span>
-                  <span className="text-xs font-black text-rose-700 font-mono">৳{(user.telecomBalance || 0).toLocaleString('en-US')}</span>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 leading-tight">রিচার্জ ব্যালেন্স অ্যাড মানি</h3>
+                  <p className="text-[10px] text-emerald-600 font-black mt-0.5">মেইন ব্যালেন্স থেকে ২% বোনাস</p>
                 </div>
               </div>
+              <button 
+                onClick={() => setShowAddBalanceModal(false)}
+                className="p-1 hover:bg-slate-100 rounded-full text-slate-400 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-              <form onSubmit={handleAddBalanceSubmit} className="space-y-3.5 text-left">
-                <div>
-                  <label className="text-[11px] font-black text-slate-700 block mb-1">অ্যাড করার পরিমাণ (৳)</label>
-                  <input 
-                    type="number" 
-                    value={addBalanceAmount} 
-                    onChange={(e) => setAddBalanceAmount(e.target.value)} 
-                    required 
-                    min={10}
-                    className="w-full p-2.5 bg-slate-50 border border-slate-250 rounded-xl text-sm font-mono font-bold focus:bg-white focus:border-rose-500 focus:outline-none transition" 
-                    placeholder="যেমনঃ 1000" 
-                  />
-                  
-                  {/* Live 2% Bonus Calculation Display */}
-                  {Number(addBalanceAmount) > 0 && (
-                    <div className="mt-2 p-2.5 bg-emerald-50/80 border border-emerald-200/80 rounded-xl space-y-1 text-[10.5px]">
-                      <div className="flex justify-between font-bold text-emerald-900">
-                        <span>২% বোনাস কমিশন লাভ (হাজারে ২০৳):</span>
-                        <span className="font-mono font-black">+৳{(Number(addBalanceAmount) * 0.02).toFixed(2)}</span>
-                      </div>
-                      <div className="flex justify-between font-black text-emerald-950 border-t border-emerald-200/60 pt-1">
-                        <span>মোট রিচার্জ ওয়ালেটে যোগ হবে:</span>
-                        <span className="font-mono text-xs text-emerald-700 font-black">
-                          ৳{(Number(addBalanceAmount) * 1.02).toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                  )}
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="max-w-sm mx-auto space-y-5">
+                {/* Status Message */}
+                {addBalanceMsg && (
+                  <div className={`p-3.5 rounded-2xl text-xs font-bold flex items-center justify-between shadow-3xs ${
+                    addBalanceMsg.type === 'error' ? 'bg-rose-50 text-rose-800 border border-rose-200' : 'bg-emerald-50 text-emerald-900 border border-emerald-200'
+                  }`}>
+                    <span className="leading-snug">{addBalanceMsg.text}</span>
+                    <button type="button" onClick={() => setAddBalanceMsg(null)} className="text-slate-500 hover:text-slate-700 ml-2">×</button>
+                  </div>
+                )}
+
+                {/* Wallet Summary */}
+                <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 grid grid-cols-2 gap-3 text-center shadow-3xs">
+                  <div className="bg-white p-3 rounded-2xl border border-slate-150">
+                    <span className="text-[10px] font-bold text-slate-500 block mb-1 uppercase tracking-wider">মেইন ওয়ালেট</span>
+                    <span className="text-sm font-black text-emerald-700 font-mono">৳{(user.balance || 0).toLocaleString('en-US')}</span>
+                  </div>
+                  <div className="bg-white p-3 rounded-2xl border border-slate-150">
+                    <span className="text-[10px] font-bold text-slate-500 block mb-1 uppercase tracking-wider">বর্তমান রিচার্জ</span>
+                    <span className="text-sm font-black text-rose-700 font-mono">৳{(user.telecomBalance || 0).toLocaleString('en-US')}</span>
+                  </div>
                 </div>
 
-                <div>
-                  <label className="text-[11px] font-black text-slate-700 block mb-1">আপনার ৪ ডিজিটের পিন নম্বর</label>
-                  <input 
-                    type="password" 
-                    value={addBalancePin} 
-                    onChange={(e) => setAddBalancePin(e.target.value.replace(/\D/g, ''))} 
-                    required 
-                    maxLength={4} 
-                    className="w-full p-2.5 bg-slate-50 border border-slate-250 rounded-xl text-center text-sm font-mono font-bold tracking-widest focus:bg-white focus:border-rose-500 focus:outline-none transition" 
-                    placeholder="••••" 
-                  />
-                </div>
-
-                <div className="flex gap-2 pt-2">
-                  <button 
-                    type="button" 
-                    onClick={() => setShowAddBalanceModal(false)} 
-                    className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-xs font-bold text-slate-700 transition cursor-pointer"
-                  >
-                    বাতিল
-                  </button>
-                  <button 
-                    type="submit" 
-                    disabled={isProcessing} 
-                    className="flex-1 py-2.5 bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-700 hover:to-rose-800 text-white rounded-xl text-xs font-black shadow-md transition cursor-pointer flex items-center justify-center gap-1.5 active:scale-98"
-                  >
-                    {isProcessing ? (
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    ) : (
-                      <span>নিশ্চিত করুন</span>
+                <form onSubmit={handleAddBalanceSubmit} className="space-y-5 text-left">
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                    <label className="text-[10px] font-black text-slate-500 block mb-1.5 uppercase tracking-wider">অ্যাড করার পরিমাণ (৳) *</label>
+                    <input 
+                      type="number" 
+                      value={addBalanceAmount} 
+                      onChange={(e) => setAddBalanceAmount(e.target.value)} 
+                      required 
+                      min={10}
+                      className="w-full p-3 bg-white border border-slate-250 rounded-xl text-base font-mono font-bold focus:border-rose-500 focus:outline-none transition shadow-sm" 
+                      placeholder="৳ 1000" 
+                    />
+                    
+                    {/* Live 2% Bonus Calculation Display */}
+                    {Number(addBalanceAmount) > 0 && (
+                      <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200/80 rounded-xl space-y-1.5 text-[11px]">
+                        <div className="flex justify-between font-bold text-emerald-900">
+                          <span>২% বোনাস কমিশন (হাজারে ২০৳):</span>
+                          <span className="font-mono font-black">+৳{(Number(addBalanceAmount) * 0.02).toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between font-black text-emerald-950 border-t border-emerald-200/60 pt-1.5">
+                          <span>মোট রিচার্জ ওয়ালেটে যোগ হবে:</span>
+                          <span className="font-mono text-sm text-emerald-700 font-black">
+                            ৳{(Number(addBalanceAmount) * 1.02).toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
                     )}
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          </div>
+                  </div>
+
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                    <label className="text-[10px] font-black text-slate-500 block mb-1.5 uppercase tracking-wider">সিকিউরিটি পিন নম্বর *</label>
+                    <input 
+                      type="password" 
+                      value={addBalancePin} 
+                      onChange={(e) => setAddBalancePin(e.target.value.replace(/\D/g, ''))} 
+                      required 
+                      maxLength={4} 
+                      className="w-full p-3 bg-white border border-slate-250 rounded-xl text-center text-xl font-mono font-bold tracking-[1em] focus:border-rose-500 focus:outline-none transition shadow-sm" 
+                      placeholder="••••" 
+                    />
+                  </div>
+
+                  <div className="flex gap-3 pt-4 pb-10">
+                    <button 
+                      type="button" 
+                      onClick={() => setShowAddBalanceModal(false)} 
+                      className="flex-1 py-4 bg-slate-100 hover:bg-slate-200 rounded-2xl text-sm font-black text-slate-600 transition active:scale-95"
+                    >
+                      বাতিল
+                    </button>
+                    <button 
+                      type="submit" 
+                      disabled={isProcessing} 
+                      className="flex-1 py-4 bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-700 hover:to-rose-800 text-white rounded-2xl text-sm font-black shadow-lg shadow-rose-200 transition flex items-center justify-center gap-2 active:scale-95"
+                    >
+                      {isProcessing ? (
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <span>নিশ্চিত করুন</span>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
 
       {/* ================= MODAL 2: TELECOM & RECHARGE TRANSACTION HISTORY ================= */}
       <AnimatePresence>
         {showTxHistoryModal && (
-          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
-            <motion.div 
-              initial={{ opacity: 0, y: 50 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 50 }}
-              className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col max-h-[85vh] sm:max-h-[80vh] overflow-hidden text-slate-800 font-sans"
-            >
-              {/* Header */}
-              <div className="bg-gradient-to-r from-cyan-900 via-indigo-900 to-indigo-950 text-white px-5 py-4 flex items-center justify-between shadow-sm">
-                <div className="flex items-center gap-2">
-                  <ClipboardList className="w-5 h-5 text-cyan-300" />
-                  <div>
-                    <h3 className="text-sm font-black text-white">মোবাইল রিচার্জ লেনদেন হিস্ট্রি</h3>
-                    <p className="text-[10px] text-cyan-200 font-medium">অটো রিচার্জ ও ব্যালেন্স অ্যাডের সম্পূর্ণ বিবরণ</p>
-                  </div>
+          <motion.div 
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className="fixed inset-0 z-[100] bg-white flex flex-col font-sans"
+          >
+            {/* Top Spacer for Notification Bar */}
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-white sticky top-0 z-10">
+              <div className="flex items-center gap-2">
+                <ClipboardList className="w-5 h-5 text-indigo-600" />
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 leading-tight">রিচার্জ লেনদেন হিস্ট্রি</h3>
+                  <p className="text-[10px] text-slate-500 font-bold mt-0.5">অটো রিচার্জ ও ব্যালেন্স অ্যাডের বিবরণ</p>
                 </div>
-                <button 
-                  onClick={() => {
-                    setShowTxHistoryModal(false);
-                    setTxSearchQuery('');
-                  }}
-                  className="p-1.5 hover:bg-white/10 rounded-xl transition text-white/90 active:scale-90 cursor-pointer"
+              </div>
+              <button 
+                onClick={() => {
+                  setShowTxHistoryModal(false);
+                  setTxSearchQuery('');
+                }}
+                className="p-1 hover:bg-slate-100 rounded-full text-slate-400 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Search & Tabs */}
+            <div className="p-4 bg-slate-50/50 border-b border-slate-100 space-y-3">
+              <div className="relative max-w-md mx-auto">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                <input 
+                  type="text"
+                  value={txSearchQuery}
+                  onChange={(e) => setTxSearchQuery(e.target.value)}
+                  placeholder="নম্বর, পরিমাণ বা অপারেটর দিয়ে খুঁজুন..."
+                  className="w-full bg-white border border-slate-200 pl-9 pr-10 py-2.5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-500 shadow-sm"
+                />
+                {txSearchQuery && (
+                  <button 
+                    onClick={() => setTxSearchQuery('')}
+                    className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400 absolute right-2 top-1.5 transition"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 max-w-md mx-auto">
+                <button
+                  type="button"
+                  onClick={() => setTxFilterTab('all')}
+                  className={`py-2 rounded-xl text-[10.5px] font-black transition active:scale-95 shadow-3xs ${
+                    txFilterTab === 'all' ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-600'
+                  }`}
                 >
-                  <X className="w-5 h-5" />
+                  সকল ({txHistory.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTxFilterTab('recharge')}
+                  className={`py-2 rounded-xl text-[10.5px] font-black transition active:scale-95 shadow-3xs ${
+                    txFilterTab === 'recharge' ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-600'
+                  }`}
+                >
+                  রিচার্জ ({txHistory.filter(t => t.type === 'telecom_recharge').length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTxFilterTab('add_balance')}
+                  className={`py-2 rounded-xl text-[10.5px] font-black transition active:scale-95 shadow-3xs ${
+                    txFilterTab === 'add_balance' ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-600'
+                  }`}
+                >
+                  অ্যাড ব্যালেন্স ({txHistory.filter(t => t.type === 'telecom_add_balance').length})
                 </button>
               </div>
+            </div>
 
-              {/* Search & Tabs */}
-              <div className="p-3 bg-slate-50 border-b border-slate-200 space-y-2">
-                <div className="relative">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                  <input 
-                    type="text"
-                    value={txSearchQuery}
-                    onChange={(e) => setTxSearchQuery(e.target.value)}
-                    placeholder="নম্বর, পরিমাণ বা অপারেটর দিয়ে খুঁজুন..."
-                    className="w-full bg-white border border-slate-200 pl-9 pr-4 py-2 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600"
-                  />
-                  {txSearchQuery && (
-                    <button 
-                      onClick={() => setTxSearchQuery('')}
-                      className="text-[10px] font-black text-slate-400 hover:text-slate-600 absolute right-3 top-2.5 cursor-pointer"
-                    >
-                      পরিষ্কার
-                    </button>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-3 gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setTxFilterTab('all')}
-                    className={`py-1.5 rounded-lg text-[10.5px] font-black transition cursor-pointer ${
-                      txFilterTab === 'all' ? 'bg-indigo-600 text-white shadow-xs' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    সকল ({txHistory.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTxFilterTab('recharge')}
-                    className={`py-1.5 rounded-lg text-[10.5px] font-black transition cursor-pointer ${
-                      txFilterTab === 'recharge' ? 'bg-indigo-600 text-white shadow-xs' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    রিচার্জ ({txHistory.filter(t => t.type === 'telecom_recharge').length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTxFilterTab('add_balance')}
-                    className={`py-1.5 rounded-lg text-[10.5px] font-black transition cursor-pointer ${
-                      txFilterTab === 'add_balance' ? 'bg-indigo-600 text-white shadow-xs' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    অ্যাড ব্যালেন্স ({txHistory.filter(t => t.type === 'telecom_add_balance').length})
-                  </button>
-                </div>
-              </div>
-
-              {/* Transactions List */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+            {/* Transactions List */}
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="max-w-md mx-auto space-y-3">
                 {loadingTx ? (
-                  <div className="py-12 flex flex-col items-center justify-center gap-2 text-slate-400">
-                    <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-                    <span className="text-xs font-bold">লেনদেন হিস্ট্রি লোড হচ্ছে...</span>
+                  <div className="py-20 flex flex-col items-center justify-center gap-3 text-slate-400">
+                    <div className="w-8 h-8 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                    <span className="text-xs font-black">লোডিং হচ্ছে...</span>
                   </div>
                 ) : filteredTxHistory.length === 0 ? (
-                  <div className="py-12 text-center text-slate-400 text-xs font-bold space-y-1">
-                    <p className="text-2xl">📑</p>
-                    <p>কোনো রিচার্জ লেনদেন পাওয়া যায়নি</p>
+                  <div className="py-20 text-center space-y-2">
+                    <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto text-slate-300">
+                      <ClipboardList className="w-8 h-8" />
+                    </div>
+                    <p className="text-xs font-black text-slate-400">কোনো লেনদেন পাওয়া যায়নি</p>
                   </div>
                 ) : (
                   filteredTxHistory.map((tx) => {
@@ -839,39 +939,41 @@ export default function BNBAutoRechargeScreen({
                       <div
                         key={tx.id}
                         onClick={() => openReceiptForTx(tx)}
-                        className="bg-white border border-slate-200 hover:border-indigo-300 p-3 rounded-2xl flex items-center justify-between gap-3 shadow-3xs hover:shadow-xs transition cursor-pointer active:scale-98"
+                        className="bg-white border border-slate-200 hover:border-indigo-300 p-4 rounded-2xl flex items-center justify-between gap-4 shadow-3xs transition cursor-pointer active:scale-98"
                       >
-                        <div className="flex items-center gap-2.5">
-                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-black shrink-0 ${
+                        <div className="flex items-center gap-3.5">
+                          <div className={`w-11 h-11 rounded-2xl flex items-center justify-center font-black shrink-0 shadow-3xs ${
                             isAdd ? 'bg-emerald-50 text-emerald-600' : 'bg-indigo-50 text-indigo-600'
                           }`}>
                             {isAdd ? <ArrowDownLeft className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
                           </div>
                           <div>
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <span className="text-xs font-black text-slate-900">
                                 {tx.typeLabel || (isAdd ? 'রিচার্জ ব্যালেন্স অ্যাড' : 'মোবাইল রিচার্জ')}
                               </span>
                               {tx.operator && (
-                                <span className="bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded text-[9px] font-black">
+                                <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded-lg text-[9px] font-black border border-slate-200">
                                   {tx.operator}
                                 </span>
                               )}
                             </div>
-                            <p className="text-[10px] text-slate-500 font-mono mt-0.5">
-                              {tx.phone || tx.receiverPhone ? `নম্বর: ${tx.phone || tx.receiverPhone}` : new Date(tx.createdAt || '').toLocaleString('en-US')}
+                            <p className="text-[10px] text-slate-500 font-bold mt-1">
+                              {tx.phone || tx.receiverPhone ? `নম্বর: ${tx.phone || tx.receiverPhone}` : new Date(tx.createdAt || '').toLocaleString('bn-BD', { day: 'numeric', month: 'short', year: 'numeric' })}
                             </p>
                           </div>
                         </div>
 
                         <div className="text-right shrink-0">
-                          <span className={`text-xs font-black font-mono block ${isAdd ? 'text-emerald-600' : 'text-slate-900'}`}>
+                          <span className={`text-sm font-black font-mono block ${isAdd ? 'text-emerald-600' : 'text-slate-900'}`}>
                             {isAdd ? '+' : '-'}৳{Number(tx.amount || 0).toLocaleString('en-US')}
                           </span>
-                          <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded-full inline-block mt-0.5 ${
-                            isApproved ? 'bg-emerald-100 text-emerald-800' : isRejected ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
+                          <span className={`text-[9px] font-black px-2 py-0.5 rounded-full mt-1.5 inline-block ${
+                            isApproved ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' : 
+                            isRejected ? 'bg-rose-50 text-rose-600 border border-rose-200' : 
+                            'bg-amber-50 text-amber-600 border border-amber-200'
                           }`}>
-                            {isApproved ? 'সফল' : isRejected ? 'বাতিল' : 'পেন্ডিং'}
+                            {tx.status === 'pending' ? 'প্রসেসিং' : isApproved ? 'সফল' : 'ব্যর্থ'}
                           </span>
                         </div>
                       </div>
@@ -879,19 +981,9 @@ export default function BNBAutoRechargeScreen({
                   })
                 )}
               </div>
-
-              {/* Footer */}
-              <div className="p-3 border-t border-slate-100 bg-slate-50 text-center">
-                <button
-                  type="button"
-                  onClick={() => setShowTxHistoryModal(false)}
-                  className="w-full py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer"
-                >
-                  বন্ধ করুন
-                </button>
-              </div>
-            </motion.div>
-          </div>
+              <div className="h-20" />
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import UnifiedBackButton from './UnifiedBackButton';
 import { 
   ChevronLeft, 
@@ -44,6 +44,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { db } from '../lib/firebase';
 import { collection, addDoc, getDocs, query, where, orderBy, serverTimestamp, doc, updateDoc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import LeafletActiveMap from './LeafletActiveMap';
+import GoogleAgentMap from './GoogleAgentMap';
 import AgentProfileCard from './AgentProfileCard';
 import AgentReportModal from './AgentReportModal';
 import AgentDashboardPanel from './AgentDashboardPanel';
@@ -135,6 +136,23 @@ export default function AgentScreen({ user, onBack, appConfig }: AgentScreenProp
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
+
+  const handleRequestUserLocation = useCallback(async () => {
+    setIsLocating(true);
+    setLocationError(null);
+    try {
+      const pos = await getHighPrecisionPosition();
+      if (pos) {
+        setUserLocation({ lat: pos.lat, lng: pos.lng, accuracy: pos.accuracy });
+      } else {
+        setLocationError('অবস্থান সনাক্ত করা সম্ভব হয়নি।');
+      }
+    } catch (err: any) {
+      setLocationError(err?.message || 'অবস্থান পারমিশন দেওয়া হয়নি।');
+    } finally {
+      setIsLocating(false);
+    }
+  }, []);
 
   // Privacy: Share My Location toggle
   const [isSharingLocation, setIsSharingLocation] = useState<boolean>(() => {
@@ -1959,234 +1977,35 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
         {activeTab === 'map' && (
           <div className="space-y-4 animate-fade-in text-left">
             
-            {/* World vs BD Map Tabs */}
-            <div className="flex bg-slate-100 p-1 rounded-2.5xl border border-slate-200/50">
-              <button 
-                type="button"
-                onClick={() => { setMapType('world'); setZoomLevel(1); }}
-                className={`flex-1 py-2 rounded-2xl text-[11px] font-black tracking-wide flex items-center justify-center gap-1.5 transition-all duration-200 ${mapType === 'world' ? 'bg-[#0D9488] text-white shadow-xs' : 'text-slate-600 hover:text-slate-800'}`}
-              >
-                <Globe className="w-3.5 h-3.5" /> ওয়ার্ল্ড ম্যাপ
-              </button>
-              <button 
-                type="button"
-                onClick={() => { setMapType('bangladesh'); setZoomLevel(1); }}
-                className={`flex-1 py-2 rounded-2xl text-[11px] font-black tracking-wide flex items-center justify-center gap-1.5 transition-all duration-200 ${mapType === 'bangladesh' ? 'bg-[#0D9488] text-white shadow-xs' : 'text-slate-600 hover:text-slate-800'}`}
-              >
-                <MapPin className="w-3.5 h-3.5" /> বাংলাদেশ ম্যাপ
-              </button>
-            </div>
+            {/* Real Google Maps Integration Component */}
+            <GoogleAgentMap
+              agents={processedAgents.map((a: any) => ({
+                id: a.id,
+                name: a.name,
+                phone: a.phone,
+                whatsapp: a.whatsapp,
+                role: a.role,
+                country: a.country,
+                city: a.city,
+                district: a.district,
+                thana: a.thana,
+                address: a.address || `${a.thana || ''}, ${a.district || ''}`,
+                img: a.img,
+                lat: Number(a.realLat || a.lat || 0),
+                lng: Number(a.realLng || a.lng || 0),
+                active: a.active ?? true,
+                distanceKm: a.distanceKm,
+              }))}
+              mapType={mapType}
+              onMapTypeChange={(type) => setMapType(type)}
+              selectedAgentId={highlightedAgentId}
+              onSelectAgent={(id) => setHighlightedAgentId(id)}
+              userLocation={userLocation}
+              onRequestUserLocation={handleRequestUserLocation}
+              locatingUser={isLocating}
+            />
 
-            {/* High Precision GPS Location status & Privacy toggle bar */}
-            <div className="bg-white border border-slate-150 p-3.5 rounded-2.5xl shadow-3xs space-y-2.5 text-left">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2 min-w-0">
-                  <div className="p-2 bg-emerald-50 rounded-2xl text-emerald-600 shrink-0">
-                    <Compass className="w-5 h-5 animate-pulse" />
-                  </div>
-                  <div className="min-w-0">
-                    <h4 className="text-[11px] font-black text-slate-900 leading-tight flex items-center gap-1.5">
-                      <span>স্থায়ী এজেন্ট পয়েন্ট নেটওয়ার্ক</span>
-                      <span className="text-[8px] bg-sky-100 text-sky-800 font-extrabold px-1.5 py-0.2 rounded-full border border-sky-200">
-                        Static Point
-                      </span>
-                    </h4>
-                    {isLocating ? (
-                      <p className="text-[9.5px] text-amber-600 font-extrabold flex items-center gap-1 mt-0.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping"></span>
-                        উচ্চ-নির্ভুল জিপিএস সিগন্যাল লোড হচ্ছে...
-                      </p>
-                    ) : userLocation ? (
-                      <p className="text-[9.5px] text-emerald-700 font-bold mt-0.5 flex items-center gap-1">
-                        <span>জিপিএস পাওয়া গেছে</span>
-                        {userLocation.accuracy && (
-                          <span className="text-[9px] text-emerald-600 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-150 font-mono">
-                            ± {toBanglaDigits(userLocation.accuracy.toFixed(0))} মি.
-                          </span>
-                        )}
-                      </p>
-                    ) : locationError ? (
-                      <p className="text-[9.5px] text-rose-600 font-extrabold truncate max-w-[190px] mt-0.5">
-                        {locationError}
-                      </p>
-                    ) : (
-                      <p className="text-[9.5px] text-slate-400 font-extrabold mt-0.5">
-                        নিকটবর্তী এজেন্টদের নিখুঁত দূরত্ব দেখতে অবস্থান সনাক্ত করুন।
-                      </p>
-                    )}
-                  </div>
-                </div>
 
-                <button 
-                  type="button"
-                  onClick={detectUserLocation}
-                  disabled={isLocating}
-                  className={`px-3 py-1.5 rounded-xl text-[9.5px] font-black transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-                    isLocating 
-                      ? 'bg-slate-100 text-slate-400' 
-                      : 'bg-[#0D9488] hover:bg-[#0B7A70] text-white shadow-xs'
-                  }`}
-                >
-                  {isLocating ? 'খোঁজা হচ্ছে...' : 'জিপিএস রিফ্রেশ 📍'}
-                </button>
-              </div>
-
-              {/* Privacy: Share My Location Toggle Switch */}
-              <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs font-sans">
-                <div className="flex items-center gap-1.5">
-                  <Radio className="w-3.5 h-3.5 text-slate-400" />
-                  <span className="text-[10px] font-black text-slate-700">আমার প্রোফাইল ম্যাপে সক্রিয় রাখুন</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleToggleSharing}
-                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                    isSharingLocation ? 'bg-emerald-600' : 'bg-slate-300'
-                  }`}
-                >
-                  <span
-                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
-                      isSharingLocation ? 'translate-x-4' : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-              </div>
-            </div>
-
-            {/* MAP STAGE CONTAINER */}
-            <div className="relative overflow-hidden w-full aspect-[4/3] rounded-3xl bg-sky-950/95 border border-sky-900 shadow-md">
-              {/* Map Zoom Controls Widget */}
-              <div className="absolute bottom-3 right-3 z-22 flex flex-col gap-1.5">
-                <button 
-                  type="button"
-                  onClick={zoomIn}
-                  className="w-8 h-8 rounded-xl bg-white/95 border border-slate-200 hover:bg-slate-50 text-slate-800 font-bold flex items-center justify-center text-sm shadow-xs cursor-pointer select-none"
-                >
-                  +
-                </button>
-                <button 
-                  type="button"
-                  onClick={zoomOut}
-                  className="w-8 h-8 rounded-xl bg-white/95 border border-slate-200 hover:bg-slate-50 text-slate-800 font-bold flex items-center justify-center text-sm shadow-xs cursor-pointer select-none"
-                >
-                  -
-                </button>
-              </div>
-
-              <LeafletActiveMap 
-                mapType={mapType}
-                agents={agentsList}
-                highlightedAgentId={highlightedAgentId}
-                onSelectAgent={setHighlightedAgentId}
-                zoomLevel={zoomLevel}
-                userLocation={userLocation}
-                manualAddress={[profThana, profDist, profCity].filter(Boolean).join(', ')}
-              />
-            </div>
-
-            {/* Selected Agent Detailed Overlay Panel */}
-            <AnimatePresence>
-              {selectedAgent && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 15 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 15 }}
-                >
-                  <AgentProfileCard 
-                    agent={selectedAgent as any}
-                    lang={lang}
-                    onClose={() => setHighlightedAgentId(null)}
-                    favorites={favorites}
-                    onToggleFavorite={toggleFavorite}
-                    onOpenReport={(agent) => {
-                      setReportingAgent(agent as any);
-                    }}
-                    t={t}
-                    toBanglaDigits={toBanglaDigits}
-                    userRole={user.role}
-                    onDeleteAgent={handleDeleteAgent}
-                  />
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* ================= NEAREST AGENT HIGHLIGHT CARD ================= */}
-            {processedAgents.length > 0 && (
-              <div className="bg-gradient-to-br from-teal-900 via-[#0B7A70] to-slate-900 border border-teal-500/30 rounded-3xl p-4 text-white shadow-md space-y-3 relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-teal-400/10 rounded-full blur-2xl pointer-events-none" />
-                
-                <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
-                  <div className="flex items-center gap-2">
-                    <span className="p-1.5 bg-emerald-500/20 text-emerald-300 rounded-xl">
-                      <Navigation className="w-4 h-4 animate-pulse shrink-0" />
-                    </span>
-                    <div>
-                      <h3 className="text-xs font-black text-white flex items-center gap-1.5">
-                        📍 আপনার কাছাকাছি সবচেয়ে নিকটস্থ এজেন্ট
-                      </h3>
-                      <p className="text-[9.5px] text-teal-200 font-bold">
-                        {userLocation ? 'জিপিএস লোকেশন অনুযায়ী সনাক্তকৃত' : 'নিকটবর্তী এজেন্ট ইনফরমেশন'}
-                      </p>
-                    </div>
-                  </div>
-                  {processedAgents[0].distance !== null && (
-                    <span className="bg-emerald-500 text-white text-[10px] font-black px-2.5 py-1 rounded-full shadow-xs shrink-0">
-                      📏 {toBanglaDigits(processedAgents[0].distance.toFixed(1))} কি.মি.
-                    </span>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <img 
-                    src={processedAgents[0].img} 
-                    alt={processedAgents[0].name}
-                    referrerPolicy="no-referrer"
-                    className="w-12 h-12 rounded-2xl object-cover border-2 border-emerald-400/40 shrink-0 shadow-sm" 
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <h4 className="text-xs font-black text-white truncate">{processedAgents[0].name}</h4>
-                      <span className="text-[8px] bg-emerald-400/20 text-emerald-300 border border-emerald-400/30 px-1.5 py-0.5 rounded font-black uppercase">ACTIVE</span>
-                    </div>
-                    <p className="text-[10px] text-slate-200 font-semibold truncate mt-0.5">
-                      📍 {processedAgents[0].city}{processedAgents[0].district ? `, ${processedAgents[0].district}` : ''}
-                    </p>
-                    <p className="text-[10px] text-amber-300 font-bold mt-0.5 flex items-center gap-1">
-                      <span>⏱️ যেতে আনুমানিক সময়:</span>
-                      <span className="bg-amber-400/20 text-amber-200 px-1.5 py-0.5 rounded font-black">
-                        {processedAgents[0].estTime || '10 মিনিট'} ({processedAgents[0].travelType || 'ড্রাইভ'})
-                      </span>
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-2 pt-1 font-sans">
-                  <a 
-                    href={`tel:${processedAgents[0].phone}`}
-                    className="py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-[9.5px] font-black flex items-center justify-center gap-1 transition shadow-xs text-center cursor-pointer"
-                  >
-                    <Phone className="w-3 h-3 shrink-0" />
-                    <span>কল করুন</span>
-                  </a>
-                  <a 
-                    href={`https://wa.me/${processedAgents[0].whatsapp ? processedAgents[0].whatsapp.replace(/[^0-9]/g, '') : processedAgents[0].phone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent('আসসালামু আলাইকুম, আমি BNB কো-অপারেটিভ অ্যাপ থেকে আপনার কাছে সার্ভিস নিতে যোগাযোগ করছি।')}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="py-2 bg-[#25D366] hover:bg-[#20ba56] text-white rounded-xl text-[9.5px] font-black flex items-center justify-center gap-1 transition shadow-xs text-center cursor-pointer"
-                  >
-                    <span>💬 WhatsApp</span>
-                  </a>
-                  <button 
-                    type="button"
-                    onClick={() => setHighlightedAgentId(processedAgents[0].id)}
-                    className="py-2 bg-sky-500 hover:bg-sky-600 text-white rounded-xl text-[9.5px] font-black flex items-center justify-center gap-1 transition shadow-xs text-center cursor-pointer"
-                  >
-                    <MapPin className="w-3 h-3 shrink-0" />
-                    <span>ম্যাপে দেখুন</span>
-                  </button>
-                </div>
-              </div>
-            )}
 
             {/* ================= AGENT APPLICATION COLLAPSIBLE CONTAINER ================= */}
             <div className="bg-white border border-slate-150 rounded-3xl p-4 shadow-3xs transition-all duration-250">

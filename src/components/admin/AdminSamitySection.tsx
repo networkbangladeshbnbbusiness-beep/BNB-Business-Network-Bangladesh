@@ -323,12 +323,13 @@ export function AdminSamitySection(props: any) {
     handleDeleteUser
   } = props;
 
-  const [samityActiveSubTab, setSamityActiveSubTab] = useState<'samity_portal' | 'member_directory' | 'pending_applications'>(props.adminTab === 'general' ? 'member_directory' : 'samity_portal');
+  const [samityActiveSubTab, setSamityActiveSubTab] = useState<'samity_portal' | 'member_directory' | 'pending_applications'>('member_directory');
   const [forceSamitySubView, setForceSamitySubView] = useState<'main' | 'our_investments' | null>(null);
 
   const [selectedAppForReview, setSelectedAppForReview] = useState<User | null>(null);
   const [selectedRoleForApp, setSelectedRoleForApp] = useState<'owner' | 'shareholder' | 'investor' | 'general'>('shareholder');
   const [assignMemberIdForApp, setAssignMemberIdForApp] = useState<string>('');
+  const [modalRejectReason, setModalRejectReason] = useState<string>('প্রদত্ত এনআইডি বা তথ্যে গরমিল রয়েছে। অনুগ্রহ করে সঠিক তথ্য প্রদান করুন।');
   const [appSearchQuery, setAppSearchQuery] = useState<string>('');
   const [isReviewSubmitting, setIsReviewSubmitting] = useState<boolean>(false);
 
@@ -453,6 +454,7 @@ export function AdminSamitySection(props: any) {
     setSelectedRoleForApp(initialRole as any);
     const mId = user.memberId || (typeof autoGenerateMemberId === 'function' ? autoGenerateMemberId() : ('BNB-' + Math.floor(100000 + Math.random() * 900000)));
     setAssignMemberIdForApp(mId);
+    setModalRejectReason('প্রদত্ত এনআইডি বা তথ্যে গরমিল রয়েছে। অনুগ্রহ করে সঠিক তথ্য প্রদান করুন।');
   };
 
   const handleConfirmSamityApproval = async (applicant: User, targetRole: string, targetMemberId: string) => {
@@ -466,6 +468,13 @@ export function AdminSamitySection(props: any) {
     try {
       const finalMemberId = targetMemberId.trim() || applicant.memberId || ('BNB-' + Math.floor(100000 + Math.random() * 900000));
       const nowIso = new Date().toISOString();
+      const installmentAmt = Number((applicant as any).samityApplicationInstallmentAmount || applicant.monthlySavingsTarget) || (targetRole === 'owner' ? 5000 : targetRole === 'shareholder' ? 3000 : targetRole === 'investor' ? 2000 : 1000);
+
+      const userRef = doc(db, 'users', targetUid);
+      const userSnap = await getDoc(userRef);
+      const freshUserData = userSnap.exists() ? userSnap.data() : applicant;
+      const currentSavings = Number(freshUserData.savings || freshUserData.dpsBalance) || 0;
+      const newSavings = currentSavings + installmentAmt;
 
       if (typeof props.setUsers === 'function') {
         props.setUsers((prev: User[]) => prev.map(u => (u.uid === targetUid || u.id === targetUid) ? {
@@ -474,14 +483,16 @@ export function AdminSamitySection(props: any) {
           samityApproved: true,
           isSamityMember: true,
           samityStatus: 'approved',
+          samityAppliedAt: null,
           status: 'active',
           memberCategory: targetRole,
           samityRole: targetRole,
-          memberId: finalMemberId
+          memberId: finalMemberId,
+          savings: newSavings,
+          dpsBalance: newSavings
         } : u));
       }
 
-      const userRef = doc(db, 'users', targetUid);
       const appRef = doc(db, 'samity_applications', targetUid);
 
       const updatePayload = {
@@ -489,22 +500,48 @@ export function AdminSamitySection(props: any) {
         samityApproved: true,
         isSamityMember: true,
         samityStatus: 'approved',
+        samityAppliedAt: null,
         status: 'active',
         memberCategory: targetRole,
         samityRole: targetRole,
         memberId: finalMemberId,
+        savings: newSavings,
+        dpsBalance: newSavings,
         updatedAt: nowIso
       };
 
       await Promise.all([
         updateDoc(userRef, updatePayload).catch(() => setDoc(userRef, updatePayload, { merge: true })),
-        setDoc(appRef, updatePayload, { merge: true }).catch(() => {})
+        deleteDoc(appRef).catch(() => setDoc(appRef, updatePayload, { merge: true }))
       ]);
+
+      // Update pending samity_deposit transaction if exists
+      try {
+        const qPendingTx = query(
+          collection(db, 'transactions'),
+          where('userId', '==', targetUid),
+          where('category', '==', 'samity_deposit'),
+          where('status', '==', 'pending')
+        );
+        const snapPendingTx = await getDocs(qPendingTx);
+        await Promise.all(snapPendingTx.docs.map(async (d) => {
+          await updateDoc(doc(db, 'transactions', d.id), {
+            status: 'success',
+            isApproved: true,
+            reviewStatus: 'approved',
+            description: `এডমিন কর্তৃক সদস্যপদ অনুমোদন সম্পন্ন এবং ১ম মাসের সঞ্চয় কিস্তি ৳${installmentAmt.toLocaleString('bn-BD')} টাকা সঞ্চয়ে জমা হয়েছে।`,
+            updatedAt: nowIso
+          });
+        }));
+      } catch (e) {
+        console.warn("Tx update warning on approval:", e);
+      }
 
       const roleLabels: Record<string, string> = {
         owner: '👑 অনার (Owner / স্বত্বাধিকারী)',
         shareholder: '📈 শেয়ার হোল্ডার (Shareholder / শেয়ারমালিক)',
         investor: '💼 ইনভেস্টার (Investor / বিনিয়োগকারী)',
+        supporter: '🟡 সাপোর্টার (Supporter)',
         general: '👥 সাধারণ সমবায় সদস্য (General Member)'
       };
       const roleText = roleLabels[targetRole] || targetRole;
@@ -515,13 +552,13 @@ export function AdminSamitySection(props: any) {
         userId: targetUid,
         memberId: finalMemberId,
         title: "🎉 সমবায় সমিতির সদস্যপদ সফলভাবে অনুমোদিত!",
-        body: "অভিনন্দন আপনার সদস্যপদ সফলভাবে অনুমোদিত হয়েছে।",
+        body: `অভিনন্দন ${applicant.name || ''}! আপনার ${roleText} সদস্যপদ সফলভাবে অনুমোদিত হয়েছে এবং ১ম মাসের সঞ্চয় কিস্তি ৳${installmentAmt.toLocaleString('bn-BD')} টাকা আপনার সঞ্চয়ে জমা হয়েছে।`,
         read: false,
         createdAt: nowIso,
         type: 'samity_approved'
       }).catch(() => {});
 
-      alert("✅ সদস্যপদ সফলভাবে অনুমোদন করা হয়েছে।");
+      alert(`✅ সদস্যপদ সফলভাবে অনুমোদন করা হয়েছে! (১ম মাসের কিস্তি ৳${installmentAmt.toLocaleString('bn-BD')} টাকা সঞ্চয়ে যুক্ত হয়েছে)`);
       setSelectedAppForReview(null);
     } catch (err: any) {
       console.error("Error confirming samity approval:", err);
@@ -531,51 +568,92 @@ export function AdminSamitySection(props: any) {
     }
   };
 
-  const handleRejectSamityAppWithReason = async (applicant: User) => {
+  const handleRejectSamityAppWithReason = async (applicant: User, customReason?: string) => {
     const targetUid = applicant.uid || applicant.id;
     if (!targetUid) return;
 
-    const reason = window.prompt("আবেদন বাতিলের কারণ লিখুন (সদস্যকে নোটিফিকেশন পাঠানো হবে):", "প্রদত্ত এনআইডি বা তথ্যে গরমিল রয়েছে। অনুগ্রহ করে সঠিক তথ্য প্রদান করুন।");
-    if (!reason || !reason.trim()) return;
+    let reason = customReason !== undefined ? customReason : '';
+    if (!reason || !reason.trim()) {
+      reason = window.prompt("আবেদন বাতিলের কারণ লিখুন (সদস্যকে নোটিফিকেশন পাঠানো হবে):", "প্রদত্ত এনআইডি বা তথ্যে গরমিল রয়েছে। অনুগ্রহ করে সঠিক তথ্য প্রদান করুন।") || '';
+    }
+    const finalReason = reason.trim() || "প্রদত্ত এনআইডি বা তথ্যে অসংগতি থাকায় আবেদনটি বাতিল করা হয়েছে।";
 
     setIsReviewSubmitting(true);
     try {
       const nowIso = new Date().toISOString();
+      const installmentAmt = Number((applicant as any).samityApplicationInstallmentAmount || applicant.monthlySavingsTarget) || (applicant.memberCategory === 'owner' ? 5000 : applicant.memberCategory === 'shareholder' ? 3000 : applicant.memberCategory === 'investor' ? 2000 : 1000);
+
       const userRef = doc(db, 'users', targetUid);
-      const appRef = doc(db, 'samity_applications', targetUid);
+      const userSnap = await getDoc(userRef);
+      const freshUserData = userSnap.exists() ? userSnap.data() : applicant;
+      const currentMainBal = Number(freshUserData.balance !== undefined ? freshUserData.balance : freshUserData.mainBalance) || 0;
+      const refundedMainBal = currentMainBal + installmentAmt;
 
       if (typeof props.setUsers === 'function') {
         props.setUsers((prev: User[]) => prev.map(u => (u.uid === targetUid || u.id === targetUid) ? {
           ...u,
           samityStatus: 'rejected',
-          samityApproved: false
+          samityApproved: false,
+          samityAppliedAt: null,
+          samityRejectionReason: finalReason,
+          balance: refundedMainBal,
+          mainBalance: refundedMainBal
         } : u));
       }
+
+      const appRef = doc(db, 'samity_applications', targetUid);
 
       const updatePayload = {
         samityStatus: 'rejected',
         samityApproved: false,
-        samityRejectionReason: reason.trim(),
+        samityAppliedAt: null,
+        status: 'rejected',
+        samityRejectionReason: finalReason,
+        balance: refundedMainBal,
+        mainBalance: refundedMainBal,
         updatedAt: nowIso
       };
 
       await Promise.all([
         updateDoc(userRef, updatePayload).catch(() => setDoc(userRef, updatePayload, { merge: true })),
-        setDoc(appRef, updatePayload, { merge: true }).catch(() => {})
+        deleteDoc(appRef).catch(() => setDoc(appRef, updatePayload, { merge: true }))
       ]);
+
+      // Refund transaction
+      try {
+        const qPendingTx = query(
+          collection(db, 'transactions'),
+          where('userId', '==', targetUid),
+          where('category', '==', 'samity_deposit'),
+          where('status', '==', 'pending')
+        );
+        const snapPendingTx = await getDocs(qPendingTx);
+        await Promise.all(snapPendingTx.docs.map(async (d) => {
+          await updateDoc(doc(db, 'transactions', d.id), {
+            status: 'rejected',
+            isApproved: false,
+            reviewStatus: 'rejected',
+            rejectReason: finalReason,
+            description: `সদস্যপদ আবেদন বাতিল হওয়ায় ১ম মাসের জমা ৳${installmentAmt.toLocaleString('bn-BD')} টাকা মেইন ওয়ালেটে রিফান্ড করা হয়েছে। কারণ: ${finalReason}`,
+            updatedAt: nowIso
+          });
+        }));
+      } catch (e) {
+        console.warn("Tx update warning on rejection:", e);
+      }
 
       const notifId = 'notif_samity_rej_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
       await setDoc(doc(db, 'user_notifications', notifId), {
         id: notifId,
         userId: targetUid,
-        title: "❌ সমবায় সদস্যপদ আবেদন বাতিল",
-        body: `দুঃখিত, আপনার সমবায় সদস্যপদ আবেদনটি বাতিল করা হয়েছে। কারণ: ${reason.trim()}`,
+        title: "❌ সমবায় সদস্যপদ আবেদন বাতিল ও টাকা রিফান্ড",
+        body: `দুঃখিত, আপনার সমবায় সদস্যপদ আবেদনটি বাতিল করা হয়েছে। কারণ: ${finalReason}। আবেদনের জন্য কেটে নেওয়া ১ম মাসের কিস্তির ৳${installmentAmt.toLocaleString('bn-BD')} টাকা আপনার মেইন ওয়ালেটে রিফান্ড করা হয়েছে।`,
         read: false,
         createdAt: nowIso,
         type: 'samity_rejected'
       }).catch(() => {});
 
-      alert("❌ আবেদন বাতিলের বিষয়টি নিশ্চিত করা হয়েছে।");
+      alert(`❌ আবেদন বাতিল সম্পন্ন হয়েছে এবং সদস্যের মেইন ওয়ালেটে ৳${installmentAmt.toLocaleString('bn-BD')} টাকা রিফান্ড করা হয়েছে।`);
       setSelectedAppForReview(null);
     } catch (err: any) {
       alert("বাতিল করতে সমস্যা হয়েছে: " + (err.message || err));
@@ -913,83 +991,66 @@ export function AdminSamitySection(props: any) {
                   }
 
                   return (
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5">
                       {pendingApps.map((appUser: any, idx: number) => {
                         const memberCategoryLabel: Record<string, string> = {
-                          owner: '👑 অনার (Owner / স্বত্বাধিকারী)',
-                          shareholder: '📈 শেয়ার হোল্ডার (Shareholder)',
-                          investor: '💼 ইনভেস্টার (Investor / বিনিয়োগকারী)',
-                          general: '👥 সাধারণ সমবায় সদস্য'
+                          owner: '👑 অনার (৳৫,০০০)',
+                          shareholder: '📈 শেয়ার হোল্ডার (৳৩,০০০)',
+                          investor: '💼 ইনভেস্টার (৳২,০০০)',
+                          supporter: '🟡 সাপোর্টার (৳১,০০০)',
+                          general: '👥 সাধারণ সদস্য'
                         };
                         const catLabel = memberCategoryLabel[appUser.memberCategory || 'shareholder'] || '📈 শেয়ার হোল্ডার';
+                        const firstMonthAmt = Number(appUser.samityApplicationInstallmentAmount || appUser.monthlySavingsTarget) || (appUser.memberCategory === 'owner' ? 5000 : appUser.memberCategory === 'shareholder' ? 3000 : appUser.memberCategory === 'investor' ? 2000 : 1000);
 
                         return (
                           <div 
                             key={appUser.uid || idx}
-                            className="bg-white border-2 border-amber-200/80 rounded-3xl p-4 sm:p-5 shadow-md hover:shadow-lg transition space-y-3 relative overflow-hidden flex flex-col justify-between"
+                            className="bg-white border-2 border-amber-200/90 hover:border-amber-400 rounded-2xl p-2.5 shadow-2xs hover:shadow-xs transition space-y-2 flex flex-col justify-between relative overflow-hidden"
                           >
-                            <div className="absolute top-0 right-0 bg-gradient-to-l from-amber-500 to-orange-600 text-white text-[10px] font-black px-3 py-1 rounded-bl-2xl shadow-xs">
-                              {catLabel}
+                            {/* Card Top Category & ID Badge */}
+                            <div className="flex items-center justify-between gap-1 border-b border-amber-100 pb-1.5">
+                              <span className="text-[9.5px] font-black bg-gradient-to-r from-amber-500 to-orange-600 text-white px-1.5 py-0.5 rounded-md truncate">
+                                {catLabel}
+                              </span>
+                              {appUser.memberId && (
+                                <span className="text-[8.5px] font-mono text-slate-600 font-bold bg-slate-100 px-1 py-0.5 rounded shrink-0">
+                                  #{appUser.memberId}
+                                </span>
+                              )}
                             </div>
 
-                            <div className="space-y-2 pr-20">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <h4 className="text-sm sm:text-base font-black text-slate-900">{appUser.name || 'নামবিহীন সদস্য'}</h4>
-                                <span className="text-xs font-mono font-bold bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 rounded-lg">
-                                  📱 {appUser.phone}
-                                </span>
-                                {appUser.memberId && (
-                                  <span className="text-xs font-mono text-slate-600 font-bold bg-slate-100 px-2 py-0.5 rounded-lg">
-                                    ID: #{appUser.memberId}
-                                  </span>
-                                )}
+                            {/* Main Basic Info Block */}
+                            <div className="space-y-1.5 text-left">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-amber-500 to-amber-700 text-white font-black text-xs flex items-center justify-center shrink-0 shadow-2xs">
+                                  {(appUser.name || 'U').charAt(0).toUpperCase()}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <h4 className="text-[11px] font-black text-slate-900 truncate leading-tight">{appUser.name || 'নামবিহীন সদস্য'}</h4>
+                                  <p className="text-[9.5px] font-mono font-bold text-amber-800 truncate">📱 {appUser.phone}</p>
+                                </div>
                               </div>
-                              <p className="text-[11px] text-slate-500 font-medium">
-                                📅 আবেদন করার সময়: {appUser.samityAppliedAt ? new Date(appUser.samityAppliedAt).toLocaleString('bn-BD') : 'তারিখ অনুপলব্ধ'}
+
+                              <div className="bg-amber-50/90 rounded-lg px-2 py-1 border border-amber-200/70 text-[9.5px] flex items-center justify-between">
+                                <span className="text-slate-600 font-medium">১ম সঞ্চয় কিস্তি:</span>
+                                <span className="font-mono font-black text-emerald-700">৳{firstMonthAmt.toLocaleString('bn-BD')}</span>
+                              </div>
+
+                              <p className="text-[8.5px] text-slate-400 font-medium truncate">
+                                🕒 {appUser.samityAppliedAt ? new Date(appUser.samityAppliedAt).toLocaleDateString('bn-BD') : 'তারিখ অনুপলব্ধ'}
                               </p>
                             </div>
 
-                            {/* Detailed Information Grid */}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-slate-50/80 p-3 rounded-2xl border border-slate-200/80 text-xs">
-                              <div className="space-y-1">
-                                <p className="text-slate-600"><strong className="text-slate-800">पिता/Father:</strong> {appUser.fatherName || 'প্রদান করা হয়নি'}</p>
-                                <p className="text-slate-600"><strong className="text-slate-800">माता/Mother:</strong> {appUser.motherName || 'প্রদান করা হয়নি'}</p>
-                                <p className="text-slate-600"><strong className="text-slate-800">NID / Passport:</strong> <span className="font-mono font-bold text-slate-900">{appUser.nid || 'প্রদান করা হয়নি'}</span></p>
-                                <p className="text-slate-600"><strong className="text-slate-800">जन्मतारीখ/DOB:</strong> {appUser.dob || 'প্রদান করা হয়নি'}</p>
-                              </div>
-                              <div className="space-y-1">
-                                <p className="text-slate-600"><strong className="text-slate-800">ঠিকানা:</strong> {[appUser.postOffice, appUser.thana, appUser.district, appUser.division].filter(Boolean).join(', ') || 'প্রদান করা হয়নি'}</p>
-                                <p className="text-slate-600"><strong className="text-slate-800">দেশ:</strong> {appUser.country || 'Bangladesh'}</p>
-                                <p className="text-slate-600"><strong className="text-slate-800">নমিনির নাম:</strong> {appUser.nomineeName || 'প্রদান করা হয়নি'} ({appUser.nomineeRelation || '-'})</p>
-                                <p className="text-slate-600"><strong className="text-slate-800">নমিনির ফোন:</strong> <span className="font-mono">{appUser.nomineePhone || '-'}</span></p>
-                              </div>
-                            </div>
-
-                            {appUser.samityOptOutReason && (
-                              <div className="bg-amber-50 border border-amber-200 p-2 rounded-xl text-xs text-amber-900">
-                                <strong>📝 আবেদনের নোট / কারণ:</strong> {appUser.samityOptOutReason}
-                              </div>
-                            )}
-
-                            {/* Action Buttons */}
-                            <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
-                              <button
-                                type="button"
-                                onClick={() => handleOpenReviewModal(appUser)}
-                                className="flex-1 py-2 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white font-black text-xs rounded-xl transition cursor-pointer shadow-xs flex items-center justify-center gap-1.5"
-                              >
-                                <span>🔍</span>
-                                <span>যাচাই করে অনুমোদন দিন (Approve)</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleRejectSamityAppWithReason(appUser)}
-                                className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs rounded-xl transition cursor-pointer flex items-center gap-1"
-                              >
-                                <span>❌</span>
-                                <span>বাতিল</span>
-                              </button>
-                            </div>
+                            {/* Card Action Button - Single Button to View Details */}
+                            <button
+                              type="button"
+                              onClick={() => handleOpenReviewModal(appUser)}
+                              className="w-full py-1.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-black text-[10.5px] rounded-xl transition cursor-pointer flex items-center justify-center gap-1 active:scale-95 shadow-2xs"
+                            >
+                              <span>🔍</span>
+                              <span>বিস্তারিত দেখুন</span>
+                            </button>
                           </div>
                         );
                       })}
@@ -1520,26 +1581,46 @@ export function AdminSamitySection(props: any) {
               </button>
             </div>
 
-            {/* 3. 🌟 8-Category Member Statistics & Control Hub (১ লাইনে ৪টি করে মোট ৮টি সেকশন) - Slim Grid */}
+            {/* 3. 🌟 Member Statistics & Control Hub (১০টি সেকশন - ২টি লাইনে ৫টি করে) */}
             {(() => {
               const isSubAdminUser = (u: any) => Boolean(
                 u.role === 'sub_admin' ||
+                u.role === 'admin' ||
                 (Array.isArray(u.subAdminPermissions) && u.subAdminPermissions.length > 0) ||
                 u.isSubAdmin === true
               );
 
               const isOwnerUser = (u: any) => Boolean(
                 u.memberCategory === 'owner' ||
+                Number(u.monthlySavingsTarget) === 5000 ||
                 u.memberGroup === 'owner'
               );
 
+              const isShareholderUser = (u: any) => Boolean(
+                (u.memberCategory === 'shareholder' || Number(u.monthlySavingsTarget) === 3000 || u.memberGroup === 'shareholder') &&
+                !isOwnerUser(u)
+              );
+
               const isInvestorUser = (u: any) => Boolean(
-                u.memberCategory === 'investor' ||
-                u.memberGroup === 'investor' ||
-                u.isInvestor === true ||
-                u.role === 'investor' ||
-                (Array.isArray(u.investments) && u.investments.length > 0) ||
-                u.investorApproved === true
+                (u.memberCategory === 'investor' || Number(u.monthlySavingsTarget) === 2000 || u.memberGroup === 'investor' || u.isInvestor === true || (Array.isArray(u.investments) && u.investments.length > 0)) &&
+                !isOwnerUser(u) &&
+                !isShareholderUser(u)
+              );
+
+              const isSupporterUser = (u: any) => Boolean(
+                (u.memberCategory === 'supporter' || Number(u.monthlySavingsTarget) === 1000 || u.memberGroup === 'supporter') &&
+                !isOwnerUser(u) &&
+                !isShareholderUser(u) &&
+                !isInvestorUser(u)
+              );
+
+              const isGeneralUser = (u: any) => Boolean(
+                !isOwnerUser(u) &&
+                !isShareholderUser(u) &&
+                !isInvestorUser(u) &&
+                !isSupporterUser(u) &&
+                u.role !== 'admin' &&
+                u.role !== 'sub_admin'
               );
 
               const isSamityMemberUser = (u: any) => Boolean(
@@ -1547,11 +1628,10 @@ export function AdminSamitySection(props: any) {
                 u.samityStatus === 'approved' ||
                 u.isSamityMember === true ||
                 (Number(u.savings) > 0) ||
-                u.memberCategory === 'shareholder' ||
-                u.memberCategory === 'owner' ||
-                u.memberGroup === 'shareholder' ||
-                u.memberGroup === 'owner' ||
-                u.memberGroup === 'samity'
+                isOwnerUser(u) ||
+                isShareholderUser(u) ||
+                isInvestorUser(u) ||
+                isSupporterUser(u)
               );
 
               const isSwitchOffUser = (u: any) => Boolean(
@@ -1562,8 +1642,34 @@ export function AdminSamitySection(props: any) {
 
               const isSwitchOnUser = (u: any) => Boolean(
                 (u.samityAutoSavingsActive === true || u.samitySwitchStatus === 'ON' || u.samityDeactivateStatus === 'active') &&
-                isSamityMemberUser(u)
+                isSamityMemberUser(u) &&
+                !isSwitchOffUser(u)
               );
+
+              const currentMonthNumber = new Date().getMonth() + 1;
+
+              const getPaidMonthsCountForUser = (u: any) => {
+                if (Array.isArray(u.samityPaidMonths) && u.samityPaidMonths.length > 0) {
+                  return getUniquePaidMonthsCount(u.samityPaidMonths, u.savings, u.monthlySavingsTarget);
+                }
+                const monthlyRate = Number(u.monthlySavingsTarget) || (isOwnerUser(u) ? 5000 : isShareholderUser(u) ? 3000 : isInvestorUser(u) ? 2000 : isSupporterUser(u) ? 1000 : 1000);
+                const savings = Number(u.savings) || Number(u.dpsBalance) || 0;
+                return Math.floor(savings / monthlyRate);
+              };
+
+              const isPaidCurrentMonthUser = (u: any) => {
+                if (!isSamityMemberUser(u)) return false;
+                if (isSwitchOffUser(u)) return false;
+                const paidCount = getPaidMonthsCountForUser(u);
+                return paidCount >= currentMonthNumber;
+              };
+
+              const isDueCurrentMonthUser = (u: any) => {
+                if (!isSamityMemberUser(u)) return false;
+                if (isSwitchOffUser(u)) return false;
+                const paidCount = getPaidMonthsCountForUser(u);
+                return paidCount < currentMonthNumber;
+              };
 
               const isResetRequestedUser = (u: any) => Boolean(
                 u.appLockResetRequested === true ||
@@ -1575,22 +1681,25 @@ export function AdminSamitySection(props: any) {
 
               const subAdminUsers = users.filter(isSubAdminUser);
               const ownerUsers = users.filter(isOwnerUser);
-              const investorUsers = users.filter(u => isInvestorUser(u) && !isSubAdminUser(u));
-              const samityShareholderUsers = users.filter(u => (isSamityMemberUser(u) || u.memberCategory === 'shareholder') && !isInvestorUser(u) && !isSubAdminUser(u));
-              const generalAppUsers = users.filter(u => !isSamityMemberUser(u) && !isInvestorUser(u) && !isSubAdminUser(u) && u.role !== 'admin');
+              const samityShareholderUsers = users.filter(isShareholderUser);
+              const investorUsers = users.filter(isInvestorUser);
+              const supporterUsers = users.filter(isSupporterUser);
+              const generalAppUsers = users.filter(isGeneralUser);
               const switchOffUsers = users.filter(isSwitchOffUser);
               const switchOnUsers = users.filter(isSwitchOnUser);
+              const paidCurrentMonthUsers = users.filter(isPaidCurrentMonthUser);
+              const dueCurrentMonthUsers = users.filter(isDueCurrentMonthUser);
               const appLockResetUsers = users.filter(isResetRequestedUser);
               const totalSwitchOffRefundAmount = switchOffUsers.reduce((sum, u) => sum + (Number(u.savings) || 0) + (Number(u.samityBalance) || 0), 0);
 
               return (
-                <div className="bg-slate-900 border border-slate-800 p-2 sm:p-2.5 rounded-xl text-white space-y-1.5 shadow-md">
+                <div className="bg-slate-900 border border-slate-800 p-2 sm:p-2.5 rounded-xl text-white space-y-2 shadow-md">
                   {/* Hub Header - Slim 1-line */}
                   <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-1.5">
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
                       <h3 className="text-[11px] sm:text-xs font-bold text-slate-200 truncate">
-                        📊 সদস্য ক্যাটাগরি ও রিকোয়েস্ট হাব (১ লাইনে ৪টি করে ৮টি সেকশন)
+                        📊 সদস্য ক্যাটাগরি ও ফিল্টার হাব (১০টি সেকশন)
                       </h3>
                     </div>
 
@@ -1608,145 +1717,193 @@ export function AdminSamitySection(props: any) {
                     )}
                   </div>
 
-                  {/* 🔴🟡⚪ সদস্য ক্যাটাগরি — ৪টি সেকশন এক লাইনে (UI-তে এক লাইনের মূল প্রদর্শন) */}
-                  <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-1 shadow-sm space-y-1">
-                    <div className="flex items-center justify-between px-1 text-[9px] font-black text-slate-300">
-                      <span>🔴🟡⚪ সদস্য ক্যাটাগরি ফিল্টার ও নিয়ন্ত্রণ (এক লাইনে ৪টি সেকশন):</span>
+                  {/* ROW 1: 🔴🔵🟢🟡⚪ সদস্য ক্যাটাগরি — ১ সিরিয়ালে ৫টি সেকশন */}
+                  <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-1.5 shadow-sm space-y-1">
+                    <div className="flex items-center justify-between px-1 text-[9.5px] font-black text-slate-300">
+                      <span>🔴🔵🟢🟡⚪ সদস্য ক্যাটাগরি ফিল্টার ও নিয়ন্ত্রণ (১ম সারিতে ৫টি ক্যাটাগরি):</span>
                       <span className="text-[8px] font-mono text-emerald-400">রিয়েল-টাইম সিঙ্ক</span>
                     </div>
-                    <div className="grid grid-cols-4 gap-1 p-0.5 bg-slate-900 rounded-lg border border-slate-800">
-                      {/* 1. 🔴 ওনার */}
+                    <div className="grid grid-cols-5 gap-1 sm:gap-1.5 p-1 bg-slate-900 rounded-lg border border-slate-800">
+                      {/* 1. 🔴 ওনার (৳৫,০০০/মাস) */}
                       <button
                         type="button"
                         onClick={() => setGeneralMemberFilterTab(generalMemberFilterTab === 'owner' ? 'all' : 'owner')}
-                        className={`py-1 px-0.5 rounded-lg transition-all flex flex-col items-center justify-center text-center cursor-pointer min-h-[52px] ${
+                        className={`py-1.5 px-0.5 rounded-lg transition-all flex flex-col items-center justify-between text-center cursor-pointer min-h-[58px] ${
                           generalMemberFilterTab === 'owner'
-                            ? 'bg-rose-700 text-white ring-2 ring-rose-400 shadow-md'
+                            ? 'bg-rose-700 text-white ring-2 ring-rose-400 shadow-md font-black border-rose-500'
                             : 'bg-slate-800 hover:bg-rose-950/60 text-slate-200 border border-slate-700'
                         }`}
                       >
-                        <span className="text-[10px] font-black leading-tight">🔴 ওনার</span>
-                        <span className="text-[8px] font-mono font-bold text-rose-300">৳৪,০০০/মাস</span>
-                        <span className="text-[7.5px] bg-black/40 text-rose-200 px-1 py-0.2 rounded mt-0.5">
-                          {ownerUsers.length} জন • নমিনি ৩
+                        <span className="text-[10px] sm:text-[11px] font-black leading-tight truncate max-w-full">🔴 ওনার</span>
+                        <span className="text-[8.5px] sm:text-[9.5px] font-mono font-bold text-rose-300 truncate max-w-full">৳৫,০০০/মাস</span>
+                        <span className="text-[8px] sm:text-[8.5px] bg-black/40 text-rose-200 px-1 py-0.2 rounded font-bold mt-0.5 truncate max-w-full">
+                          {ownerUsers.length} জন
                         </span>
                       </button>
 
-                      {/* 2. 🔵 শেয়ার হোল্ডার */}
+                      {/* 2. 🔵 শেয়ার হোল্ডার (৳৩,০০০/মাস) */}
                       <button
                         type="button"
                         onClick={() => setGeneralMemberFilterTab(generalMemberFilterTab === 'shareholder' ? 'all' : 'shareholder')}
-                        className={`py-1 px-0.5 rounded-lg transition-all flex flex-col items-center justify-center text-center cursor-pointer min-h-[52px] ${
+                        className={`py-1.5 px-0.5 rounded-lg transition-all flex flex-col items-center justify-between text-center cursor-pointer min-h-[58px] ${
                           generalMemberFilterTab === 'shareholder'
-                            ? 'bg-blue-600 text-white ring-2 ring-blue-400 shadow-md font-black'
+                            ? 'bg-blue-600 text-white ring-2 ring-blue-400 shadow-md font-black border-blue-500'
                             : 'bg-slate-800 hover:bg-blue-950/60 text-slate-200 border border-slate-700'
                         }`}
                       >
-                        <span className="text-[10px] font-black leading-tight">🟡 শেয়ার হোল্ডার</span>
-                        <span className="text-[8px] font-mono font-bold text-blue-300">৳২,০০০/মাস</span>
-                        <span className="text-[7.5px] bg-black/40 text-blue-200 px-1 py-0.2 rounded mt-0.5">
-                          {samityShareholderUsers.length} জন • নমিনি ২
+                        <span className="text-[10px] sm:text-[11px] font-black leading-tight truncate max-w-full">🔵 শেয়ার হোল্ডার</span>
+                        <span className="text-[8.5px] sm:text-[9.5px] font-mono font-bold text-blue-300 truncate max-w-full">৳৩,০০০/মাস</span>
+                        <span className="text-[8px] sm:text-[8.5px] bg-black/40 text-blue-200 px-1 py-0.2 rounded font-bold mt-0.5 truncate max-w-full">
+                          {samityShareholderUsers.length} জন
                         </span>
                       </button>
 
-                      {/* 3. 🟢 ইনভেস্টার */}
+                      {/* 3. 🟢 ইনভেস্টার (৳২,০০০/মাস) */}
                       <button
                         type="button"
                         onClick={() => setGeneralMemberFilterTab(generalMemberFilterTab === 'investor' ? 'all' : 'investor')}
-                        className={`py-1 px-0.5 rounded-lg transition-all flex flex-col items-center justify-center text-center cursor-pointer min-h-[52px] ${
+                        className={`py-1.5 px-0.5 rounded-lg transition-all flex flex-col items-center justify-between text-center cursor-pointer min-h-[58px] ${
                           generalMemberFilterTab === 'investor'
-                            ? 'bg-emerald-600 text-white ring-2 ring-emerald-400 shadow-md font-black'
+                            ? 'bg-emerald-600 text-white ring-2 ring-emerald-400 shadow-md font-black border-emerald-500'
                             : 'bg-slate-800 hover:bg-emerald-950/60 text-slate-200 border border-slate-700'
                         }`}
                       >
-                        <span className="text-[10px] font-black leading-tight">⚪ ইনভেস্টার</span>
-                        <span className="text-[8px] font-mono font-bold text-emerald-300">৳১,০০০/মাস</span>
-                        <span className="text-[7.5px] bg-black/40 text-slate-300 px-1 py-0.2 rounded mt-0.5">
-                          {investorUsers.length} জন • নমিনি ১
+                        <span className="text-[10px] sm:text-[11px] font-black leading-tight truncate max-w-full">🟢 ইনভেস্টার</span>
+                        <span className="text-[8.5px] sm:text-[9.5px] font-mono font-bold text-emerald-300 truncate max-w-full">৳২,০০০/মাস</span>
+                        <span className="text-[8px] sm:text-[8.5px] bg-black/40 text-emerald-200 px-1 py-0.2 rounded font-bold mt-0.5 truncate max-w-full">
+                          {investorUsers.length} জন
                         </span>
                       </button>
 
-                      {/* 4. ⚪ সাধারণ সদস্য — White */}
+                      {/* 4. 🟡 সাপোর্টার (৳১,০০০/মাস) */}
+                      <button
+                        type="button"
+                        onClick={() => setGeneralMemberFilterTab(generalMemberFilterTab === 'supporter' ? 'all' : 'supporter')}
+                        className={`py-1.5 px-0.5 rounded-lg transition-all flex flex-col items-center justify-between text-center cursor-pointer min-h-[58px] ${
+                          generalMemberFilterTab === 'supporter'
+                            ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-300 shadow-md font-black border-amber-400'
+                            : 'bg-slate-800 hover:bg-amber-950/60 text-slate-200 border border-slate-700'
+                        }`}
+                      >
+                        <span className="text-[10px] sm:text-[11px] font-black leading-tight truncate max-w-full">🟡 সাপোর্টার</span>
+                        <span className="text-[8.5px] sm:text-[9.5px] font-mono font-bold text-amber-300 truncate max-w-full">৳১,০০০/মাস</span>
+                        <span className="text-[8px] sm:text-[8.5px] bg-black/40 text-amber-200 px-1 py-0.2 rounded font-bold mt-0.5 truncate max-w-full">
+                          {supporterUsers.length} জন
+                        </span>
+                      </button>
+
+                      {/* 5. ⚪ সাধারণ সদস্য (সমবায় সমিতিতে নাই) */}
                       <button
                         type="button"
                         onClick={() => setGeneralMemberFilterTab(generalMemberFilterTab === 'general' ? 'all' : 'general')}
-                        className={`py-1 px-0.5 rounded-lg transition-all flex flex-col items-center justify-center text-center cursor-pointer min-h-[52px] ${
+                        className={`py-1.5 px-0.5 rounded-lg transition-all flex flex-col items-center justify-between text-center cursor-pointer min-h-[58px] ${
                           generalMemberFilterTab === 'general'
-                            ? 'bg-white text-slate-900 ring-2 ring-slate-300 shadow-md font-black'
+                            ? 'bg-white text-slate-900 ring-2 ring-slate-300 shadow-md font-black border-white'
                             : 'bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700'
                         }`}
                       >
-                        <span className="text-[10px] font-black leading-tight">⚪ সাধারণ সদস্য</span>
-                        <span className="text-[8px] font-mono font-bold text-slate-300">ফ্রি / বেসিক</span>
-                        <span className="text-[7.5px] bg-black/40 text-slate-200 px-1 py-0.2 rounded mt-0.5">
+                        <span className="text-[10px] sm:text-[11px] font-black leading-tight truncate max-w-full">⚪ সাধারণ সদস্য</span>
+                        <span className="text-[8.5px] sm:text-[9.5px] font-mono font-bold text-slate-300 truncate max-w-full">ফ্রি / বেসিক</span>
+                        <span className="text-[8px] sm:text-[8.5px] bg-black/40 text-slate-200 px-1 py-0.2 rounded font-bold mt-0.5 truncate max-w-full">
                           {generalAppUsers.length} জন
                         </span>
                       </button>
                     </div>
                   </div>
 
-                    {/* 8 Sections STRICTLY in 4-per-row grid (Row 1: 4 Cards, Row 2: 4 Cards) */}
-                    <div className="grid grid-cols-4 gap-1 sm:gap-1.5">
-                      {/* 1. সর্বমোট সদস্য */}
-                      <button type="button" onClick={() => setGeneralMemberFilterTab('all')} className={`p-1.5 sm:p-2 rounded-lg border text-left transition-all cursor-pointer min-w-0 flex flex-col justify-between ${generalMemberFilterTab === 'all' ? 'bg-slate-800 border-slate-500 text-white shadow-xs ring-1 ring-emerald-400' : 'bg-slate-950/70 border-slate-800 hover:border-slate-700 text-slate-300'}`}>
-                        <span className="text-[7px] sm:text-[8.5px] font-extrabold uppercase text-slate-400 truncate">🌐 সর্বমোট সদস্য</span>
-                        <h4 className="text-xs sm:text-base font-black text-white font-mono truncate">{users.length} জন</h4>
-                        <p className="text-[6.5px] sm:text-[7.5px] font-medium text-slate-500 truncate">সকল নিবন্ধিত</p>
+                  {/* ROW 2: 📌 অ্যাডমিন ও সমিতি পেমেন্ট ফিল্টার হাব (২য় সারিতে নতুন ৫টি সেকশন) */}
+                  <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-1.5 shadow-sm space-y-1">
+                    <div className="flex items-center justify-between px-1 text-[9.5px] font-black text-slate-300">
+                      <span>📌 অ্যাডমিন ও রানিং মাস পেমেন্ট ফিল্টার হাব (২য় সারিতে ৫টি সেকশন):</span>
+                      <span className="text-[8px] font-mono text-emerald-400">অটো ট্র্যাকিং</span>
+                    </div>
+                    <div className="grid grid-cols-5 gap-1 sm:gap-1.5 p-1 bg-slate-900 rounded-lg border border-slate-800">
+                      {/* 1. 👥 সর্বমোট সদস্য */}
+                      <button
+                        type="button"
+                        onClick={() => setGeneralMemberFilterTab('all')}
+                        className={`py-1.5 px-0.5 rounded-lg transition-all flex flex-col items-center justify-between text-center cursor-pointer min-h-[58px] ${
+                          generalMemberFilterTab === 'all'
+                            ? 'bg-purple-600 text-white ring-2 ring-purple-400 shadow-md font-black border-purple-500'
+                            : 'bg-slate-800 hover:bg-purple-950/60 text-slate-200 border border-slate-700'
+                        }`}
+                      >
+                        <span className="text-[10px] sm:text-[11px] font-black leading-tight truncate max-w-full">👥 সর্বমোট সদস্য</span>
+                        <span className="text-[8.5px] sm:text-[9.5px] font-mono font-bold text-purple-300 truncate max-w-full">সকল মেম্বার</span>
+                        <span className="text-[8px] sm:text-[8.5px] bg-black/40 text-purple-200 px-1 py-0.2 rounded font-bold mt-0.5 truncate max-w-full">
+                          {users.length} জন
+                        </span>
                       </button>
 
-                      {/* 2. ওনার */}
-                      <button type="button" onClick={() => setGeneralMemberFilterTab('owner')} className={`p-1.5 sm:p-2 rounded-lg border text-left transition-all cursor-pointer min-w-0 flex flex-col justify-between ${generalMemberFilterTab === 'owner' ? 'bg-rose-950 border-rose-500 text-white shadow-xs ring-1 ring-rose-400' : 'bg-slate-950/70 border-slate-800 hover:border-rose-700/50 text-slate-300'}`}>
-                        <span className="text-[7px] sm:text-[8.5px] font-extrabold uppercase text-rose-300 truncate">🔴 ওনার</span>
-                        <h4 className="text-xs sm:text-base font-black text-rose-200 font-mono truncate">{ownerUsers.length} জন</h4>
-                        <p className="text-[6.5px] sm:text-[7.5px] font-medium text-rose-400/80 truncate">কোম্পানি অনার</p>
+                      {/* 2. 👑 সাব এডমিন / বিশেষ দায়িত্ব */}
+                      <button
+                        type="button"
+                        onClick={() => setGeneralMemberFilterTab(generalMemberFilterTab === 'sub_admin' ? 'all' : 'sub_admin')}
+                        className={`py-1.5 px-0.5 rounded-lg transition-all flex flex-col items-center justify-between text-center cursor-pointer min-h-[58px] ${
+                          generalMemberFilterTab === 'sub_admin'
+                            ? 'bg-indigo-600 text-white ring-2 ring-indigo-400 shadow-md font-black border-indigo-500'
+                            : 'bg-slate-800 hover:bg-indigo-950/60 text-slate-200 border border-slate-700'
+                        }`}
+                      >
+                        <span className="text-[10px] sm:text-[11px] font-black leading-tight truncate max-w-full">👑 সাব এডমিন</span>
+                        <span className="text-[8.5px] sm:text-[9.5px] font-mono font-bold text-indigo-300 truncate max-w-full">বিশেষ দায়িত্ব</span>
+                        <span className="text-[8px] sm:text-[8.5px] bg-black/40 text-indigo-200 px-1 py-0.2 rounded font-bold mt-0.5 truncate max-w-full">
+                          {subAdminUsers.length} জন
+                        </span>
                       </button>
 
-                      {/* 3. শেয়ার হোল্ডার */}
-                      <button type="button" onClick={() => setGeneralMemberFilterTab('shareholder')} className={`p-1.5 sm:p-2 rounded-lg border text-left transition-all cursor-pointer min-w-0 flex flex-col justify-between ${generalMemberFilterTab === 'shareholder' ? 'bg-amber-950 border-amber-500 text-white shadow-xs ring-1 ring-amber-400' : 'bg-slate-950/70 border-slate-800 hover:border-amber-700/50 text-slate-300'}`}>
-                        <span className="text-[7px] sm:text-[8.5px] font-extrabold uppercase text-amber-300 truncate">🟡 শেয়ার হোল্ডার</span>
-                        <h4 className="text-xs sm:text-base font-black text-amber-200 font-mono truncate">{samityShareholderUsers.length} জন</h4>
-                        <p className="text-[6.5px] sm:text-[7.5px] font-medium text-amber-400/80 truncate">শেয়ার ও সঞ্চয়ী</p>
+                      {/* 3. 🔴 সমিতি সুইচ অফ */}
+                      <button
+                        type="button"
+                        onClick={() => setGeneralMemberFilterTab(generalMemberFilterTab === 'switch_off' ? 'all' : 'switch_off')}
+                        className={`py-1.5 px-0.5 rounded-lg transition-all flex flex-col items-center justify-between text-center cursor-pointer min-h-[58px] ${
+                          generalMemberFilterTab === 'switch_off'
+                            ? 'bg-rose-900 text-white ring-2 ring-rose-500 shadow-md font-black border-rose-600'
+                            : 'bg-slate-800 hover:bg-rose-950/60 text-slate-200 border border-slate-700'
+                        }`}
+                      >
+                        <span className="text-[10px] sm:text-[11px] font-black leading-tight truncate max-w-full">🔴 সুইচ অফ</span>
+                        <span className="text-[8.5px] sm:text-[9.5px] font-mono font-bold text-rose-300 truncate max-w-full">বন্ধ সঞ্চয়</span>
+                        <span className="text-[8px] sm:text-[8.5px] bg-black/40 text-rose-200 px-1 py-0.2 rounded font-bold mt-0.5 truncate max-w-full">
+                          {switchOffUsers.length} জন
+                        </span>
                       </button>
 
-                      {/* 4. ইনভেস্টর */}
-                      <button type="button" onClick={() => setGeneralMemberFilterTab('investor')} className={`p-1.5 sm:p-2 rounded-lg border text-left transition-all cursor-pointer min-w-0 flex flex-col justify-between ${generalMemberFilterTab === 'investor' ? 'bg-slate-700 border-slate-500 text-white shadow-xs ring-1 ring-slate-400' : 'bg-slate-950/70 border-slate-800 hover:border-slate-700 text-slate-300'}`}>
-                        <span className="text-[7px] sm:text-[8.5px] font-extrabold uppercase text-slate-300 truncate">⚪ ইনভেস্টর</span>
-                        <h4 className="text-xs sm:text-base font-black text-slate-200 font-mono truncate">{investorUsers.length} জন</h4>
-                        <p className="text-[6.5px] sm:text-[7.5px] font-medium text-slate-400/80 truncate">বিনিয়োগকারী</p>
+                      {/* 4. 🟢 চলতি মাস পরিশোধিত */}
+                      <button
+                        type="button"
+                        onClick={() => setGeneralMemberFilterTab(generalMemberFilterTab === 'paid_current_month' ? 'all' : 'paid_current_month')}
+                        className={`py-1.5 px-0.5 rounded-lg transition-all flex flex-col items-center justify-between text-center cursor-pointer min-h-[58px] ${
+                          generalMemberFilterTab === 'paid_current_month'
+                            ? 'bg-emerald-700 text-white ring-2 ring-emerald-400 shadow-md font-black border-emerald-500'
+                            : 'bg-slate-800 hover:bg-emerald-950/60 text-slate-200 border border-slate-700'
+                        }`}
+                      >
+                        <span className="text-[10px] sm:text-[11px] font-black leading-tight truncate max-w-full">🟢 রানিং মাস ওকে</span>
+                        <span className="text-[8.5px] sm:text-[9.5px] font-mono font-bold text-emerald-300 truncate max-w-full">পরিশোধিত</span>
+                        <span className="text-[8px] sm:text-[8.5px] bg-black/40 text-emerald-200 px-1 py-0.2 rounded font-bold mt-0.5 truncate max-w-full">
+                          {paidCurrentMonthUsers.length} জন
+                        </span>
                       </button>
 
-                      {/* 5. সাধারণ সদস্য */}
-                      <button type="button" onClick={() => setGeneralMemberFilterTab('general')} className={`p-1.5 sm:p-2 rounded-lg border text-left transition-all cursor-pointer min-w-0 flex flex-col justify-between ${generalMemberFilterTab === 'general' ? 'bg-sky-950 border-sky-500 text-white shadow-xs ring-1 ring-sky-400' : 'bg-slate-950/70 border-slate-800 hover:border-sky-700/50 text-slate-300'}`}>
-                        <span className="text-[7px] sm:text-[8.5px] font-extrabold uppercase text-sky-300 truncate">🌱 সাধারণ সদস্য</span>
-                        <h4 className="text-xs sm:text-base font-black text-sky-200 font-mono truncate">{generalAppUsers.length} জন</h4>
-                        <p className="text-[6.5px] sm:text-[7.5px] font-medium text-sky-400/80 truncate">ফ্রি/বেসিক</p>
-                      </button>
-
-                      {/* 6. সুইচ অফ */}
-                      <button type="button" onClick={() => setGeneralMemberFilterTab('switch_off')} className={`p-1.5 sm:p-2 rounded-lg border text-left transition-all cursor-pointer min-w-0 flex flex-col justify-between ${generalMemberFilterTab === 'switch_off' ? 'bg-rose-950 border-rose-500 text-white shadow-xs ring-1 ring-rose-400' : 'bg-slate-950/70 border-slate-800 hover:border-rose-700/50 text-slate-300'}`}>
-                        <span className="text-[7px] sm:text-[8.5px] font-extrabold uppercase text-rose-300 truncate">🔴 সুইচ অফ</span>
-                        <h4 className="text-xs sm:text-base font-black text-rose-200 font-mono truncate">{switchOffUsers.length} জন</h4>
-                        <p className="text-[6.5px] sm:text-[7.5px] font-medium text-rose-400/80 truncate">বন্ধ সঞ্চয়</p>
-                      </button>
-
-                      {/* 7. সাব এডমিন */}
-                      <button type="button" onClick={() => setGeneralMemberFilterTab('sub_admin')} className={`p-1.5 sm:p-2 rounded-lg border text-left transition-all cursor-pointer min-w-0 flex flex-col justify-between ${generalMemberFilterTab === 'sub_admin' ? 'bg-purple-950 border-purple-500 text-white shadow-xs ring-1 ring-purple-400' : 'bg-slate-950/70 border-slate-800 hover:border-purple-700/50 text-slate-300'}`}>
-                        <span className="text-[7px] sm:text-[8.5px] font-extrabold uppercase text-purple-300 truncate">🛡️ সাব এডমিন</span>
-                        <h4 className="text-xs sm:text-base font-black text-purple-200 font-mono truncate">{subAdminUsers.length} জন</h4>
-                        <p className="text-[6.5px] sm:text-[7.5px] font-medium text-purple-400/80 truncate">এডমিন প্রতিনিধি</p>
-                      </button>
-
-                      {/* 8. আমাদের ইনভেস্ট / সদস্য আবেদন */}
-                      <button type="button" onClick={() => setSamityActiveSubTab('pending_applications')} className="p-1.5 sm:p-2 rounded-lg border text-left transition-all cursor-pointer min-w-0 flex flex-col justify-between bg-slate-950/70 border-slate-800 hover:border-indigo-500/50 text-slate-300">
-                          <span className="text-[7px] sm:text-[8.5px] font-extrabold uppercase text-indigo-300 truncate">📈 আমাদের ইনভেস্ট</span>
-                          <h4 className="text-xs sm:text-base font-black text-indigo-200 font-mono truncate">
-                            {users.filter((u: any) => u.samityStatus === 'pending' || (u.samityAppliedAt && u.samityStatus !== 'approved' && u.samityStatus !== 'rejected')).length > 0
-                              ? `⏳ ${users.filter((u: any) => u.samityStatus === 'pending' || (u.samityAppliedAt && u.samityStatus !== 'approved' && u.samityStatus !== 'rejected')).length}টি আবেদন`
-                              : 'সেকশন'}
-                          </h4>
-                          <p className="text-[6.5px] sm:text-[7.5px] font-medium text-indigo-400/80 truncate">পোর্টাল / আবেদন</p>
+                      {/* 5. ⚠️ রানিং মাস বকেয়া সদস্য */}
+                      <button
+                        type="button"
+                        onClick={() => setGeneralMemberFilterTab(generalMemberFilterTab === 'due_current_month' ? 'all' : 'due_current_month')}
+                        className={`py-1.5 px-0.5 rounded-lg transition-all flex flex-col items-center justify-between text-center cursor-pointer min-h-[58px] ${
+                          generalMemberFilterTab === 'due_current_month'
+                            ? 'bg-amber-600 text-slate-950 ring-2 ring-amber-300 shadow-md font-black border-amber-400 animate-pulse'
+                            : 'bg-slate-800 hover:bg-amber-950/60 text-slate-200 border border-slate-700'
+                        }`}
+                      >
+                        <span className="text-[10px] sm:text-[11px] font-black leading-tight truncate max-w-full">⚠️ রানিং মাস বকেয়া</span>
+                        <span className="text-[8.5px] sm:text-[9.5px] font-mono font-bold text-amber-300 truncate max-w-full">অপরিশোধিত</span>
+                        <span className="text-[8px] sm:text-[8.5px] bg-black/40 text-amber-200 px-1 py-0.2 rounded font-bold mt-0.5 truncate max-w-full">
+                          {dueCurrentMonthUsers.length} জন
+                        </span>
                       </button>
                     </div>
+                  </div>
 
                 </div>
               );
@@ -1764,7 +1921,7 @@ export function AdminSamitySection(props: any) {
                   সদস্যদের সিরিয়াল আইডি 1 থেকে পরপর (BNB00000001 - 1,00,000) সুবিন্যস্ত রাখুন বা নতুন সদস্য যোগ করুন।
                 </p>
               </div>
-              <div className="flex items-center gap-1.5 w-full sm:w-auto shrink-0">
+              <div className="flex items-center gap-1.5 w-full sm:w-auto shrink-0 flex-wrap">
                 <button
                   type="button"
                   disabled={isResequencing}
@@ -1775,6 +1932,21 @@ export function AdminSamitySection(props: any) {
                   <RefreshCw className={`w-3 h-3 ${isResequencing ? 'animate-spin' : ''}`} />
                   {isResequencing ? 'ফিক্স হচ্ছে...' : '🔢 সিরিয়াল 1 থেকে ঠিক করুন'}
                 </button>
+
+                {/* ⏳ পেন্ডিং সমিতি সদস্য আবেদন রিকোয়েস্ট বাটন (লাল দাগ চিহ্নিত স্থান) */}
+                <button
+                  type="button"
+                  onClick={() => setSamityActiveSubTab('pending_applications')}
+                  className="flex-1 sm:flex-none px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-[11px] rounded-lg transition cursor-pointer shadow-xs flex items-center justify-center gap-1.5 active:scale-95 border border-rose-400/40 relative"
+                  title="সমিতিতে যোগদানের অপেক্ষমান সদস্য আবেদনপত্রসমূহ যাচাই-বাছাই ও অনুমোদন করুন"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping shrink-0" />
+                  <span>⏳ পেন্ডিং রিকোয়েস্ট</span>
+                  <span className="bg-white text-rose-900 text-[10px] font-mono font-black px-1.5 py-0.2 rounded-full ml-0.5">
+                    {users.filter((u: any) => u.samityStatus === 'pending' || (u.samityAppliedAt && u.samityStatus !== 'approved' && u.samityStatus !== 'rejected')).length}টি
+                  </span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => setShowAddMemberForm(!showAddMemberForm)}
@@ -2028,22 +2200,42 @@ export function AdminSamitySection(props: any) {
                     {(() => {
                       const isSubAdminUser = (u: any) => Boolean(
                         u.role === 'sub_admin' ||
+                        u.role === 'admin' ||
                         (Array.isArray(u.subAdminPermissions) && u.subAdminPermissions.length > 0) ||
                         u.isSubAdmin === true
                       );
 
                       const isOwnerUser = (u: any) => Boolean(
                         u.memberCategory === 'owner' ||
+                        Number(u.monthlySavingsTarget) === 5000 ||
                         u.memberGroup === 'owner'
                       );
 
+                      const isShareholderUser = (u: any) => Boolean(
+                        (u.memberCategory === 'shareholder' || Number(u.monthlySavingsTarget) === 3000 || u.memberGroup === 'shareholder') &&
+                        !isOwnerUser(u)
+                      );
+
                       const isInvestorUser = (u: any) => Boolean(
-                        u.memberCategory === 'investor' ||
-                        u.memberGroup === 'investor' ||
-                        u.isInvestor === true ||
-                        u.role === 'investor' ||
-                        (Array.isArray(u.investments) && u.investments.length > 0) ||
-                        u.investorApproved === true
+                        (u.memberCategory === 'investor' || Number(u.monthlySavingsTarget) === 2000 || u.memberGroup === 'investor' || u.isInvestor === true || (Array.isArray(u.investments) && u.investments.length > 0)) &&
+                        !isOwnerUser(u) &&
+                        !isShareholderUser(u)
+                      );
+
+                      const isSupporterUser = (u: any) => Boolean(
+                        (u.memberCategory === 'supporter' || Number(u.monthlySavingsTarget) === 1000 || u.memberGroup === 'supporter') &&
+                        !isOwnerUser(u) &&
+                        !isShareholderUser(u) &&
+                        !isInvestorUser(u)
+                      );
+
+                      const isGeneralUser = (u: any) => Boolean(
+                        !isOwnerUser(u) &&
+                        !isShareholderUser(u) &&
+                        !isInvestorUser(u) &&
+                        !isSupporterUser(u) &&
+                        u.role !== 'admin' &&
+                        u.role !== 'sub_admin'
                       );
 
                       const isSamityMemberUser = (u: any) => Boolean(
@@ -2051,9 +2243,10 @@ export function AdminSamitySection(props: any) {
                         u.samityStatus === 'approved' ||
                         u.isSamityMember === true ||
                         (Number(u.savings) > 0) ||
-                        u.memberCategory === 'shareholder' ||
-                        u.memberGroup === 'shareholder' ||
-                        u.memberGroup === 'samity'
+                        isOwnerUser(u) ||
+                        isShareholderUser(u) ||
+                        isInvestorUser(u) ||
+                        isSupporterUser(u)
                       );
 
                       const isSwitchOffUser = (u: any) => Boolean(
@@ -2064,8 +2257,34 @@ export function AdminSamitySection(props: any) {
 
                       const isSwitchOnUser = (u: any) => Boolean(
                         (u.samityAutoSavingsActive === true || u.samitySwitchStatus === 'ON' || u.samityDeactivateStatus === 'active') &&
-                        isSamityMemberUser(u)
+                        isSamityMemberUser(u) &&
+                        !isSwitchOffUser(u)
                       );
+
+                      const currentMonthNumber = new Date().getMonth() + 1;
+
+                      const getPaidMonthsCountForUser = (u: any) => {
+                        if (Array.isArray(u.samityPaidMonths) && u.samityPaidMonths.length > 0) {
+                          return getUniquePaidMonthsCount(u.samityPaidMonths, u.savings, u.monthlySavingsTarget);
+                        }
+                        const monthlyRate = Number(u.monthlySavingsTarget) || (isOwnerUser(u) ? 5000 : isShareholderUser(u) ? 3000 : isInvestorUser(u) ? 2000 : isSupporterUser(u) ? 1000 : 1000);
+                        const savings = Number(u.savings) || Number(u.dpsBalance) || 0;
+                        return Math.floor(savings / monthlyRate);
+                      };
+
+                      const isPaidCurrentMonthUser = (u: any) => {
+                        if (!isSamityMemberUser(u)) return false;
+                        if (isSwitchOffUser(u)) return false;
+                        const paidCount = getPaidMonthsCountForUser(u);
+                        return paidCount >= currentMonthNumber;
+                      };
+
+                      const isDueCurrentMonthUser = (u: any) => {
+                        if (!isSamityMemberUser(u)) return false;
+                        if (isSwitchOffUser(u)) return false;
+                        const paidCount = getPaidMonthsCountForUser(u);
+                        return paidCount < currentMonthNumber;
+                      };
 
                       const isResetRequestedUser = (u: any) => Boolean(
                         u.appLockResetRequested === true ||
@@ -2082,21 +2301,30 @@ export function AdminSamitySection(props: any) {
                       const filtered = users
                         .filter((u) => {
                           const isSubAdmin = isSubAdminUser(u);
+                          const isOwner = isOwnerUser(u);
+                          const isShareholder = isShareholderUser(u);
                           const isInvestor = isInvestorUser(u);
+                          const isSupporter = isSupporterUser(u);
+                          const isGeneral = isGeneralUser(u);
                           const isSamity = isSamityMemberUser(u);
                           const isSwOff = isSwitchOffUser(u);
                           const isSwOn = isSwitchOnUser(u);
+                          const isPaidCur = isPaidCurrentMonthUser(u);
+                          const isDueCur = isDueCurrentMonthUser(u);
                           const isResetReq = isResetRequestedUser(u);
 
                           if (generalMemberFilterTab === 'reset_requests' && !isResetReq) return false;
                           if (generalMemberFilterTab === 'switch_off' && !isSwOff) return false;
                           if (generalMemberFilterTab === 'switch_on' && !isSwOn) return false;
                           if (generalMemberFilterTab === 'sub_admin' && !isSubAdmin) return false;
-                          if (generalMemberFilterTab === 'owner' && !isOwnerUser(u)) return false;
-                          if (generalMemberFilterTab === 'shareholder' && (!isSamityMemberUser(u) && u.memberCategory !== 'shareholder')) return false;
+                          if (generalMemberFilterTab === 'owner' && !isOwner) return false;
+                          if (generalMemberFilterTab === 'shareholder' && !isShareholder) return false;
                           if (generalMemberFilterTab === 'investor' && !isInvestor) return false;
+                          if (generalMemberFilterTab === 'supporter' && !isSupporter) return false;
+                          if (generalMemberFilterTab === 'general' && !isGeneral) return false;
                           if (generalMemberFilterTab === 'samity' && !isSamity) return false;
-                          if (generalMemberFilterTab === 'general' && (isSamity || isInvestor || isSubAdmin || u.role === 'admin' || isOwnerUser(u))) return false;
+                          if (generalMemberFilterTab === 'paid_current_month' && !isPaidCur) return false;
+                          if (generalMemberFilterTab === 'due_current_month' && !isDueCur) return false;
 
                           if (!generalMemberSearch.trim()) return true;
                           const q = generalMemberSearch.toLowerCase();
@@ -2179,6 +2407,48 @@ export function AdminSamitySection(props: any) {
                             </div>
                           )}
 
+                          {/* 📢 Contextual Banner for Due Current Month */}
+                          {generalMemberFilterTab === 'due_current_month' && (
+                            <div className="bg-gradient-to-r from-amber-950/90 via-slate-900 to-red-950/90 border border-amber-500/50 rounded-2xl p-3 sm:p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-xs text-white shadow-lg">
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <span className="text-amber-400 text-xl shrink-0">⚠️</span>
+                                <div>
+                                  <h4 className="font-black text-amber-300 text-xs sm:text-sm">
+                                    রানি মাস সঞ্চয় কিস্তি অপরিশোধিত / বকেয়া সদস্য তালিকা
+                                  </h4>
+                                  <p className="text-[11px] text-slate-300 leading-tight mt-0.5">
+                                    যেসব সমবায় সদস্য চলমান মাসের নির্ধারিত সঞ্চয় কিস্তি এখনো জমা প্রদান করেননি তাদের তালিকা নিচে দেখানো হচ্ছে।
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="bg-slate-950/90 border border-amber-500/50 px-3 py-1.5 rounded-xl shrink-0 flex items-center gap-2">
+                                <span className="text-[10px] text-amber-300 font-bold uppercase">মোট বকেয়া সদস্যঃ</span>
+                                <span className="text-sm font-black text-amber-200 font-mono">{filtered.length} জন</span>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* 📢 Contextual Banner for Paid Current Month */}
+                          {generalMemberFilterTab === 'paid_current_month' && (
+                            <div className="bg-gradient-to-r from-emerald-950/90 via-slate-900 to-teal-950/90 border border-emerald-500/50 rounded-2xl p-3 sm:p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-xs text-white shadow-lg">
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <span className="text-emerald-400 text-xl shrink-0">🟢</span>
+                                <div>
+                                  <h4 className="font-black text-emerald-300 text-xs sm:text-sm">
+                                    রানি মাস সঞ্চয় কিস্তি পরিশোধিত সদস্য তালিকা
+                                  </h4>
+                                  <p className="text-[11px] text-slate-300 leading-tight mt-0.5">
+                                    চলমান মাস পর্যন্ত সফলভাবে সঞ্চয় কিস্তি জমা সম্পন্ন করা সকল সম্মানিত সদস্যের তালিকা।
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="bg-slate-950/90 border border-emerald-500/50 px-3 py-1.5 rounded-xl shrink-0 flex items-center gap-2">
+                                <span className="text-[10px] text-emerald-300 font-bold uppercase">পরিশোধিত সদস্যঃ</span>
+                                <span className="text-sm font-black text-emerald-200 font-mono">{filtered.length} জন</span>
+                              </div>
+                            </div>
+                          )}
+
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 sm:gap-3">
                           {filtered.map((u, idx) => {
                             const isAgentUser = Boolean(u.role === 'agent' || (u as any).isAgent || (u as any).agentApproved || adminAgentRequests.some(r => r.phone === u.phone && r.status === 'approved'));
@@ -2246,15 +2516,19 @@ export function AdminSamitySection(props: any) {
                                         {/* 🔴🟡⚪ সদস্য ক্যাটাগরি ব্যাজ */}
                                         {u.memberCategory === 'owner' ? (
                                           <span className="text-[8.5px] font-black bg-rose-600 text-white border border-rose-700 px-1.5 py-0.2 rounded inline-flex items-center gap-0.5 shadow-2xs">
-                                            🔴 ওনার (৳৪,০০০/মাস)
+                                            🔴 ওনার (৳৫,০০০/মাস)
                                           </span>
                                         ) : u.memberCategory === 'shareholder' ? (
                                           <span className="text-[8.5px] font-black bg-blue-600 text-white border border-blue-700 px-1.5 py-0.2 rounded inline-flex items-center gap-0.5 shadow-2xs">
-                                            🔵 শেয়ার হোল্ডার (৳২,০০০/মাস)
+                                            🔵 শেয়ার হোল্ডার (৳৩,০০০/মাস)
                                           </span>
                                         ) : u.memberCategory === 'investor' ? (
                                           <span className="text-[8.5px] font-black bg-emerald-600 text-white border border-emerald-700 px-1.5 py-0.2 rounded inline-flex items-center gap-0.5 shadow-2xs">
-                                            🟢 ইনভেস্টার (৳১,০০০/মাস)
+                                            🟢 ইনভেস্টার (৳২,০০০/মাস)
+                                          </span>
+                                        ) : u.memberCategory === 'supporter' ? (
+                                          <span className="text-[8.5px] font-black bg-amber-500 text-slate-950 border border-amber-600 px-1.5 py-0.2 rounded inline-flex items-center gap-0.5 shadow-2xs">
+                                            🟡 সাপোর্টার (৳১,০০০/মাস)
                                           </span>
                                         ) : null}
 
@@ -2313,7 +2587,7 @@ export function AdminSamitySection(props: any) {
 
                                   {/* Status & ID Badges */}
                                   <div className="text-right flex flex-col items-end gap-1 shrink-0">
-                                    {u.uid === 'admin_master' || u.phone === '+8800011112222' || u.memberId === 'MAIN_ADMIN' ? (
+                                    {u.uid === 'admin_master' || u.phone === '+8801111222233' || u.memberId === 'MAIN_ADMIN' ? (
                                       <span className="text-[9px] font-black px-2 py-0.5 rounded-md inline-block uppercase leading-none font-mono shadow-2xs bg-purple-700 text-white">
                                         👑 মেইন এডমিন
                                       </span>
@@ -2603,6 +2877,147 @@ export function AdminSamitySection(props: any) {
                 )}
           </div>
         )}
+      </div>
+    )}
+
+    {/* 🔍 সমবায় সমিতি আবেদনপত্র বিস্তারিত রিভিউ ও ক্যাটাগরি পরিবর্তন মডাল */}
+    {selectedAppForReview && (
+      <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-fade-in text-slate-800">
+        <div className="bg-white rounded-3xl max-w-xl w-full border-2 border-amber-300 shadow-2xl overflow-hidden my-8 space-y-0">
+          
+          {/* Modal Header */}
+          <div className="bg-gradient-to-r from-amber-700 via-orange-700 to-amber-900 p-4 text-white flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-xl">🔍</span>
+              <div>
+                <h3 className="text-sm font-black text-amber-100">আবেদনপত্র রিভিউ ও ক্যাটাগরি পরিবর্তন</h3>
+                <p className="text-[11px] text-amber-200/80">সদস্যের এনআইডি ও তথ্য যাচাই করে ক্যাটাগরি ও আইডি নির্বাচন করুন</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelectedAppForReview(null)}
+              className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center font-bold text-base transition cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Modal Body */}
+          <div className="p-4 sm:p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+            
+            {/* Applicant Summary Header */}
+            <div className="bg-amber-50/80 border border-amber-200/90 rounded-2xl p-3.5 space-y-2">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <h4 className="text-base font-black text-slate-900">{selectedAppForReview.name || 'নামবিহীন সদস্য'}</h4>
+                <span className="text-xs font-mono font-bold bg-amber-100 text-amber-900 border border-amber-300 px-2.5 py-0.5 rounded-xl">
+                  📱 {selectedAppForReview.phone}
+                </span>
+              </div>
+              <p className="text-xs text-slate-600 font-medium">
+                📅 আবেদন সময়: {selectedAppForReview.samityAppliedAt ? new Date(selectedAppForReview.samityAppliedAt).toLocaleString('bn-BD') : 'তারিখ অনুপলব্ধ'}
+              </p>
+            </div>
+
+            {/* Application Data Grid */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 space-y-2 text-xs">
+              <h5 className="font-bold text-slate-800 border-b border-slate-200 pb-1.5 flex items-center gap-1.5">
+                <span>📄</span>
+                <span>প্রদত্ত ব্যক্তিগত ও এনআইডি তথ্য:</span>
+              </h5>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-slate-700">
+                <p><strong className="text-slate-900">পিতার নাম:</strong> {selectedAppForReview.fatherName || 'প্রদান করা হয়নি'}</p>
+                <p><strong className="text-slate-900">মাতার নাম:</strong> {selectedAppForReview.motherName || 'প্রদান করা হয়নি'}</p>
+                <p><strong className="text-slate-900">NID / Passport:</strong> <span className="font-mono font-bold text-slate-900">{selectedAppForReview.nid || 'প্রদান করা হয়নি'}</span></p>
+                <p><strong className="text-slate-900">জন্ম তারিখ:</strong> {selectedAppForReview.dob || 'প্রদান করা হয়নি'}</p>
+                <p><strong className="text-slate-900">ঠিকানা:</strong> {[selectedAppForReview.postOffice, selectedAppForReview.thana, selectedAppForReview.district, selectedAppForReview.division].filter(Boolean).join(', ') || 'প্রদান করা হয়নি'}</p>
+                <p><strong className="text-slate-900">দেশ:</strong> {selectedAppForReview.country || 'Bangladesh'}</p>
+                <p><strong className="text-slate-900">নমিনির নাম:</strong> {selectedAppForReview.nomineeName || 'প্রদান করা হয়নি'} ({selectedAppForReview.nomineeRelation || '-'})</p>
+                <p><strong className="text-slate-900">নমিনির ফোন:</strong> <span className="font-mono">{selectedAppForReview.nomineePhone || '-'}</span></p>
+              </div>
+            </div>
+
+            {/* Category & ID Selection Controls */}
+            <div className="space-y-3 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-2xl p-3.5 text-left">
+              <h5 className="font-bold text-emerald-950 text-xs flex items-center gap-1.5">
+                <span>⚙️</span>
+                <span>এডমিন অনুমোদনের ক্যাটাগরি ও মেম্বার আইডি নির্ধারণ:</span>
+              </h5>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-800 block">সদস্যের ক্যাটাগরি (Member Role Category):</label>
+                <select
+                  value={selectedRoleForApp}
+                  onChange={(e) => setSelectedRoleForApp(e.target.value as any)}
+                  className="w-full px-3 py-2 rounded-xl bg-white border-2 border-emerald-300 text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+                >
+                  <option value="owner">👑 অনার (Owner - ৳৫,০০০/মাস)</option>
+                  <option value="shareholder">📈 শেয়ার হোল্ডার (Shareholder - ৳৩,০০০/মাস)</option>
+                  <option value="investor">💼 ইনভেস্টার (Investor - ৳২,০০০/মাস)</option>
+                  <option value="supporter">🟡 সাপোর্টার (Supporter - ৳১,০০০/মাস)</option>
+                  <option value="general">👥 সাধারণ সমবায় সদস্য (General Member)</option>
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-800 block">বরাদ্দকৃত মেম্বার আইডি (Member Serial ID):</label>
+                <input
+                  type="text"
+                  value={assignMemberIdForApp}
+                  onChange={(e) => setAssignMemberIdForApp(e.target.value)}
+                  placeholder="যেমন: BNB-00000181"
+                  className="w-full px-3 py-2 rounded-xl bg-white border-2 border-emerald-300 text-xs font-mono font-bold text-slate-900 outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+            </div>
+
+            {/* Rejection Reason Input Box */}
+            <div className="space-y-1.5 bg-rose-50/90 border border-rose-200/90 rounded-2xl p-3 text-left">
+              <label className="text-xs font-bold text-rose-900 flex items-center gap-1.5">
+                <span>📝</span>
+                <span>আবেদন বাতিলের কারণ (সদস্যের ওয়ালেটে টাকা রিফান্ড করা হবে):</span>
+              </label>
+              <input
+                type="text"
+                value={modalRejectReason}
+                onChange={(e) => setModalRejectReason(e.target.value)}
+                placeholder="বাতিলের কারণ লিখুন..."
+                className="w-full px-3 py-2 rounded-xl bg-white border border-rose-300 text-xs text-slate-900 outline-none focus:ring-2 focus:ring-rose-400 font-medium"
+              />
+            </div>
+
+          </div>
+
+          {/* Modal Footer Actions - Prominent Approval and Enlarged Cancel Buttons */}
+          <div className="p-4 bg-slate-100 border-t border-slate-200 flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+            <button
+              type="button"
+              disabled={isReviewSubmitting}
+              onClick={() => handleConfirmSamityApproval(selectedAppForReview, selectedRoleForApp, assignMemberIdForApp)}
+              className="flex-1 py-3 px-4 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white font-black text-xs rounded-xl shadow-md transition cursor-pointer flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-50"
+            >
+              <span>✅</span>
+              <span>অনুমোদন করুন</span>
+            </button>
+            <button
+              type="button"
+              disabled={isReviewSubmitting}
+              onClick={() => handleRejectSamityAppWithReason(selectedAppForReview, modalRejectReason)}
+              className="flex-1 py-3 px-4 bg-gradient-to-r from-rose-600 to-red-700 hover:from-rose-500 hover:to-red-600 text-white font-black text-xs rounded-xl shadow-md transition cursor-pointer flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-50"
+            >
+              <span>❌</span>
+              <span>আবেদন বাতিল ও রিফান্ড দিন</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedAppForReview(null)}
+              className="px-4 py-3 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer shrink-0"
+            >
+              বন্ধ করুন
+            </button>
+          </div>
+
+        </div>
       </div>
     )}
   </>

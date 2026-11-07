@@ -1520,141 +1520,149 @@ export default function BNBAutoSalaryPay({ user, onBack, syncLiveProfile, appCon
       {/* -------------------- MODAL: ADD/EDIT EMPLOYEE -------------------- */}
       <AnimatePresence>
         {showAddModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-2xs flex items-center justify-center z-50 p-4 font-sans overflow-y-auto">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-3xl w-full max-w-md p-5 shadow-xl relative max-h-[90vh] overflow-y-auto"
-            >
+          <motion.div 
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className="fixed inset-0 z-[100] bg-white flex flex-col font-sans"
+          >
+            {/* Top Spacer for Notification Bar */}
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-white sticky top-0 z-10">
+              <h3 className="text-sm font-black text-slate-800">
+                {editingEmployeeId ? 'কর্মচারী তথ্য পরিবর্তন' : 'নতুন কর্মচারী নিবন্ধন'}
+              </h3>
               <button 
                 onClick={() => setShowAddModal(false)}
-                className="absolute top-4 right-4 w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 transition-all"
+                className="p-1 hover:bg-slate-100 rounded-full text-slate-400 transition"
               >
                 <X className="w-5 h-5" />
               </button>
+            </div>
 
-              <h3 className="text-sm font-black text-slate-800 mb-4 border-b border-slate-50 pb-2">
-                {editingEmployeeId ? 'কর্মচারী তথ্য পরিবর্তন' : 'নতুন কর্মচারী নিবন্ধন'}
-              </h3>
-
-              <form onSubmit={handleSaveEmployee} className="space-y-3.5 text-left text-[12.5px]">
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">
-                    কর্মচারী আইডি (Employee ID) *
-                  </label>
-                  <input 
-                    type="text"
-                    required
-                    placeholder="e.g. EMP005"
-                    value={employeeForm.employeeId}
-                    onChange={(e) => setEmployeeForm({ ...employeeForm, employeeId: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:outline-none focus:border-[#00a884] font-bold"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">
-                    পূর্ণ নাম (Employee Name) *
-                  </label>
-                  <input 
-                    type="text"
-                    required
-                    placeholder="e.g. রাকিবুল ইসলাম"
-                    value={employeeForm.name}
-                    onChange={(e) => setEmployeeForm({ ...employeeForm, name: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:outline-none focus:border-[#00a884] font-bold"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">
-                    পদবি (Designation) *
-                  </label>
-                  <input 
-                    type="text"
-                    required
-                    placeholder="e.g. সেলস এক্সিকিউটিভ"
-                    value={employeeForm.designation}
-                    onChange={(e) => setEmployeeForm({ ...employeeForm, designation: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:outline-none focus:border-[#00a884] font-bold"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1">
-                      মাসিক বেসিক বেতন (৳) *
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="max-w-md mx-auto">
+                <form onSubmit={handleSaveEmployee} className="space-y-4 text-left">
+                  <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">
+                      কর্মচারী আইডি (Employee ID) *
                     </label>
                     <input 
-                      type="number"
+                      type="text"
                       required
-                      placeholder="e.g. 25000"
-                      value={employeeForm.basicSalary || ''}
-                      onChange={(e) => setEmployeeForm({ ...employeeForm, basicSalary: Number(e.target.value) })}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:outline-none focus:border-[#00a884] font-bold"
+                      placeholder="e.g. EMP005"
+                      value={employeeForm.employeeId}
+                      onChange={(e) => setEmployeeForm({ ...employeeForm, employeeId: e.target.value })}
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3 focus:outline-none focus:border-[#00a884] font-bold text-xs"
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1">
-                      ওভারটাইম সময় (ঘণ্টা)
+                  <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">
+                      পূর্ণ নাম (Employee Name) *
+                    </label>
+                    <input 
+                      type="text"
+                      required
+                      placeholder="e.g. রাকিবুল ইসলাম"
+                      value={employeeForm.name}
+                      onChange={(e) => setEmployeeForm({ ...employeeForm, name: e.target.value })}
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3 focus:outline-none focus:border-[#00a884] font-bold text-xs"
+                    />
+                  </div>
+
+                  <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">
+                      পদবি (Designation) *
+                    </label>
+                    <input 
+                      type="text"
+                      required
+                      placeholder="e.g. সেলস এক্সিকিউটিভ"
+                      value={employeeForm.designation}
+                      onChange={(e) => setEmployeeForm({ ...employeeForm, designation: e.target.value })}
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3 focus:outline-none focus:border-[#00a884] font-bold text-xs"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">
+                        মাসিক বেসিক (৳) *
+                      </label>
+                      <input 
+                        type="number"
+                        required
+                        placeholder="৳"
+                        value={employeeForm.basicSalary || ''}
+                        onChange={(e) => setEmployeeForm({ ...employeeForm, basicSalary: Number(e.target.value) })}
+                        className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3 focus:outline-none focus:border-[#00a884] font-bold text-xs font-mono"
+                      />
+                    </div>
+
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">
+                        ওভারটাইম (ঘণ্টা)
+                      </label>
+                      <input 
+                        type="number"
+                        placeholder="ঘণ্টা"
+                        value={employeeForm.overtimeHours || ''}
+                        onChange={(e) => setEmployeeForm({ ...employeeForm, overtimeHours: Number(e.target.value) })}
+                        className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3 focus:outline-none focus:border-[#00a884] font-bold text-xs font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">
+                      অন্যান্য বোনাস/ভাতা (৳)
                     </label>
                     <input 
                       type="number"
-                      placeholder="e.g. 10"
-                      value={employeeForm.overtimeHours || ''}
-                      onChange={(e) => setEmployeeForm({ ...employeeForm, overtimeHours: Number(e.target.value) })}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:outline-none focus:border-[#00a884] font-bold"
+                      placeholder="e.g. 1500"
+                      value={employeeForm.otherAllowance || ''}
+                      onChange={(e) => setEmployeeForm({ ...employeeForm, otherAllowance: Number(e.target.value) })}
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3 focus:outline-none focus:border-[#00a884] font-bold text-xs font-mono"
                     />
                   </div>
-                </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">
-                    অন্যান্য বোনাস/ভাতা (৳)
-                  </label>
-                  <input 
-                    type="number"
-                    placeholder="e.g. 1500"
-                    value={employeeForm.otherAllowance || ''}
-                    onChange={(e) => setEmployeeForm({ ...employeeForm, otherAllowance: Number(e.target.value) })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:outline-none focus:border-[#00a884] font-bold"
-                  />
-                </div>
+                  <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">
+                      মোবাইল নম্বর (WhatsApp) *
+                    </label>
+                    <input 
+                      type="text"
+                      required
+                      placeholder="e.g. 01712345678"
+                      value={employeeForm.phone}
+                      onChange={(e) => setEmployeeForm({ ...employeeForm, phone: e.target.value })}
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3 focus:outline-none focus:border-[#00a884] font-bold text-xs font-mono"
+                    />
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">
-                    মোবাইল নম্বর (WhatsApp) *
-                  </label>
-                  <input 
-                    type="text"
-                    required
-                    placeholder="e.g. 01712345678"
-                    value={employeeForm.phone}
-                    onChange={(e) => setEmployeeForm({ ...employeeForm, phone: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:outline-none focus:border-[#00a884] font-bold"
-                  />
-                </div>
-
-                <div className="pt-2 flex items-center gap-2">
-                  <button 
-                    type="button"
-                    onClick={() => setShowAddModal(false)}
-                    className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-black py-2.5 rounded-xl transition-all"
-                  >
-                    বন্ধ করুন
-                  </button>
-                  <button 
-                    type="submit"
-                    className="flex-1 bg-[#00a884] hover:bg-[#05c39b] text-white font-black py-2.5 rounded-xl transition-all shadow-md"
-                  >
-                    সংরক্ষণ করুন
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          </div>
+                  <div className="pt-6 pb-10 flex items-center gap-3">
+                    <button 
+                      type="button"
+                      onClick={() => setShowAddModal(false)}
+                      className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-black py-3.5 rounded-2xl transition-all active:scale-95 text-sm"
+                    >
+                      বাতিল
+                    </button>
+                    <button 
+                      type="submit"
+                      className="flex-1 bg-[#00a884] hover:bg-[#05c39b] text-white font-black py-3.5 rounded-2xl transition-all shadow-lg shadow-emerald-200 active:scale-95 text-sm"
+                    >
+                      সংরক্ষণ করুন
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
 

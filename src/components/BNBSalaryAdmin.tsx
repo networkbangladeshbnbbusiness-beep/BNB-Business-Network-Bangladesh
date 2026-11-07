@@ -33,8 +33,15 @@ import {
   CheckCircle2, 
   Sliders,
   Sparkles,
-  SearchCode
+  SearchCode,
+  Headphones,
+  PhoneCall,
+  ExternalLink,
+  MessageSquare,
+  Copy,
+  Check
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 
 interface BNBSalaryAdminProps {
   onBack: () => void;
@@ -1052,10 +1059,20 @@ export default function BNBSalaryAdmin({ onBack }: BNBSalaryAdminProps) {
       </div>
 
       {/* --- ADD / EDIT EMPLOYEE MODAL --- */}
-      {showAddEmployeeModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-2xs font-sans">
-          <div className="bg-white border border-slate-200 w-full max-w-md rounded-3xl p-6 shadow-xl space-y-4">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+      <AnimatePresence>
+        {showAddEmployeeModal && (
+          <motion.div 
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className="fixed inset-0 z-[100] bg-white flex flex-col font-sans"
+          >
+            {/* Top Spacer for Notification Bar */}
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-white sticky top-0 z-10">
               <h3 className="text-sm font-black text-slate-800 flex items-center gap-1.5">
                 👥 {editingEmployee ? 'কর্মচারীর তথ্য সংশোধন করুন' : 'নতুন কর্মচারী যুক্ত করুন'}
               </h3>
@@ -1067,156 +1084,170 @@ export default function BNBSalaryAdmin({ onBack }: BNBSalaryAdminProps) {
               </button>
             </div>
 
-            <form onSubmit={handleEmployeeSubmit} className="space-y-3 text-left">
-              
-              {/* Select employer (company) */}
-              <div>
-                <label className="text-[10px] font-black text-slate-500 block mb-1">প্রতিষ্ঠান / নিয়োগকর্তা সিলেক্ট করুন *</label>
-                <select
-                  value={empUserId}
-                  onChange={(e) => setEmpUserId(e.target.value)}
-                  className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white transition outline-none"
-                  required
-                  disabled={!!editingEmployee}
-                >
-                  <option value="">-- কোম্পানি নির্বাচন করুন --</option>
-                  {configs.map((c, idx) => (
-                    <option key={`${c.id}-${idx}`} value={c.id}>{c.companyName} ({getUserMeta(c.id).name})</option>
-                  ))}
-                </select>
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="max-w-md mx-auto">
+                <form onSubmit={handleEmployeeSubmit} className="space-y-4 text-left">
+                  
+                  {/* Select employer (company) */}
+                  <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <label className="text-[10px] font-black text-slate-500 block mb-1 uppercase tracking-wider">প্রতিষ্ঠান / নিয়োগকর্তা সিলেক্ট করুন *</label>
+                    <select
+                      value={empUserId}
+                      onChange={(e) => setEmpUserId(e.target.value)}
+                      className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2.5 bg-white transition outline-none focus:ring-2 focus:ring-[#00a884]/20"
+                      required
+                      disabled={!!editingEmployee}
+                    >
+                      <option value="">-- কোম্পানি নির্বাচন করুন --</option>
+                      {configs.map((c, idx) => (
+                        <option key={`${c.id}-${idx}`} value={c.id}>{c.companyName} ({getUserMeta(c.id).name})</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Employee ID */}
+                  <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <label className="text-[10px] font-black text-slate-500 block mb-1 uppercase tracking-wider">কর্মী আইডি (যেমন: EMP101) *</label>
+                    <input
+                      type="text"
+                      placeholder="যেমন: EMP101"
+                      value={empEmployeeId}
+                      onChange={(e) => setEmpEmployeeId(e.target.value)}
+                      className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2.5 bg-white transition outline-none focus:ring-2 focus:ring-[#00a884]/20"
+                      required
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Name */}
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                      <label className="text-[10px] font-black text-slate-500 block mb-1 uppercase tracking-wider">কর্মচারীর নাম *</label>
+                      <input
+                        type="text"
+                        placeholder="নাম লিখুন"
+                        value={empName}
+                        onChange={(e) => setEmpName(e.target.value)}
+                        className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2.5 bg-white transition outline-none focus:ring-2 focus:ring-[#00a884]/20"
+                        required
+                      />
+                    </div>
+
+                    {/* Designation */}
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                      <label className="text-[10px] font-black text-slate-500 block mb-1 uppercase tracking-wider">পদবি / ডেজিগনেশন *</label>
+                      <input
+                        type="text"
+                        placeholder="যেমন: ক্যাশিয়ার"
+                        value={empDesignation}
+                        onChange={(e) => setEmpDesignation(e.target.value)}
+                        className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2.5 bg-white transition outline-none focus:ring-2 focus:ring-[#00a884]/20"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    {/* Basic Salary */}
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                      <label className="text-[10px] font-black text-slate-500 block mb-1 uppercase tracking-wider">বেসিক (৳) *</label>
+                      <input
+                        type="number"
+                        placeholder="৳"
+                        value={empBasicSalary}
+                        onChange={(e) => setEmpBasicSalary(e.target.value)}
+                        className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2.5 bg-white transition outline-none focus:ring-2 focus:ring-[#00a884]/20"
+                        required
+                      />
+                    </div>
+
+                    {/* Overtime Hours */}
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                      <label className="text-[10px] font-black text-slate-500 block mb-1 uppercase tracking-wider">ওভারটাইম</label>
+                      <input
+                        type="number"
+                        placeholder="ঘণ্টা"
+                        value={empOvertimeHours}
+                        onChange={(e) => setEmpOvertimeHours(e.target.value)}
+                        className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2.5 bg-white transition outline-none focus:ring-2 focus:ring-[#00a884]/20"
+                      />
+                    </div>
+
+                    {/* Other Allowance */}
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                      <label className="text-[10px] font-black text-slate-500 block mb-1 uppercase tracking-wider">ভাতা (৳)</label>
+                      <input
+                        type="number"
+                        placeholder="৳"
+                        value={empOtherAllowance}
+                        onChange={(e) => setEmpOtherAllowance(e.target.value)}
+                        className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2.5 bg-white transition outline-none focus:ring-2 focus:ring-[#00a884]/20"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Employee Phone */}
+                  <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <label className="text-[10px] font-black text-slate-500 block mb-1 uppercase tracking-wider">মোবাইল নম্বর (ঐচ্ছিক)</label>
+                    <input
+                      type="tel"
+                      placeholder="যেমন: 017xxxxxxxx"
+                      value={empPhone}
+                      onChange={(e) => setEmpPhone(e.target.value)}
+                      className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2.5 bg-white transition outline-none focus:ring-2 focus:ring-[#00a884]/20"
+                    />
+                  </div>
+
+                  {/* Status */}
+                  <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <label className="text-[10px] font-black text-slate-500 block mb-1 uppercase tracking-wider">বেতন স্টেটাস *</label>
+                    <select
+                      value={empStatus}
+                      onChange={(e) => setEmpStatus(e.target.value as any)}
+                      className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2.5 bg-white transition outline-none focus:ring-2 focus:ring-[#00a884]/20"
+                      required
+                    >
+                      <option value="Pending">বকেয়া (Pending)</option>
+                      <option value="Paid">পরিশোধিত (Paid)</option>
+                    </select>
+                  </div>
+
+                  <div className="flex gap-3 pt-6 pb-10">
+                    <button
+                      type="button"
+                      onClick={() => setShowAddEmployeeModal(false)}
+                      className="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-2xl font-black transition text-sm active:scale-95"
+                    >
+                      বাতিল
+                    </button>
+                    <button
+                      type="submit"
+                      className="flex-1 py-3.5 bg-[#00a884] hover:bg-[#008f72] text-white rounded-2xl font-black transition active:scale-95 text-sm shadow-lg shadow-emerald-200"
+                    >
+                      {editingEmployee ? 'সংশোধন করুন' : 'যোগ করুন'}
+                    </button>
+                  </div>
+                </form>
               </div>
-
-              {/* Employee ID */}
-              <div>
-                <label className="text-[10px] font-black text-slate-500 block mb-1">কর্মী আইডি (যেমন: EMP101) *</label>
-                <input
-                  type="text"
-                  placeholder="যেমন: EMP101"
-                  value={empEmployeeId}
-                  onChange={(e) => setEmpEmployeeId(e.target.value)}
-                  className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white transition outline-none"
-                  required
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                {/* Name */}
-                <div>
-                  <label className="text-[10px] font-black text-slate-500 block mb-1">কর্মচারীর নাম *</label>
-                  <input
-                    type="text"
-                    placeholder="নাম লিখুন"
-                    value={empName}
-                    onChange={(e) => setEmpName(e.target.value)}
-                    className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white transition outline-none"
-                    required
-                  />
-                </div>
-
-                {/* Designation */}
-                <div>
-                  <label className="text-[10px] font-black text-slate-500 block mb-1">পদবি / ডেজিগনেশন *</label>
-                  <input
-                    type="text"
-                    placeholder="যেমন: ক্যাশিয়ার"
-                    value={empDesignation}
-                    onChange={(e) => setEmpDesignation(e.target.value)}
-                    className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white transition outline-none"
-                    required
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2">
-                {/* Basic Salary */}
-                <div>
-                  <label className="text-[10px] font-black text-slate-500 block mb-1">বেসিক বেতন (৳) *</label>
-                  <input
-                    type="number"
-                    placeholder="যেমন: 15000"
-                    value={empBasicSalary}
-                    onChange={(e) => setEmpBasicSalary(e.target.value)}
-                    className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white transition outline-none"
-                    required
-                  />
-                </div>
-
-                {/* Overtime Hours */}
-                <div>
-                  <label className="text-[10px] font-black text-slate-500 block mb-1">ওভারটাইম (ঘণ্টা)</label>
-                  <input
-                    type="number"
-                    placeholder="ঘণ্টা"
-                    value={empOvertimeHours}
-                    onChange={(e) => setEmpOvertimeHours(e.target.value)}
-                    className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white transition outline-none"
-                  />
-                </div>
-
-                {/* Other Allowance */}
-                <div>
-                  <label className="text-[10px] font-black text-slate-500 block mb-1">ভাতা / বোনাস (৳)</label>
-                  <input
-                    type="number"
-                    placeholder="অন্যান্য ভাতা"
-                    value={empOtherAllowance}
-                    onChange={(e) => setEmpOtherAllowance(e.target.value)}
-                    className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white transition outline-none"
-                  />
-                </div>
-              </div>
-
-              {/* Employee Phone */}
-              <div>
-                <label className="text-[10px] font-black text-slate-500 block mb-1">কর্মচারীর মোবাইল নম্বর (ঐচ্ছিক)</label>
-                <input
-                  type="tel"
-                  placeholder="যেমন: 017xxxxxxxx"
-                  value={empPhone}
-                  onChange={(e) => setEmpPhone(e.target.value)}
-                  className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white transition outline-none"
-                />
-              </div>
-
-              {/* Status */}
-              <div>
-                <label className="text-[10px] font-black text-slate-500 block mb-1">বেতন স্টেটাস *</label>
-                <select
-                  value={empStatus}
-                  onChange={(e) => setEmpStatus(e.target.value as any)}
-                  className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white transition outline-none"
-                  required
-                >
-                  <option value="Pending">বকেয়া (Pending)</option>
-                  <option value="Paid">পরিশোধিত (Paid)</option>
-                </select>
-              </div>
-
-              <div className="flex gap-2 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setShowAddEmployeeModal(false)}
-                  className="w-1/2 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-black transition text-xs"
-                >
-                  বাতিল
-                </button>
-                <button
-                  type="submit"
-                  className="w-1/2 py-2.5 bg-[#00a884] hover:bg-[#008f72] text-white rounded-xl font-black transition active:scale-95 text-xs shadow-3xs"
-                >
-                  {editingEmployee ? 'সংশোধন করুন' : 'যোগ করুন'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* --- ADD / EDIT CONFIG MODAL --- */}
-      {showConfigModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-2xs font-sans">
-          <div className="bg-white border border-slate-200 w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+      <AnimatePresence>
+        {showConfigModal && (
+          <motion.div 
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className="fixed inset-0 z-[100] bg-white flex flex-col font-sans"
+          >
+            {/* Top Spacer for Notification Bar */}
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-white sticky top-0 z-10">
               <h3 className="text-sm font-black text-slate-800 flex items-center gap-1.5">
                 🏢 {editingConfig ? 'প্রতিষ্ঠান স্যালারি কনফিগার করুন' : 'নতুন প্রতিষ্ঠান প্রোফাইল যুক্ত করুন'}
               </h3>
@@ -1228,108 +1259,112 @@ export default function BNBSalaryAdmin({ onBack }: BNBSalaryAdminProps) {
               </button>
             </div>
 
-            <form onSubmit={handleConfigSubmit} className="space-y-3 text-left">
-              
-              {/* Select User to map configuration */}
-              {!editingConfig && (
-                <div>
-                  <label className="text-[10px] font-black text-slate-500 block mb-1">মালিক / নিয়োগকর্তা নির্বাচন করুন *</label>
-                  <select
-                    value={selectedConfigUser}
-                    onChange={(e) => setSelectedConfigUser(e.target.value)}
-                    className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white transition outline-none"
-                    required
-                  >
-                    <option value="">-- প্ল্যাটফর্ম মেম্বার সিলেক্ট করুন --</option>
-                    {users.map((u, idx) => (
-                      <option key={`${u.uid}-${idx}`} value={u.uid}>{u.name} ({u.phone})</option>
-                    ))}
-                  </select>
-                </div>
-              )}
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="max-w-sm mx-auto">
+                <form onSubmit={handleConfigSubmit} className="space-y-4 text-left">
+                  
+                  {/* Select User to map configuration */}
+                  {!editingConfig && (
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                      <label className="text-[10px] font-black text-slate-500 block mb-1 uppercase tracking-wider">মালিক / নিয়োগকর্তা নির্বাচন করুন *</label>
+                      <select
+                        value={selectedConfigUser}
+                        onChange={(e) => setSelectedConfigUser(e.target.value)}
+                        className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2.5 bg-white transition outline-none focus:ring-2 focus:ring-[#00a884]/20"
+                        required
+                      >
+                        <option value="">-- প্ল্যাটফর্ম মেম্বার সিলেক্ট করুন --</option>
+                        {users.map((u, idx) => (
+                          <option key={`${u.uid}-${idx}`} value={u.uid}>{u.name} ({u.phone})</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
 
-              {/* Company Name */}
-              <div>
-                <label className="text-[10px] font-black text-slate-500 block mb-1">প্রতিষ্ঠানের নাম (যেমন: BNB সল্যুশনস) *</label>
-                <input
-                  type="text"
-                  placeholder="প্রতিষ্ঠানের নাম লিখুন"
-                  value={cfgCompanyName}
-                  onChange={(e) => setCfgCompanyName(e.target.value)}
-                  className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white transition outline-none"
-                  required
-                />
+                  {/* Company Name */}
+                  <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <label className="text-[10px] font-black text-slate-500 block mb-1 uppercase tracking-wider">প্রতিষ্ঠানের নাম *</label>
+                    <input
+                      type="text"
+                      placeholder="যেমন: BNB সল্যুশনস"
+                      value={cfgCompanyName}
+                      onChange={(e) => setCfgCompanyName(e.target.value)}
+                      className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2.5 bg-white transition outline-none focus:ring-2 focus:ring-[#00a884]/20"
+                      required
+                    />
+                  </div>
+
+                  {/* Company ID */}
+                  <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <label className="text-[10px] font-black text-slate-500 block mb-1 uppercase tracking-wider">কোম্পানি রেজিস্টার্ড আইডি *</label>
+                    <input
+                      type="text"
+                      placeholder="যেমন: BNB-CORP-99"
+                      value={cfgCompanyId}
+                      onChange={(e) => setCfgCompanyId(e.target.value)}
+                      className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2.5 bg-white transition outline-none focus:ring-2 focus:ring-[#00a884]/20"
+                      required
+                    />
+                  </div>
+
+                  {/* Overtime Rate */}
+                  <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <label className="text-[10px] font-black text-slate-500 block mb-1 uppercase tracking-wider">ওভারটাইম প্রতি ঘণ্টার হার (৳) *</label>
+                    <input
+                      type="number"
+                      placeholder="যেমন: 150"
+                      value={cfgOvertimeRate}
+                      onChange={(e) => setCfgOvertimeRate(e.target.value)}
+                      className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2.5 bg-white transition outline-none focus:ring-2 focus:ring-[#00a884]/20"
+                      required
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Pay Date */}
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                      <label className="text-[10px] font-black text-slate-500 block mb-1 uppercase tracking-wider">বেতন প্রদানের তারিখ</label>
+                      <input
+                        type="date"
+                        value={cfgPayDate}
+                        onChange={(e) => setCfgPayDate(e.target.value)}
+                        className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2.5 bg-white transition outline-none"
+                      />
+                    </div>
+
+                    {/* Pay Time */}
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                      <label className="text-[10px] font-black text-slate-500 block mb-1 uppercase tracking-wider">বেতন প্রদানের সময়</label>
+                      <input
+                        type="time"
+                        value={cfgPayTime}
+                        onChange={(e) => setCfgPayTime(e.target.value)}
+                        className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2.5 bg-white transition outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 pt-6 pb-10">
+                    <button
+                      type="button"
+                      onClick={() => setShowConfigModal(false)}
+                      className="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-2xl font-black transition text-sm active:scale-95"
+                    >
+                      বাতিল
+                    </button>
+                    <button
+                      type="submit"
+                      className="flex-1 py-3.5 bg-[#00a884] hover:bg-[#008f72] text-white rounded-2xl font-black transition active:scale-95 text-sm shadow-lg shadow-emerald-200"
+                    >
+                      সংরক্ষণ করুন
+                    </button>
+                  </div>
+                </form>
               </div>
-
-              {/* Company ID */}
-              <div>
-                <label className="text-[10px] font-black text-slate-500 block mb-1">কোম্পানি রেজিস্টার্ড আইডি (যেমন: BNB-CORP-99) *</label>
-                <input
-                  type="text"
-                  placeholder="কোম্পানি আইডি দিন"
-                  value={cfgCompanyId}
-                  onChange={(e) => setCfgCompanyId(e.target.value)}
-                  className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white transition outline-none"
-                  required
-                />
-              </div>
-
-              {/* Overtime Rate */}
-              <div>
-                <label className="text-[10px] font-black text-slate-500 block mb-1">ওভারটাইম প্রতি ঘণ্টার হার (৳) *</label>
-                <input
-                  type="number"
-                  placeholder="যেমন: 150"
-                  value={cfgOvertimeRate}
-                  onChange={(e) => setCfgOvertimeRate(e.target.value)}
-                  className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white transition outline-none"
-                  required
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2.5">
-                {/* Pay Date */}
-                <div>
-                  <label className="text-[10px] font-black text-slate-500 block mb-1">বেতন প্রদানের তারিখ</label>
-                  <input
-                    type="date"
-                    value={cfgPayDate}
-                    onChange={(e) => setCfgPayDate(e.target.value)}
-                    className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white transition outline-none"
-                  />
-                </div>
-
-                {/* Pay Time */}
-                <div>
-                  <label className="text-[10px] font-black text-slate-500 block mb-1">বেতন প্রদানের সময়</label>
-                  <input
-                    type="time"
-                    value={cfgPayTime}
-                    onChange={(e) => setCfgPayTime(e.target.value)}
-                    className="w-full text-xs font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white transition outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="flex gap-2 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setShowConfigModal(false)}
-                  className="w-1/2 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-black transition text-xs"
-                >
-                  বাতিল
-                </button>
-                <button
-                  type="submit"
-                  className="w-1/2 py-2.5 bg-[#00a884] hover:bg-[#008f72] text-white rounded-xl font-black transition active:scale-95 text-xs shadow-3xs"
-                >
-                  সংরক্ষণ করুন
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

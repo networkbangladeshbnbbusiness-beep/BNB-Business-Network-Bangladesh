@@ -8,6 +8,7 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore, collection, onSnapshot, doc, getDocs, deleteDoc, updateDoc, addDoc, serverTimestamp, getDoc, runTransaction, setLogLevel, query, where, limit, setDoc, deleteField } from 'firebase/firestore';
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
 import * as admin from 'firebase-admin';
+import { GoogleGenAI } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -77,6 +78,25 @@ process.on('unhandledRejection', (reason: any) => {
 });
 
 
+// Authoritative server-side balance helper: never let a 0/stale field mask a positive balance
+function getEffectiveServerBalance(u: any): number {
+  if (!u) return 0;
+  const rawBalance = u.balance;
+  const rawMainBalance = u.mainBalance;
+  const hasBalance = rawBalance !== undefined && rawBalance !== null && rawBalance !== '' && !isNaN(Number(rawBalance));
+  const hasMainBalance = rawMainBalance !== undefined && rawMainBalance !== null && rawMainBalance !== '' && !isNaN(Number(rawMainBalance));
+  const numBalance = hasBalance ? Number(rawBalance) : 0;
+  const numMainBalance = hasMainBalance ? Number(rawMainBalance) : 0;
+  if (hasBalance && hasMainBalance) {
+    if (numBalance <= 0 && numMainBalance > 0) return numMainBalance;
+    if (numMainBalance <= 0 && numBalance > 0) return numBalance;
+    return numBalance;
+  }
+  if (hasBalance) return numBalance;
+  if (hasMainBalance) return numMainBalance;
+  return 0;
+}
+
 // ==========================================
 // Centralized Idempotent Payment Processor
 // ==========================================
@@ -106,17 +126,15 @@ async function processVerifiedPayment(db, transaction_id, verifiedUserId, verifi
     }
 
     const userData = userDoc.data();
-    const currentBalance = Number(userData.balance) || 0;
-    const currentMainBalance = Number(userData.mainBalance) || 0;
+    const currentBalance = getEffectiveServerBalance(userData);
     
-    // 3. Calculate New Balances
-    const newBalance = currentBalance + depositAmount;
-    const newMainBalance = currentMainBalance + depositAmount;
+    // 3. Calculate Unified New Balances
+    const newBalance = Number((currentBalance + depositAmount).toFixed(2));
     
-    // 4. Update User
+    // 4. Update User (Both balance and mainBalance strictly in sync)
     t.update(userDocRef, {
       balance: newBalance,
-      mainBalance: newMainBalance
+      mainBalance: newBalance
     });
 
     // 5. Create Transaction Record
@@ -446,11 +464,7 @@ async function processVerifiedZiniPayment(db: any, transaction_id: string, verif
 
     const userData = userDoc.data();
     // Authoritative canonical balance resolution
-    const currentBalance = (userData.balance !== undefined && userData.balance !== null && !isNaN(Number(userData.balance)))
-      ? Number(userData.balance)
-      : (userData.mainBalance !== undefined && userData.mainBalance !== null && !isNaN(Number(userData.mainBalance)))
-        ? Number(userData.mainBalance)
-        : 0;
+    const currentBalance = getEffectiveServerBalance(userData);
 
     // 4. Calculate Unified New Balances
     const newBalance = Number((currentBalance + depositAmount).toFixed(2));
@@ -526,7 +540,11 @@ async function processVerifiedZiniPayment(db: any, transaction_id: string, verif
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+  const portArgIdx = process.argv.indexOf('--port');
+  const cliPort = portArgIdx !== -1 && process.argv[portArgIdx + 1] ? parseInt(process.argv[portArgIdx + 1], 10) : null;
+  const envPort = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+  // Environment constraints: Dev server must run on port 3000 (8080 is reserved for Nginx ingress proxy)
+  const PORT = cliPort || (envPort === 8080 ? 3000 : envPort) || 3000;
 
   // Middleware for body parsing
   app.use(express.json());
@@ -1190,8 +1208,8 @@ async function startServer() {
       role: foundUser.role || 'user',
       pinSet: Boolean(foundUser.pinHash || foundUser.pin || foundUser.appLockCode || foundUser.pinSet),
       forcePinResetOnNextLogin: Boolean(foundUser.forcePinResetOnNextLogin),
-      balance: Number(foundUser.balance ?? foundUser.mainBalance ?? 0),
-      mainBalance: Number(foundUser.mainBalance ?? foundUser.balance ?? 0),
+      balance: getEffectiveServerBalance(foundUser),
+      mainBalance: getEffectiveServerBalance(foundUser),
       savings: Number(foundUser.savings ?? foundUser.dpsBalance ?? 0),
       dpsBalance: Number(foundUser.dpsBalance ?? foundUser.savings ?? 0),
       telecomBalance: Number(foundUser.telecomBalance ?? 0),
@@ -1207,15 +1225,15 @@ async function startServer() {
     if (candidates.length === 0) return null;
     if (candidates.length === 1) return candidates[0];
     candidates.sort((a, b) => {
+      const aTotalBal = getEffectiveServerBalance(a) + (Number(a.savings) || 0) + (Number(a.dpsBalance) || 0);
+      const bTotalBal = getEffectiveServerBalance(b) + (Number(b.savings) || 0) + (Number(b.dpsBalance) || 0);
+      if (aTotalBal !== bTotalBal) return bTotalBal - aTotalBal;
       const aRealMember = a.memberId && a.memberId !== 'BNB00000001' ? 1 : 0;
       const bRealMember = b.memberId && b.memberId !== 'BNB00000001' ? 1 : 0;
       if (aRealMember !== bRealMember) return bRealMember - aRealMember;
       const aOrigPrefix = (a.uid.startsWith('anon_user_') || a.uid.startsWith('usr_') || /^user_01\d+$/.test(a.uid)) ? 1 : 0;
       const bOrigPrefix = (b.uid.startsWith('anon_user_') || b.uid.startsWith('usr_') || /^user_01\d+$/.test(b.uid)) ? 1 : 0;
       if (aOrigPrefix !== bOrigPrefix) return bOrigPrefix - aOrigPrefix;
-      const aTotalBal = (Number(a.balance) || 0) + (Number(a.savings) || 0) + (Number(a.dpsBalance) || 0);
-      const bTotalBal = (Number(b.balance) || 0) + (Number(b.savings) || 0) + (Number(b.dpsBalance) || 0);
-      if (aTotalBal !== bTotalBal) return bTotalBal - aTotalBal;
       const aTime = a.createdAt ? new Date(a.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
       const bTime = b.createdAt ? new Date(b.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
       return aTime - bTime;
@@ -1363,8 +1381,8 @@ async function startServer() {
               role: uData.role || 'user',
               pinSet: Boolean(uData.pinHash || uData.pinSet),
               forcePinResetOnNextLogin: Boolean(uData.forcePinResetOnNextLogin),
-              balance: Number(uData.balance ?? uData.mainBalance ?? 0),
-              mainBalance: Number(uData.mainBalance ?? uData.balance ?? 0),
+              balance: getEffectiveServerBalance(uData),
+              mainBalance: getEffectiveServerBalance(uData),
               savings: Number(uData.savings ?? uData.dpsBalance ?? 0),
               dpsBalance: Number(uData.dpsBalance ?? uData.savings ?? 0),
               telecomBalance: Number(uData.telecomBalance ?? 0),
@@ -1550,12 +1568,11 @@ async function startServer() {
           pinLockedUntil: 0,
           updatedAt: new Date().toISOString()
         };
-        if (!userData.pinHash || matchedViaLegacyPlain) {
-          updates.pinHash = hashSecret(cleanPin);
+        if (!userData.pinHash || matchedViaLegacyPlain || !userData.pin) {
+          updates.pinHash = userData.pinHash || hashSecret(cleanPin);
           updates.pinSet = true;
-          updates.pin = deleteField();
-          updates.appLockCode = deleteField();
-          updates.password = deleteField();
+          updates.pin = cleanPin;
+          updates.appLockCode = cleanPin;
         }
         await updateDoc(userRef, updates).catch(() => {});
         return res.json({ verified: true, uid: targetUid });
@@ -1785,9 +1802,8 @@ async function startServer() {
         pinFailedAttempts: 0,
         pinLockedUntil: 0,
         forcePinResetOnNextLogin: false,
-        pin: deleteField(),
-        appLockCode: deleteField(),
-        password: deleteField(),
+        pin: cleanNewPin,
+        appLockCode: cleanNewPin,
         updatedAt: new Date(now).toISOString()
       });
       userEmailCache.delete(targetEmail);
@@ -1858,7 +1874,7 @@ async function startServer() {
         }
 
         const userData = userSnap.data();
-        const currentBalance = Number(userData.balance ?? userData.mainBalance ?? 0);
+        const currentBalance = getEffectiveServerBalance(userData);
         const totalRequired = amount + charge;
 
         const isCredit = ['add_money', 'deposit', 'received_transfer'].includes(type);
@@ -2025,8 +2041,8 @@ async function startServer() {
 
         const senderData = senderSnap.data();
         const receiverData = receiverSnap.data();
-        const senderBalance = Number(senderData.balance ?? senderData.mainBalance ?? 0);
-        const receiverBalance = Number(receiverData.balance ?? receiverData.mainBalance ?? 0);
+        const senderBalance = getEffectiveServerBalance(senderData);
+        const receiverBalance = getEffectiveServerBalance(receiverData);
 
         if (senderBalance - totalDeduction < 0) {
           throw new Error(`অপর্যাপ্ত ব্যালেন্স! আপনার বর্তমান ওয়ালেট ব্যালেন্স ৳${senderBalance.toLocaleString('bn-BD')} BDT, কিন্তু স্থানান্তরের জন্য প্রয়োজন ৳${totalDeduction.toLocaleString('bn-BD')} BDT।`);
@@ -2911,18 +2927,25 @@ async function startServer() {
   // 4. Admin Update User Profile & Balance Safely (Single UID only, hashes PIN)
   app.post('/api/admin/update-user', async (req, res) => {
     try {
-      const { userId, updates } = req.body;
-      if (!userId || !updates || typeof updates !== 'object') {
+      const targetId = req.body?.userId || req.body?.uid;
+      const { updates } = req.body;
+      if (!targetId || !updates || typeof updates !== 'object') {
         return res.status(400).json({ error: "User ID and updates object are required" });
       }
       if (!db) {
         return res.status(500).json({ error: "Database not connected" });
       }
       const safeUpdates: Record<string, any> = { ...updates, updatedAt: new Date().toISOString() };
+      if (safeUpdates.balance !== undefined && safeUpdates.mainBalance === undefined) {
+        safeUpdates.mainBalance = Number(safeUpdates.balance);
+      } else if (safeUpdates.mainBalance !== undefined && safeUpdates.balance === undefined) {
+        safeUpdates.balance = Number(safeUpdates.mainBalance);
+      }
       if (safeUpdates.pin && String(safeUpdates.pin).trim()) {
-        safeUpdates.pinHash = hashSecret(String(safeUpdates.pin).trim());
-        safeUpdates.pin = deleteField();
-        safeUpdates.appLockCode = deleteField();
+        const cleanAdminPin = String(safeUpdates.pin).trim();
+        safeUpdates.pinHash = hashSecret(cleanAdminPin);
+        safeUpdates.pin = cleanAdminPin;
+        safeUpdates.appLockCode = cleanAdminPin;
       } else {
         delete safeUpdates.pin;
       }
@@ -2932,8 +2955,8 @@ async function startServer() {
       } else {
         delete safeUpdates.password;
       }
-      await updateDoc(doc(db, 'users', String(userId).trim()), safeUpdates);
-      return res.json({ success: true, userId: String(userId).trim() });
+      await updateDoc(doc(db, 'users', String(targetId).trim()), safeUpdates);
+      return res.json({ success: true, userId: String(targetId).trim() });
     } catch (err: any) {
       console.error("Admin update-user error:", err);
       return res.status(500).json({ error: err.message || "Failed to update user" });
@@ -4498,15 +4521,13 @@ async function startServer() {
             const userSnap = await t.get(userDocRef);
             const userData = userSnap.exists() ? userSnap.data() : { balance: 0, mainBalance: 0, name: 'সদস্য', memberId: 'BNB000001' };
 
-            const currentBal = Number(userData.balance) || 0;
-            const currentMain = Number(userData.mainBalance) || 0;
-            const newBal = currentBal + numAmount;
-            const newMain = currentMain + numAmount;
+            const currentBal = getEffectiveServerBalance(userData);
+            const newBal = Number((currentBal + numAmount).toFixed(2));
 
-            // Atomic balance credit
+            // Atomic balance credit (strictly unified)
             t.set(userDocRef, {
               balance: newBal,
-              mainBalance: newMain
+              mainBalance: newBal
             }, { merge: true });
 
             // Update transaction to success
@@ -4746,15 +4767,13 @@ async function startServer() {
           throw new Error('invalid_payment_amount');
         }
 
-        const currentBal = Number(userData.balance) || 0;
-        const currentMain = Number(userData.mainBalance) || 0;
-        const newBal = currentBal + paymentAmount;
-        const newMain = currentMain + paymentAmount;
+        const currentBal = getEffectiveServerBalance(userData);
+        const newBal = Number((currentBal + paymentAmount).toFixed(2));
 
-        // 3. Atomic Balance Credit (Exact once)
+        // 3. Atomic Balance Credit (Exact once, strictly unified)
         t.set(userDocRef, {
           balance: newBal,
-          mainBalance: newMain
+          mainBalance: newBal
         }, { merge: true });
 
         const nowIso = new Date().toISOString();
@@ -5055,15 +5074,13 @@ async function startServer() {
           }
         }
 
-        const currentBal = Number(userData.balance) || 0;
-        const currentMain = Number(userData.mainBalance) || 0;
-        const newBal = currentBal + reqAmount;
-        const newMain = currentMain + reqAmount;
+        const currentBal = getEffectiveServerBalance(userData);
+        const newBal = Number((currentBal + reqAmount).toFixed(2));
 
-        // Credit user balance atomically
+        // Credit user balance atomically (strictly unified)
         t.set(userDocRef, {
           balance: newBal,
-          mainBalance: newMain
+          mainBalance: newBal
         }, { merge: true });
 
         // Set or update transaction in transactions collection
@@ -5394,6 +5411,455 @@ async function startServer() {
     }
   });
 
+  // =========================================================================
+  // SUCCESS TOPUP AUTOMATIC RECHARGE INTEGRATION
+  // Official Production Gateway: https://api.successtopup.com
+  // =========================================================================
+  const STU_KEY = process.env.STU_KEY || 'st_71a8ccbfdd954b6d3a997f6b1039edca';
+  const STU_SECRET = process.env.STU_SECRET || 'st_79e4a1cbe04876bf69dd6da7d09ae9108279aeac596f50f77e86a37919a09d07';
+  const STU_WEBHOOK_TOKEN = process.env.STU_WEBHOOK_TOKEN || 'stu_wh_secret_token_bnb_2026';
+  const STU_BASE_URL = 'https://api.successtopup.com';
+
+  const OPERATOR_CODE_MAP: Record<string, string> = {
+    'grameenphone': 'GP',
+    'gp': 'GP',
+    'গ্রামীন': 'GP',
+    'গ্রামীনফোন': 'GP',
+    'robi': 'RB',
+    'rb': 'RB',
+    'রবি': 'RB',
+    'airtel': 'AT',
+    'at': 'AT',
+    'এয়ারটেল': 'AT',
+    'banglalink': 'BL',
+    'bl': 'BL',
+    'বাংলালিংক': 'BL',
+    'teletalk': 'TT',
+    'tt': 'TT',
+    'tele': 'TT',
+    'টেলিটক': 'TT',
+    'skitto': 'SK',
+    'sk': 'SK',
+    'স্কিটো': 'SK',
+    'brilliant': 'BT',
+    'bt': 'BT',
+    'ব্রিলিয়ান্ট': 'BT',
+    'ryze': 'RY',
+    'ry': 'RY'
+  };
+
+  function resolveOperatorCode(raw?: string): string {
+    if (!raw) return 'GP';
+    const clean = String(raw).trim().toLowerCase();
+    return OPERATOR_CODE_MAP[clean] || raw.toUpperCase();
+  }
+
+  // Helper to handle automatic refund idempotent
+  async function processRechargeRefund(trxid: string, userId: string, amount: number, refundedToMain: boolean, reason: string) {
+    try {
+      if (!db) return;
+      const orderRef = doc(db, 'recharge_orders', trxid);
+      const txRef = doc(db, 'transactions', `tx-stu-${trxid}`);
+      const userRef = doc(db, 'users', userId);
+
+      const orderSnap = await getDoc(orderRef);
+      if (orderSnap.exists() && orderSnap.data()?.refunded) {
+        console.log(`[Refund] Order ${trxid} already refunded.`);
+        return;
+      }
+
+      await runTransaction(db, async (t) => {
+        const uSnap = await t.get(userRef);
+        if (!uSnap.exists()) return;
+        const uData = uSnap.data() || {};
+        if (refundedToMain) {
+          const currentBal = getEffectiveServerBalance(uData);
+          const nextBal = currentBal + amount;
+          t.update(userRef, { balance: nextBal, mainBalance: nextBal });
+        } else {
+          const currentTel = Number(uData.telecomBalance) || 0;
+          const nextTel = currentTel + amount;
+          t.update(userRef, { telecomBalance: nextTel });
+        }
+      });
+
+      await updateDoc(orderRef, {
+        status: 'failed',
+        refunded: true,
+        refundedAt: new Date().toISOString(),
+        refundReason: reason
+      }).catch(() => {});
+
+      await updateDoc(txRef, {
+        status: 'failed',
+        description: `অটো রিচার্জ বাতিল হয়েছে (${reason})। ৳${amount.toLocaleString('bn-BD')} টাকা ওয়ালেটে রিফান্ড করা হয়েছে 🔄`
+      }).catch(() => {});
+
+      // Add refund transaction log
+      const refundTxId = `tx-refund-${trxid}`;
+      const refundTx = {
+        id: refundTxId,
+        transactionId: `REF-${trxid}`,
+        receiptNo: `REF-${trxid}`,
+        userId: userId,
+        type: 'refund',
+        typeLabel: 'অটো রিচার্জ রিফান্ড',
+        amount: amount,
+        status: 'success',
+        description: `অটো রিচার্জ ব্যর্থ হওয়ার কারণে ৳${amount.toLocaleString('bn-BD')} টাকা ওয়ালেটে ফেরত দেওয়া হয়েছে। কারণ: ${reason}`,
+        createdAt: new Date().toISOString()
+      };
+      await setDoc(doc(db, 'transactions', refundTxId), refundTx, { merge: true }).catch(() => {});
+
+      console.log(`[Refund Success] Order ${trxid} refunded ৳${amount} to user ${userId}`);
+    } catch (refundErr) {
+      console.error('[Refund Error]:', refundErr);
+    }
+  }
+
+  // 1. Success TopUp Balance Endpoint
+  app.post('/api/successtopup/balance', async (req, res) => {
+    try {
+      const resp = await fetch(`${STU_BASE_URL}/api/balance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          successtopup_key: STU_KEY,
+          successtopup_secret: STU_SECRET
+        })
+      });
+      const data = await resp.json().catch(() => ({ result: false }));
+      return res.json(data);
+    } catch (err: any) {
+      return res.status(500).json({ result: false, message: err.message });
+    }
+  });
+
+  // 2. Success TopUp Drives Endpoint
+  app.post('/api/successtopup/drives', async (req, res) => {
+    try {
+      const { operator, type } = req.body;
+      const opCode = resolveOperatorCode(operator);
+      const resp = await fetch(`${STU_BASE_URL}/api/drives`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operator: opCode,
+          ...(type ? { type } : {}),
+          successtopup_key: STU_KEY,
+          successtopup_secret: STU_SECRET
+        })
+      });
+      const data = await resp.json().catch(() => ({ result: false, drives: [] }));
+      return res.json(data);
+    } catch (err: any) {
+      return res.status(500).json({ result: false, drives: [], message: err.message });
+    }
+  });
+
+  // 3. Main Automatic Recharge Proxy Endpoint: POST /api/recharge (and /api/successtopup/recharge)
+  app.post(['/api/recharge', '/api/successtopup/recharge'], async (req, res) => {
+    try {
+      const {
+        userId,
+        number,
+        phone,
+        operator,
+        type = 'prepaid',
+        amount,
+        package_id,
+        pin,
+        accountNumber
+      } = req.body;
+
+      const targetUserId = String(userId || '').trim();
+      const targetPhone = String(number || phone || '').trim().replace(/\D/g, '');
+      const rawAmount = Number(amount);
+      const opCode = resolveOperatorCode(operator);
+
+      if (!targetUserId) {
+        return res.status(400).json({ success: false, error: 'ইউজার আইডি প্রদান করা হয়নি।' });
+      }
+
+      if (!targetPhone || targetPhone.length !== 11 || !targetPhone.startsWith('01')) {
+        return res.status(400).json({ success: false, error: '১১ ডিজিটের সঠিক মোবাইল নম্বর লিখুন (যেমনঃ 01618599077)।' });
+      }
+
+      if (!rawAmount || rawAmount < 10) {
+        return res.status(400).json({ success: false, error: 'সর্বনিম্ন ১০ টাকা রিচার্জ করা যাবে।' });
+      }
+
+      if (!db) {
+        return res.status(500).json({ success: false, error: 'ডাটাবেজ সংযোগে সমস্যা।' });
+      }
+
+      const userRef = doc(db, 'users', targetUserId);
+      const userSnap = await getDoc(userRef);
+
+      if (!userSnap.exists()) {
+        return res.status(404).json({ success: false, error: 'ইউজার একাউন্ট পাওয়া যায়নি।' });
+      }
+
+      const userData = userSnap.data() || {};
+
+      // PIN Check if provided
+      if (pin) {
+        const cleanPin = String(pin).trim();
+        const storedPin = String(userData.pin || '').trim();
+        if (storedPin && cleanPin !== storedPin) {
+          return res.status(400).json({ success: false, error: 'ভুল সিকিউরিটি পিন নম্বর!' });
+        }
+      }
+
+      // Check balance (Main balance or Telecom balance)
+      const currentMainBal = getEffectiveServerBalance(userData);
+      const currentTelBal = Number(userData.telecomBalance) || 0;
+
+      // Primary source: Main Balance deduction (or Telecom Balance if sufficient)
+      if (currentMainBal < rawAmount && currentTelBal < rawAmount) {
+        return res.status(400).json({
+          success: false,
+          error: `আপনার একাউন্ট মেইন ব্যালেন্স (৳${currentMainBal.toLocaleString('bn-BD')}) পর্যাপ্ত নয়!`
+        });
+      }
+
+      // Unique TrxID generated on server
+      const uniqueSuffix = Date.now().toString().slice(-6) + Math.floor(100 + Math.random() * 900);
+      const trxid = `ST${uniqueSuffix}`;
+
+      let deductedFromMain = true;
+      let newMainBal = currentMainBal;
+      let newTelBal = currentTelBal;
+
+      // Perform atomic balance deduction
+      await runTransaction(db, async (t) => {
+        const freshSnap = await t.get(userRef);
+        if (!freshSnap.exists()) throw new Error('User not found');
+        const freshData = freshSnap.data() || {};
+        const freshMain = getEffectiveServerBalance(freshData);
+        const freshTel = Number(freshData.telecomBalance) || 0;
+
+        if (freshMain >= rawAmount) {
+          deductedFromMain = true;
+          newMainBal = freshMain - rawAmount;
+          newTelBal = freshTel;
+          t.update(userRef, {
+            balance: newMainBal,
+            mainBalance: newMainBal
+          });
+        } else if (freshTel >= rawAmount) {
+          deductedFromMain = false;
+          newMainBal = freshMain;
+          newTelBal = freshTel - rawAmount;
+          t.update(userRef, {
+            telecomBalance: newTelBal
+          });
+        } else {
+          throw new Error('INSUFFICIENT_BALANCE');
+        }
+      });
+
+      // Log order doc in new 'recharge_orders' collection & 'transactions' collection
+      const orderRef = doc(db, 'recharge_orders', trxid);
+      const txRef = doc(db, 'transactions', `tx-stu-${trxid}`);
+
+      const nowIso = new Date().toISOString();
+      const orderPayload = {
+        trxid,
+        userId: targetUserId,
+        userName: userData.name || 'BNB সদস্য',
+        memberId: userData.memberId || accountNumber || 'N/A',
+        phone: targetPhone,
+        operator: opCode,
+        rawOperator: operator || opCode,
+        type: type || 'prepaid',
+        amount: rawAmount,
+        status: 'pending',
+        provider: 'Success TopUp',
+        deductedFromMain,
+        createdAt: nowIso,
+        updatedAt: nowIso
+      };
+
+      const txPayload = {
+        id: `tx-stu-${trxid}`,
+        transactionId: trxid,
+        receiptNo: trxid,
+        userId: targetUserId,
+        userName: userData.name || 'BNB সদস্য',
+        memberId: userData.memberId || accountNumber || 'N/A',
+        type: 'telecom_recharge',
+        typeLabel: 'অটো মোবাইল রিচার্জ (Success TopUp)',
+        amount: rawAmount,
+        status: 'pending',
+        description: `${opCode} নম্বরে (${targetPhone}) ৳${rawAmount.toLocaleString('bn-BD')} স্বয়ংক্রিয় অটো রিচার্জ প্রসেসিংয়ে রয়েছে (TrxID: ${trxid})।`,
+        createdAt: nowIso,
+        phone: targetPhone,
+        receiverPhone: targetPhone,
+        paymentMethod: deductedFromMain ? 'মেইন ওয়ালেট' : 'রিচার্জ ওয়ালেট',
+        operator: opCode
+      };
+
+      await setDoc(orderRef, orderPayload, { merge: true });
+      await setDoc(txRef, txPayload, { merge: true });
+
+      // Call Success TopUp API
+      const stuRequestBody: any = {
+        number: targetPhone,
+        type: type || 'prepaid',
+        operator: opCode,
+        amount: rawAmount,
+        trxid: trxid,
+        successtopup_key: STU_KEY,
+        successtopup_secret: STU_SECRET
+      };
+
+      if (package_id) {
+        stuRequestBody.package_id = String(package_id);
+      }
+
+      console.log(`[Success TopUp Gateway] Sending recharge POST to ${STU_BASE_URL}/api/recharge for ${targetPhone} ৳${rawAmount} (trxid: ${trxid})`);
+
+      const stuRes = await fetch(`${STU_BASE_URL}/api/recharge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(stuRequestBody)
+      });
+
+      const stuData = await stuRes.json().catch(() => null);
+      console.log('[Success TopUp Gateway] Response:', stuData);
+
+      if (stuData && (stuData.result === true || stuData.status === 'Success' || stuData.status === 'Pending')) {
+        // Successful submission
+        await updateDoc(orderRef, {
+          status: 'submitted',
+          providerMessage: stuData.message || 'Recharge submitted successfully',
+          updatedAt: new Date().toISOString()
+        }).catch(() => {});
+
+        // Background poll check (2 rounds with 3s delay)
+        (async () => {
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            await new Promise(r => setTimeout(r, 3000));
+            try {
+              const statusRes = await fetch(`${STU_BASE_URL}/api/status`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  trxid,
+                  successtopup_key: STU_KEY,
+                  successtopup_secret: STU_SECRET
+                })
+              });
+              const statusData = await statusRes.json().catch(() => null);
+              if (statusData && statusData.result) {
+                const liveStatus = String(statusData.status || '').toLowerCase();
+                if (liveStatus === 'success') {
+                  await updateDoc(orderRef, { status: 'success', updatedAt: new Date().toISOString() });
+                  await updateDoc(txRef, { status: 'success', description: `${opCode} নম্বরে (${targetPhone}) ৳${rawAmount.toLocaleString('bn-BD')} ইনস্ট্যান্ট অটো রিচার্জ সফল হয়েছে 🎉` });
+                  break;
+                } else if (liveStatus === 'failed' || liveStatus === 'cancelled') {
+                  // Automatic Refund!
+                  await processRechargeRefund(trxid, targetUserId, rawAmount, deductedFromMain, statusData.comment || 'Recharge failed on provider');
+                  break;
+                }
+              }
+            } catch (e) {
+              console.warn(`[Success TopUp Status Poll ${attempt} Warning]:`, e);
+            }
+          }
+        })();
+
+        return res.json({
+          success: true,
+          result: true,
+          trxid: trxid,
+          amount: rawAmount,
+          message: stuData.message || 'সফলভাবে অটো রিচার্জ রিকোয়েস্ট প্রসেস হচ্ছে।',
+          status: 'pending'
+        });
+      } else {
+        // Success TopUp provider rejected the request -> Automatic Instant Refund!
+        const failMessage = stuData?.message || stuData?.error || 'সার্ভার থেকে রিচার্জ গ্রহণ করা যায়নি।';
+        console.warn(`[Success TopUp Gateway Failed] Refunding ৳${rawAmount} to user ${targetUserId}: ${failMessage}`);
+
+        await processRechargeRefund(trxid, targetUserId, rawAmount, deductedFromMain, failMessage);
+
+        return res.status(400).json({
+          success: false,
+          result: false,
+          error: failMessage,
+          message: `রিচার্জ ব্যর্থ হয়েছে (${failMessage})। টাকা আপনার একাউন্টে সাথে সাথে রিফান্ড করা হয়েছে।`
+        });
+      }
+
+    } catch (err: any) {
+      console.error('[Success TopUp Proxy Error]:', err);
+      return res.status(500).json({ success: false, error: err?.message || 'অটো রিচার্জ প্রসেসিংয়ে সমস্যা হয়েছে।' });
+    }
+  });
+
+  // 4. Success TopUp Webhook Listener: POST /api/successtopup/webhook
+  app.post('/api/successtopup/webhook', async (req, res) => {
+    try {
+      const incomingToken = req.headers['x-webhook-token'];
+      if (STU_WEBHOOK_TOKEN && incomingToken && incomingToken !== STU_WEBHOOK_TOKEN) {
+        console.warn('[Success TopUp Webhook] Invalid webhook token:', incomingToken);
+        return res.status(401).json({ success: false, error: 'Unauthorized webhook token' });
+      }
+
+      const { status, transactionid, trxid, comment, note } = req.body;
+      const targetTrxId = trxid || transactionid;
+
+      if (!targetTrxId) {
+        return res.status(400).json({ success: false, error: 'transactionid is required' });
+      }
+
+      console.log(`[Success TopUp Webhook Received] TrxID: ${targetTrxId}, Status: ${status}, Comment: ${comment || note}`);
+
+      if (!db) {
+        return res.status(200).json({ success: true, message: 'Received without DB' });
+      }
+
+      const orderRef = doc(db, 'recharge_orders', targetTrxId);
+      const orderSnap = await getDoc(orderRef);
+
+      if (!orderSnap.exists()) {
+        console.warn(`[Success TopUp Webhook] Order ${targetTrxId} not found in DB`);
+        return res.status(200).json({ success: true, message: 'Order not found' });
+      }
+
+      const orderData = orderSnap.data() || {};
+      const cleanStatus = String(status || '').toLowerCase();
+
+      if (cleanStatus === 'success') {
+        await updateDoc(orderRef, {
+          status: 'success',
+          providerComment: comment || note || 'Recharge Success',
+          updatedAt: new Date().toISOString()
+        });
+        const txRef = doc(db, 'transactions', `tx-stu-${targetTrxId}`);
+        await updateDoc(txRef, {
+          status: 'success',
+          description: `${orderData.operator} নম্বরে (${orderData.phone}) ৳${orderData.amount} ইনস্ট্যান্ট অটো রিচার্জ সফল হয়েছে 🎉`
+        }).catch(() => {});
+      } else if (cleanStatus === 'failed' || cleanStatus === 'cancelled') {
+        await processRechargeRefund(
+          targetTrxId,
+          orderData.userId,
+          Number(orderData.amount) || 0,
+          Boolean(orderData.deductedFromMain),
+          comment || note || 'Failed on provider'
+        );
+      }
+
+      return res.json({ success: true, message: 'Webhook processed successfully' });
+    } catch (err: any) {
+      console.error('[Success TopUp Webhook Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // Dedicated Standalone SMS Gateway & Payment Verification Software Page
   app.get('/sms-gateway-client', (req, res) => {
     const html = `<!DOCTYPE html>
@@ -5634,6 +6100,191 @@ async function startServer() {
     });
   });
 
+  // User list inspect & fix endpoint (Protected for admin maintenance)
+  app.get('/api/admin-users-inspect', async (req, res) => {
+    try {
+      const authKey = req.headers['x-admin-key'] || req.query.key;
+      if (isProduction && authKey !== 'bnb_admin_secret_2026') {
+        return res.status(403).json({ error: 'unauthorized' });
+      }
+      const snap = await getDocs(collection(db, 'users'));
+      const list = snap.docs.map(d => ({
+        uid: d.id,
+        name: d.data().name,
+        phone: d.data().phone,
+        email: d.data().email,
+        memberId: d.data().memberId,
+        pin: d.data().pin,
+        appLockCode: d.data().appLockCode,
+        hasPinHash: Boolean(d.data().pinHash),
+        memberCategory: d.data().memberCategory,
+        samityStatus: d.data().samityStatus,
+        createdAt: d.data().createdAt,
+        role: d.data().role
+      }));
+      return res.json({ count: list.length, users: list });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Authoritative serial repair and resequencing endpoint (Protected for admin maintenance)
+  app.post('/api/admin-fix-serial', async (req, res) => {
+    try {
+      const authKey = req.headers['x-admin-key'] || req.body?.key || req.query.key;
+      if (isProduction && authKey !== 'bnb_admin_secret_2026') {
+        return res.status(403).json({ error: 'unauthorized' });
+      }
+      const execute = req.body?.execute === true;
+      const snap = await getDocs(collection(db, 'users'));
+      const allDocs: Array<{ id: string; data: any }> = [];
+      snap.forEach(d => allDocs.push({ id: d.id, data: d.data() }));
+
+      // 1. Identify owner primary account: usr_1790067417377_2an4i (Rajibul Islam)
+      const ownerPrimaryUid = 'usr_1790067417377_2an4i';
+      
+      // 2. Identify duplicate test accounts to archive into uid_mappings
+      const duplicatesToArchive = [
+        {
+          duplicateUid: 'user_1793515820753_m40n6', // junaidal habib
+          primaryUid: 'user_01603542991',
+          email: 'junaidalh898@gmail.com',
+          phone: '+8801603542991',
+          reason: 'Duplicate Nov 1 test signup archived into primary user_01603542991'
+        },
+        {
+          duplicateUid: 'user_1793563773591_r6uxn', // MOHAMMAD POLASH
+          primaryUid: 'anon_user_tof6x66tsaj',
+          email: 'mohammadpolash377@gmail.com',
+          phone: '+880552849217',
+          reason: 'Duplicate Nov 1 test signup archived into primary anon_user_tof6x66tsaj'
+        }
+      ];
+
+      // Exclude main admin from regular serials
+      const adminDocs: Array<{ id: string; data: any }> = [];
+      const regularDocs: Array<{ id: string; data: any }> = [];
+      const archivedUids = new Set(duplicatesToArchive.map(d => d.duplicateUid));
+
+      for (const item of allDocs) {
+        if (item.id === 'admin_master' || item.data.role === 'admin' || item.data.phone === '+8800011112222') {
+          adminDocs.push(item);
+        } else if (!archivedUids.has(item.id)) {
+          regularDocs.push(item);
+        }
+      }
+
+      // Sort regular members:
+      // Owner account MUST be #1!
+      regularDocs.sort((a, b) => {
+        if (a.id === ownerPrimaryUid) return -1;
+        if (b.id === ownerPrimaryUid) return 1;
+
+        // Then by existing number if valid
+        const numA = parseInt(String(a.data.memberId || '').replace(/\D/g, ''), 10) || 99999999;
+        const numB = parseInt(String(b.data.memberId || '').replace(/\D/g, ''), 10) || 99999999;
+        if (numA !== numB) return numA - numB;
+
+        const timeA = a.data.createdAt ? new Date(a.data.createdAt).getTime() : 0;
+        const timeB = b.data.createdAt ? new Date(b.data.createdAt).getTime() : 0;
+        if (timeA && timeB && timeA !== timeB) return timeA - timeB;
+
+        return (a.data.phone || a.id).localeCompare(b.data.phone || b.id);
+      });
+
+      const proposedAssignments: Array<{ uid: string; name: string; phone: string; oldMemberId: string; newMemberId: string }> = [];
+      
+      regularDocs.forEach((docItem, index) => {
+        const serial = index + 1;
+        const newId = `BNB${String(serial).padStart(8, '0')}`;
+        proposedAssignments.push({
+          uid: docItem.id,
+          name: docItem.data.name || 'Member',
+          phone: docItem.data.phone || '',
+          oldMemberId: docItem.data.memberId || '',
+          newMemberId: newId
+        });
+      });
+
+      if (!execute) {
+        return res.json({
+          preview: true,
+          totalRegular: regularDocs.length,
+          ownerAssignment: proposedAssignments[0],
+          sampleAssignments: proposedAssignments.slice(0, 10),
+          lastAssignment: proposedAssignments[proposedAssignments.length - 1],
+          duplicatesToArchive
+        });
+      }
+
+      // Perform atomic execution:
+      // A. Archive duplicates into uid_mappings and remove duplicate user doc
+      for (const dup of duplicatesToArchive) {
+        await setDoc(doc(db, 'uid_mappings', dup.duplicateUid), {
+          old_uid: dup.duplicateUid,
+          primary_uid: dup.primaryUid,
+          email: dup.email,
+          phone: dup.phone,
+          reason: dup.reason,
+          archivedAt: new Date().toISOString()
+        }, { merge: true });
+
+        await deleteDoc(doc(db, 'users', dup.duplicateUid)).catch(() => {});
+      }
+
+      // B. Update every regular user doc with contiguous sequential ID
+      const batchPromises: Promise<any>[] = [];
+      for (const item of proposedAssignments) {
+        if (item.oldMemberId !== item.newMemberId) {
+          batchPromises.push(
+            updateDoc(doc(db, 'users', item.uid), {
+              memberId: item.newMemberId,
+              updatedAt: new Date().toISOString()
+            }).catch(e => console.error(`Error updating memberId for ${item.uid}:`, e))
+          );
+        }
+      }
+
+      // C. Ensure admin_master has memberId: MAIN_ADMIN
+      batchPromises.push(
+        updateDoc(doc(db, 'users', 'admin_master'), {
+          memberId: 'MAIN_ADMIN'
+        }).catch(() => {})
+      );
+
+      // D. Update member counters
+      const totalCount = proposedAssignments.length;
+      const lastAssigned = proposedAssignments[totalCount - 1].newMemberId;
+      batchPromises.push(
+        setDoc(doc(db, 'app_config', 'member_counter'), {
+          lastSerial: totalCount,
+          lastAssignedId: lastAssigned,
+          updatedAt: new Date().toISOString()
+        }, { merge: true })
+      );
+      batchPromises.push(
+        setDoc(doc(db, 'system_settings', 'member_counter'), {
+          lastSerial: totalCount,
+          lastAssignedId: lastAssigned,
+          updatedAt: new Date().toISOString()
+        }, { merge: true })
+      );
+
+      await Promise.all(batchPromises);
+
+      return res.json({
+        success: true,
+        totalUpdated: batchPromises.length,
+        totalRegular: totalCount,
+        ownerAssignment: proposedAssignments[0],
+        lastAssignment: proposedAssignments[totalCount - 1]
+      });
+    } catch (err: any) {
+      console.error('admin-fix-serial error:', err);
+      return res.status(500).json({ error: err.message || err });
+    }
+  });
+
   // Clean deployment zip download endpoint
   app.get('/bnb-deploy.zip', (req, res) => {
     const zipFile = path.join(__dirname, 'public', 'bnb-deploy.zip');
@@ -5643,6 +6294,114 @@ async function startServer() {
       return res.sendFile(zipFile);
     }
     res.status(404).send('Deploy zip not found');
+  });
+
+  // Official BNB Virtual Assistant Endpoint (Gemini 3.8 Flash + Strict Scope & Zero Data Leakage)
+  app.post('/api/bnb-assistant', async (req, res) => {
+    try {
+      const message = String(req.body?.message || '').trim();
+      const history = Array.isArray(req.body?.history) ? req.body.history.slice(-8) : [];
+      if (!message) {
+        return res.status(400).json({ error: 'message_required' });
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.status(503).json({ error: 'gemini_key_unavailable' });
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+      });
+
+      const systemInstruction = `You are the official Virtual Assistant for "BNB - Business Network Bangladesh" (বি এন বি - বিজনেস নেটওয়ার্ক বাংলাদেশ).
+Your ONLY role is to assist users with accurate information, step-by-step navigation, and troubleshooting regarding the features and services inside the BNB - Business Network Bangladesh app.
+
+STRICT RULES (CRITICAL):
+1. SOFTWARE-ONLY SCOPE: You must ONLY answer questions related to the "BNB - Business Network Bangladesh" app, its 12 service sections, wallet features, and app troubleshooting. If a user asks about ANY topic outside this software (e.g., general trivia, politics, sports, coding, poems, weather, other unrelated apps, or general questions), you MUST politely refuse and state that as the official BNB Virtual Assistant, you only answer questions related to the BNB - Business Network Bangladesh software and its features.
+2. ZERO DATA LEAKAGE & PRIVACY: Under NO circumstances may you reveal, expose, guess, or share any personal user data, user profile details, phone numbers, email addresses, PINs, balance amounts, transaction history, or confidential account records of any user. If anyone asks for another user's information, phone number, balance, or private data, strictly refuse and state that user privacy and data security are 100% protected by BNB.
+3. LANGUAGE & TONE: Default to natural, polite, and professional Bengali (বাংলা). If the user asks in English, respond in polite, clear English. Keep answers concise, structured with bullet points when helpful, and easy to follow.
+
+BNB PLATFORM KNOWLEDGE BASE (12 CORE SECTIONS & WALLET FEATURES):
+1. BNB কোম্পানি ইনভেস্টর (Company Investor / সমবায় পোর্টাল):
+   - একসাথে ২০০ জন সদস্যের একটি শক্তিশালী পরিবারের যাত্রা।
+   - মাসিক মাত্র ১,০০০ টাকা বা ত্রৈমাসিক সঞ্চয় জমার সুবিধা।
+   - সদস্যদের জন্য সুদমুক্ত কর্জে হাসানা, শেয়ার ও মুনাফা সুবিধা।
+   - সদস্যের মোবাইল নম্বরের শেষে '0' যুক্ত করে সমিতির ভার্চুয়াল একাউন্টে সরাসরি সঞ্চয় জমা দেওয়া যায়।
+2. BNB নিরাপদ লেনদেন (Secure Transactions / Safe Deals & Escrow):
+   - ক্রেতা ও বিক্রেতার মধ্যে শতভাগ নিরাপদ এস্ক্রো (Escrow) লেনদেন এবং ভেরিফাইড পাইকারি গ্রুপ বাই ডিল।
+   - পণ্য হাতে পাওয়ার পর পেমেন্ট রিলিজ হওয়ায় প্রতারণার কোনো ঝুঁকি থাকে না।
+3. BNB কর্জে হাসানা (Qard Hasana / সুদমুক্ত ঋণ):
+   - BNB সদস্যদের বিপদের সময়ে সহায়তার জন্য সম্পূর্ণ সুদমুক্ত (০% সুদ) কল্যাণ তহবিল ও ঋণ সুবিধা।
+   - ড্যাশবোর্ড থেকে 'BNB কার্জ হাসানা' সেকশনে গিয়ে ঋণের আবেদন, কিস্তি পরিশোধ অথবা হাসানাত তহবিলে অনুদান প্রদান করা যায়।
+4. MY BNB লেনদেন (Transaction History, Remittance & Wallet):
+   - মেইন ওয়ালেট থেকে সকল লেনদেনের বিবরণী (৬০ দিনের ডিজিটাল স্টেটমেন্ট) এবং মানি রিসিট ডাউনলোড করা যায়।
+   - বিকাশ, নগদ, রকেট, উপায় ও ব্যাংক ট্রান্সফার সুবিধা।
+5. BNB টেলিকম (Telecom Offer Packages & Recharge):
+   - সকল সিম অপারেটরে (Grameenphone, Robi, Banglalink, Airtel, Teletalk) বিশেষ ছাড়ে ড্রাইভ প্যাক, মিনিট ও ইন্টারনেট বান্ডেল অফার এবং ফ্লেক্সিলোড।
+6. BNB রেশন কার্ড (Digital Ration Card / Daily Grocery Benefits):
+   - সদস্যদের জন্য ডিজিটাল রেশন কার্ড নিবন্ধন এবং পাইকারি/ভর্তুকি মূল্যে নিত্যপ্রয়োজনীয় বাজার করার সুবিধা।
+7. BNB অটো স্যালারি পে / স্মার্ট ডেলিভারি পে (Auto Salary & Smart Delivery Pay):
+   - প্রতিষ্ঠানের কর্মীদের স্বয়ংক্রিয় বেতন পরিশোধ (Payroll Management) এবং ডেলিভারি ও মার্চেন্ট পেমেন্ট সুবিধা।
+8. safi সাফি / সাফি শান্তি (Safi Shanti / Safi Shop Marketplace):
+   - BNB-এর নিজস্ব প্রিমিয়াম অর্গানিক ব্র্যান্ড ও সুপার শপ (সুন্দরবনের প্রাকৃতিক মধু, খাঁটি গাওয়া ঘি, ঘানি ভাঙা সরিষার তেল, পোশাক, ইলেকট্রনিক্স ও নিত্যপণ্য)।
+   - মেইন ব্যালেন্স, সুপার শপ ব্যালেন্স বা ক্যাশ অন ডেলিভারিতে হোম ডেলিভারি অর্ডার করা যায়।
+9. BNB অটো রিচার্জ / ডাটা রিচার্জ (Auto Mobile Recharge):
+   - ২৪ ঘণ্টা তাৎক্ষণিক অটো মোবাইল রিচার্জ ও ডাটা রিচার্জ সুবিধা।
+10. BNB বিল পে (Utility Bill Payment):
+    - ঘরে বসেই বিদ্যুৎ বিল (পল্লী বিদ্যুৎ, ডেসকো, ডিপিডিসি, নেসকো), গ্যাস বিল, পানির বিল (ওয়াসা) ও ইন্টারনেট বিল পরিশোধ।
+11. BNB এজেন্ট (BNB Agent & Representative Portal):
+    - সারা দেশে বিভাগ, জেলা ও উপজেলা পর্যায়ে BNB অফিসিয়াল এজেন্ট হওয়ার আবেদন ও ক্যারিয়ার পোর্টাল।
+12. BNB আমাদের লক্ষ্য / প্রজেক্ট ও সমবায় (BNB Projects, Target & Cooperative Guide):
+    - কোম্পানির প্রোফাইল, লক্ষ্যমাত্রা, প্রজেক্ট, সংবিধান ও নিয়মাবলী।
+
+COMMON TROUBLESHOOTING & HOW-TO GUIDES:
+- কিভাবে অ্যাড মানি (Add Money) করবেন:
+  ১) নিচের মেনু বারের মাঝখানে (+) বাটনে ট্যাপ করুন অথবা 'MY BNB লেনদেন' > 'অ্যাড মানি'-তে যান।
+  ২) অনলাইন পেমেন্ট গেটওয়ে অথবা বিকাশ/নগদ পেমেন্ট নম্বর কপি করে টাকা পাঠিয়ে সঠিক Amount এবং TrxID (ট্রানজেকশন আইডি) দিয়ে সাবমিট করলেই স্বয়ংক্রিয়ভাবে (Auto-Verify) ব্যালেন্স যোগ হয়ে যাবে।
+- কিভাবে সেন্ড মানি (Send Money) করবেন:
+  ১) নিচের বারের সেন্ড আইকনে ট্যাপ করুন।
+  ২) প্রাপক BNB সদস্যের মোবাইল নম্বর বা মেম্বার আইডি (যেমন BNB0000...) দিয়ে সার্চ করুন।
+  ৩) টাকার পরিমাণ ও ৪ ডিজিটের পিন দিয়ে তাৎক্ষণিক ফ্রি ট্রান্সফার করুন।
+- পিন (PIN) ভুলে গেলে বা লগইন সমস্যা হলে করণীয়:
+  ১) লগইন বা লক স্ক্রিনে 'পিন ভুলে গেছেন? (Forgot PIN)' অপশনে ট্যাপ করুন।
+  ২) আপনার নিবন্ধিত ইমেইলে ৬ সংখ্যার ওটিপি (Email OTP) যাবে।
+  ৩) ওটিপি কোডটি বসিয়ে নতুন ৪ ডিজিটের পিন সেট করে সাথে সাথে লগইন করতে পারবেন।`;
+
+      const contents = [
+        ...history
+          .filter((h: any) => h && (h.role === 'user' || h.role === 'model') && typeof h.text === 'string')
+          .map((h: any) => ({
+            role: h.role,
+            parts: [{ text: String(h.text).slice(0, 1000) }]
+          })),
+        {
+          role: 'user',
+          parts: [{ text: message.slice(0, 1000) }]
+        }
+      ];
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents,
+        config: {
+          systemInstruction,
+          temperature: 0.3,
+          maxOutputTokens: 700
+        }
+      });
+
+      const replyText = (response.text || '').trim();
+      if (!replyText) {
+        return res.status(502).json({ error: 'empty_ai_response' });
+      }
+
+      return res.status(200).json({ reply: replyText });
+    } catch (err: any) {
+      console.error('[BNB Assistant Error]:', err?.message || err);
+      return res.status(500).json({ error: 'ai_service_error' });
+    }
   });
 
   // Catch-all for unknown /api/* routes to guarantee JSON response with status 404
@@ -5662,9 +6421,9 @@ async function startServer() {
   });
 
   // Vite integration as middleware in development, static distribution in production
-  const isDev = process.env.NODE_ENV === 'development' || process.env.npm_lifecycle_event === 'dev';
+  const isDev = process.env.NODE_ENV === 'development' || process.env.npm_lifecycle_event === 'dev' || !process.env.NODE_ENV;
   const hasDist = fs.existsSync(path.join(process.cwd(), 'dist', 'index.html')) || fs.existsSync(path.join(__dirname, 'dist', 'index.html'));
-  const isProduction = process.env.NODE_ENV === 'production' || (!isDev && hasDist) || Boolean(process.env.PORT && process.env.PORT !== '3000');
+  const isProduction = process.env.NODE_ENV === 'production' && !isDev;
 
   const gzipCache = new Map<string, Buffer>();
   const serveCompressedAssets = (distDir: string): express.RequestHandler => {
@@ -5713,6 +6472,37 @@ async function startServer() {
     `);
   });
 
+  // Dedicated Web App Manifest for Standalone Admin Software (/admin) in production
+  app.get('/manifest-admin.json', (_req, res) => {
+    res.setHeader('Content-Type', 'application/manifest+json; charset=UTF-8');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    return res.status(200).json({
+      name: 'BNB এডমিন সফটওয়্যার (Admin Panel)',
+      short_name: 'BNB Admin',
+      description: 'BNB Bangladesh Standalone Admin Control Software',
+      start_url: '/admin?standalone=1',
+      scope: '/',
+      display: 'standalone',
+      background_color: '#020617',
+      theme_color: '#064e3b',
+      orientation: 'portrait-primary',
+      icons: [
+        {
+          src: '/pwa-192x192.png',
+          sizes: '192x192',
+          type: 'image/png',
+          purpose: 'any maskable'
+        },
+        {
+          src: '/pwa-512x512.png',
+          sizes: '512x512',
+          type: 'image/png',
+          purpose: 'any maskable'
+        }
+      ]
+    });
+  });
+
   const sendFreshIndexHtml = (distDir: string, req: express.Request, res: express.Response) => {
     delete req.headers['if-none-match'];
     delete req.headers['if-modified-since'];
@@ -5726,7 +6516,13 @@ async function startServer() {
     res.setHeader('Expires', '0');
     const indexPath = path.join(distDir, 'index.html');
     if (fs.existsSync(indexPath)) {
-      const htmlContent = fs.readFileSync(indexPath, 'utf-8');
+      let htmlContent = fs.readFileSync(indexPath, 'utf-8');
+      const reqPath = (req.path || '').toLowerCase();
+      if (reqPath === '/admin' || reqPath.startsWith('/admin/') || reqPath.startsWith('/admin-panel') || reqPath.startsWith('/admin-software')) {
+        htmlContent = htmlContent
+          .replace(/<title>.*?<\/title>/i, '<title>BNB এডমিন সফটওয়্যার | Admin Control Panel</title>')
+          .replace(/href="\/manifest\.json"/i, 'href="/manifest-admin.json"');
+      }
       return res.status(200).send(htmlContent);
     }
     return res.status(404).send('index.html not found');

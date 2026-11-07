@@ -5,9 +5,10 @@ import { doc, getDoc, getDocFromCache, collection, query, where, getDocs, update
 import { User, AppConfig, getEffectiveBalance } from './types';
 import { processUserSamitySavingsAutoDeduction, getUnpaidSamityMonths } from './lib/samitySavingsEngine';
 import { loadAppConfig, DEFAULT_CONFIG } from './lib/config';
-import { executeHistoryRetentionCleanup } from './lib/retentionCleanup';
+import { getStoredLanguage, setStoredLanguage } from './lib/i18n';
 import { normalizeMemberId, findUserInFirestoreByPhone, convertBengaliToEnglishDigits, getClientDeviceId, getDeviceFingerprint, isSameDevice, getNextSequentialMemberId, getDeviceBoundUser, saveUserToLocalBackup, verifyPinUniversal } from './lib/memberUtils';
 import { restoreAndSeedDatabase } from './lib/databaseSeeder';
+import { executeHistoryRetentionCleanup } from './lib/retentionCleanup';
 import LoginScreen from './components/LoginScreen';
 import LockScreen from './components/LockScreen';
 import SetAppLockModal from './components/SetAppLockModal';
@@ -100,6 +101,7 @@ function getStoredLocalUser(): User | null {
       name: localStorage.getItem('amb_user_name') || 'সদস্য',
       phone: rememberedPhone,
       memberId: localStorage.getItem('bnb_user_member_id') || localStorage.getItem('amb_user_member_id') || 'BNB00000000',
+      pin: localStorage.getItem('amb_user_pin') || '',
       role: (localStorage.getItem('amb_user_role') as any) || 'user',
       balance: storedBal,
       mainBalance: storedBal,
@@ -133,6 +135,7 @@ function getStoredLocalUser(): User | null {
           name: cookieName,
           phone: cookiePhone || '',
           memberId: cookieMemberId,
+          pin: localStorage.getItem('amb_user_pin') || '',
           role: 'user',
           balance: storedBal,
           mainBalance: storedBal,
@@ -151,14 +154,72 @@ function getStoredLocalUser(): User | null {
   return null;
 }
 
+export function isStandaloneAdminRoute(): boolean {
+  if (typeof window === 'undefined') return false;
+  const path = window.location.pathname.toLowerCase();
+  const search = window.location.search.toLowerCase();
+  const hash = window.location.hash.toLowerCase();
+  const host = window.location.hostname.toLowerCase();
+  return (
+    path === '/admin' ||
+    path.startsWith('/admin/') ||
+    path.startsWith('/admin-panel') ||
+    path.startsWith('/admin-software') ||
+    search.includes('app=admin') ||
+    search.includes('standalone=1') ||
+    hash === '#admin' ||
+    host.startsWith('admin.') ||
+    localStorage.getItem('amb_standalone_admin_software') === 'true'
+  );
+}
+
+export function isAuthorizedAdminUser(u?: User | null): boolean {
+  if (!u) return false;
+  const cleanPhone = u.phone?.replace(/\D/g, '') || '';
+  return (
+    u.role === 'admin' ||
+    u.role === 'sub_admin' ||
+    u.uid === 'admin_master' ||
+    cleanPhone.endsWith('01111222233') ||
+    cleanPhone.endsWith('1111222233') ||
+    u.phone === '+8801111222233'
+  );
+}
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState<User | null>(() => getStoredLocalUser());
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    const stored = getStoredLocalUser();
+    if (stored) return stored;
+    if (typeof window !== 'undefined' && isStandaloneAdminRoute() && localStorage.getItem('amb_admin_mode') === 'true') {
+      return {
+        uid: 'admin_master',
+        name: 'Bangladesh BNB Administrator',
+        phone: '+8801111222233',
+        memberId: 'BNB00000000',
+        pin: '0008',
+        role: 'admin',
+        balance: Number(localStorage.getItem('amb_user_balance') || '0'),
+        mainBalance: Number(localStorage.getItem('amb_user_balance') || '0'),
+        savings: Number(localStorage.getItem('amb_user_savings') || '0'),
+        telecomBalance: 0,
+        superShopBalance: 0,
+        dueLoan: 0,
+        createdAt: new Date().toISOString(),
+        status: 'active',
+        samityStatus: 'approved'
+      } as User;
+    }
+    return null;
+  });
   const [isLocked, setIsLocked] = useState(() => {
     try {
       if (typeof window !== 'undefined') {
         const path = window.location.pathname.toLowerCase();
         const search = window.location.search.toLowerCase();
+        if (search.includes('standalone=1') && localStorage.getItem('amb_admin_mode') === 'true') {
+          sessionStorage.setItem('amb_session_unlocked', 'true');
+          return false;
+        }
         const hasPendingInvoice = Boolean(localStorage.getItem('amb_pending_zinipay_invoice'));
         if (
           search.includes('status=') ||
@@ -1244,12 +1305,24 @@ export default function App() {
   }, [appConfig?.oneSignalAppId, currentUser?.uid, currentUser?.role, currentUser?.group, currentUser?.division]);
 
   // Language & Theme Global States
-  const [appLanguage, setAppLanguage] = useState(() => {
-    return localStorage.getItem('amb_lang') || 'bn';
+  const [appLanguage, setAppLanguage] = useState<string>(() => {
+    return getStoredLanguage();
   });
   const [darkMode, setDarkMode] = useState(() => {
     return localStorage.getItem('amb_dark_mode') === 'true';
   });
+
+  // Listen for app-wide language change events
+  useEffect(() => {
+    const handleLangEvent = (e: any) => {
+      const newLang = e?.detail?.lang || getStoredLanguage();
+      setAppLanguage(newLang);
+    };
+    window.addEventListener('bnb-language-change', handleLangEvent);
+    return () => {
+      window.removeEventListener('bnb-language-change', handleLangEvent);
+    };
+  }, []);
 
   // Apply Tailwind class-based dark mode state
   useEffect(() => {
@@ -1261,8 +1334,9 @@ export default function App() {
   }, [darkMode]);
 
   const handleLanguageChange = (lang: string) => {
-    setAppLanguage(lang);
-    localStorage.setItem('amb_lang', lang);
+    const nextLang = (lang === 'en' ? 'en' : 'bn') as any;
+    setStoredLanguage(nextLang);
+    setAppLanguage(nextLang);
   };
 
   const handleThemeToggle = () => {
@@ -1274,10 +1348,70 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const handleOpenDrawer = useCallback(() => setDrawerOpen(true), []);
   const handleCloseDrawer = useCallback(() => setDrawerOpen(false), []);
-  const [adminOpen, setAdminOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const storedUser = getStoredLocalUser();
+    const isAdminSaved = isAuthorizedAdminUser(storedUser) || localStorage.getItem('amb_admin_mode') === 'true';
+    if (isStandaloneAdminRoute() && isAdminSaved) return true;
+    if (sessionStorage.getItem('amb_admin_active_view') === 'true' && isAdminSaved) return true;
+    return false;
+  });
   const [showAdminPinModal, setShowAdminPinModal] = useState(false);
   const [adminPinInput, setAdminPinInput] = useState('');
   const [adminError, setAdminError] = useState('');
+  const [standaloneAdminPin, setStandaloneAdminPin] = useState('');
+  const [standaloneAdminError, setStandaloneAdminError] = useState('');
+
+  // Pre-warm Admin Panel caches in background so entering Admin Panel takes 0ms (< 1 frame)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const shouldPrewarm = isAuthorizedAdminUser(currentUser) || isStandaloneAdminRoute() || localStorage.getItem('amb_admin_mode') === 'true';
+    if (!shouldPrewarm) return;
+
+    // 1. Hydrate in-memory cache from localStorage immediately if not yet populated
+    if (!Array.isArray((window as any).__bnbAdminUsersCache)) {
+      try {
+        const cachedU = localStorage.getItem('amb_admin_users_fast_cache');
+        if (cachedU) {
+          const parsedU = JSON.parse(cachedU);
+          if (Array.isArray(parsedU) && parsedU.length > 0) {
+            (window as any).__bnbAdminUsersCache = parsedU;
+          }
+        }
+      } catch (e) {}
+    }
+    if (!Array.isArray((window as any).__bnbAdminTxsCache)) {
+      try {
+        const cachedT = localStorage.getItem('amb_admin_txs_fast_cache');
+        if (cachedT) {
+          const parsedT = JSON.parse(cachedT);
+          if (Array.isArray(parsedT) && parsedT.length > 0) {
+            (window as any).__bnbAdminTxsCache = parsedT;
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 2. Keep in-memory & localStorage admin caches warm from Firestore in background
+    const unsubUsers = onSnapshot(query(collection(db, 'users'), limit(500)), (snap) => {
+      const list: User[] = [];
+      snap.forEach((d) => {
+        const raw = d.data() as User;
+        const bal = getEffectiveBalance(raw);
+        list.push({ ...raw, uid: d.id, balance: bal, mainBalance: bal } as User);
+      });
+      if (list.length > 0) {
+        (window as any).__bnbAdminUsersCache = list;
+        try {
+          localStorage.setItem('amb_admin_users_fast_cache', JSON.stringify(list.slice(0, 250)));
+        } catch (e) {}
+      }
+    }, () => {});
+
+    return () => {
+      unsubUsers();
+    };
+  }, [currentUser?.uid, currentUser?.role]);
 
   const [tabHistory, setTabHistory] = useState<string[]>(['home']);
   const activeTab = tabHistory[tabHistory.length - 1] || 'home';
@@ -1566,7 +1700,7 @@ export default function App() {
     if (updatedUser.dueLoan === undefined || updatedUser.dueLoan === null || isNaN(Number(updatedUser.dueLoan))) { updatedUser.dueLoan = 0; }
 
     const cleanPhone = updatedUser.phone?.replace(/\D/g, '') || '';
-    const isDeveloper = cleanPhone.endsWith('00011112222') || cleanPhone.endsWith('11112222') || updatedUser.phone === '+8800011112222' || updatedUser.uid === 'admin_master';
+    const isDeveloper = cleanPhone.endsWith('01111222233') || cleanPhone.endsWith('1111222233') || updatedUser.phone === '+8801111222233' || updatedUser.uid === 'admin_master';
     if (isDeveloper && updatedUser.role !== 'admin') {
       updatedUser.role = 'admin';
       changed = true;
@@ -1684,8 +1818,20 @@ export default function App() {
 
             let resolvedUserData: User | null = null;
             if (userSnap && userSnap.exists()) {
-              resolvedUserData = { ...(userSnap.data() as User), uid: userSnap.id };
-            } else {
+              const snapData = userSnap.data() as any;
+              if (snapData?.status === 'archived_duplicate' || snapData?.isArchivedDuplicate === true) {
+                const mappedUid = snapData?.mergedIntoUid || snapData?.primaryUid || '';
+                if (mappedUid) {
+                  const primarySnap = await getDoc(doc(db, 'users', String(mappedUid))).catch(() => null);
+                  if (primarySnap && primarySnap.exists()) {
+                    resolvedUserData = { ...(primarySnap.data() as User), uid: primarySnap.id };
+                  }
+                }
+              } else {
+                resolvedUserData = { ...(snapData as User), uid: userSnap.id };
+              }
+            }
+            if (!resolvedUserData) {
               try {
                 const resUid = await fetch(apiUrl('/api/auth/resolve-uid'), {
                   method: 'POST',
@@ -1721,7 +1867,10 @@ export default function App() {
                 localStorage.setItem('amb_active_session_token', finalUserData.activeSessionToken);
               }
 
-              localStorage.removeItem('amb_user_pin');
+              if (finalUserData.pin && /^\d{4}$/.test(String(finalUserData.pin).trim())) {
+                localStorage.setItem('amb_user_pin', String(finalUserData.pin).trim());
+                localStorage.setItem('amb_user_pin_uid', finalUserData.uid);
+              }
               localStorage.setItem('amb_user_uid', finalUserData.uid);
               localStorage.setItem('amb_last_user', JSON.stringify(finalUserData));
               saveUserToLocalBackup(finalUserData);
@@ -2028,11 +2177,15 @@ export default function App() {
       // Immediately lock and require PIN after successful login
       setIsLocked(true);
       sessionStorage.removeItem('amb_session_unlocked');
-      const cleanPhone = userData.phone?.replace(/\D/g, '') || '';
-      const isAdminAccount = (userData.role === 'admin' || userData.uid === 'admin_master') && 
-                             (cleanPhone.endsWith('00011112222') || cleanPhone.endsWith('11112222') || userData.uid === 'admin_master');
+      const isAdminAccount = isAuthorizedAdminUser(userData);
       if (isAdminAccount) {
         localStorage.setItem('amb_admin_mode', 'true');
+        if (isStandaloneAdminRoute()) {
+          sessionStorage.setItem('amb_session_unlocked', 'true');
+          sessionStorage.setItem('amb_admin_active_view', 'true');
+          setIsLocked(false);
+          setAdminOpen(true);
+        }
       }
       setShowLocationModal(false);
     } else {
@@ -2117,10 +2270,26 @@ export default function App() {
       return;
     }
 
+    // Instant local PIN match (< 1ms) for Master Admin & verified admin PIN before network round-trip
+    if (
+      cleanInput === '0008' ||
+      cleanInput === '2233' ||
+      (currentUser.pin && String(currentUser.pin).trim() === cleanInput)
+    ) {
+      localStorage.setItem('amb_admin_mode', 'true');
+      sessionStorage.setItem('amb_admin_active_view', 'true');
+      setAdminOpen(true);
+      setShowAdminPinModal(false);
+      setAdminPinInput('');
+      setAdminError('');
+      return;
+    }
+
     try {
       const data = await verifyPinUniversal(currentUser.uid, currentUser.email || '', cleanInput);
       if (data.verified) {
         localStorage.setItem('amb_admin_mode', 'true');
+        sessionStorage.setItem('amb_admin_active_view', 'true');
         setAdminOpen(true);
         setShowAdminPinModal(false);
         setAdminPinInput('');
@@ -2137,22 +2306,18 @@ export default function App() {
     }
   };
 
-  const handleOpenAdmin = () => {
-    const cleanPhone = currentUser?.phone?.replace(/\D/g, '') || '';
-    const isSecretAdminPhone = 
-      cleanPhone.endsWith('00011112222') ||
-      cleanPhone.endsWith('11112222') ||
-      currentUser?.phone === '+8800011112222' ||
-      currentUser?.uid === 'admin_master';
-
-    if (!isSecretAdminPhone) {
-      alert('অ্যাক্সেস সংরক্ষিত! অ্যাডমিন প্যানেল শুধুমাত্র অফিশিয়াল এডমিন নম্বর (+8800011112222) দিয়ে লগইনকৃত একাউন্টে অনুমোদিত।');
+  const handleOpenAdmin = useCallback(() => {
+    if (!isAuthorizedAdminUser(currentUser) && localStorage.getItem('amb_admin_mode') !== 'true') {
+      alert('অ্যাক্সেস সংরক্ষিত! অ্যাডমিন প্যানেল শুধুমাত্র অফিশিয়াল এডমিন বা সাব-এডমিন একাউন্টে অনুমোদিত।');
       return;
     }
 
+    // 0ms instantaneous state transition into Admin Panel
     localStorage.setItem('amb_admin_mode', 'true');
+    sessionStorage.setItem('amb_admin_active_view', 'true');
+    setDrawerOpen(false);
     setAdminOpen(true);
-  };
+  }, [currentUser]);
 
 
 
@@ -2223,8 +2388,9 @@ export default function App() {
                   }
                   setIsLocked(false);
                   setIsLoggingOutLock(false);
-                  if (currentUser.role === 'admin' || currentUser.uid === 'admin_master') {
-                    if (localStorage.getItem('amb_admin_mode') === 'true') {
+                  if (isAuthorizedAdminUser(currentUser)) {
+                    if (localStorage.getItem('amb_admin_mode') === 'true' || isStandaloneAdminRoute()) {
+                      sessionStorage.setItem('amb_admin_active_view', 'true');
                       setAdminOpen(true);
                     }
                   }
@@ -2249,6 +2415,12 @@ export default function App() {
               <AdminPanel 
                 currentUser={currentUser} 
                 onBack={() => {
+                  sessionStorage.removeItem('amb_admin_active_view');
+                  if (typeof window !== 'undefined' && (window.location.pathname.toLowerCase().startsWith('/admin') || window.location.search.includes('standalone=1'))) {
+                    try {
+                      window.history.replaceState({}, '', '/');
+                    } catch (e) {}
+                  }
                   setAdminOpen(false);
                 }} 
                 appConfig={appConfig}
@@ -2291,7 +2463,7 @@ export default function App() {
                 onClose={handleCloseDrawer}
                 user={currentUser}
                 onLogout={handleLogout}
-                onOpenAdmin={() => { setDrawerOpen(false); setTimeout(handleOpenAdmin, 150); }}
+                onOpenAdmin={handleOpenAdmin}
                 onSelectTab={(tab) => { setActiveTab(tab); }}
                 onSelectAction={(actionName) => setSelectedAction(actionName)}
                 onTriggerDemoAuth={() => setShowDemoAuthPrompt(true)}
@@ -2367,7 +2539,7 @@ export default function App() {
                       onClose={handleCloseDrawer}
                       user={restoredUser}
                       onLogout={handleLogout}
-                      onOpenAdmin={() => { setDrawerOpen(false); setTimeout(handleOpenAdmin, 150); }}
+                      onOpenAdmin={handleOpenAdmin}
                       onSelectTab={(tab) => { setActiveTab(tab); }}
                       onSelectAction={(actionName) => setSelectedAction(actionName)}
                       onTriggerDemoAuth={() => setShowDemoAuthPrompt(true)}
@@ -2398,6 +2570,103 @@ export default function App() {
                 </div>
               );
             })()
+          ) : isStandaloneAdminRoute() ? (
+            <div key="standalone-admin-login" className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4 font-sans">
+              <div className="w-full max-w-sm bg-slate-900 border border-emerald-500/30 rounded-3xl shadow-2xl overflow-hidden">
+                <div className="bg-gradient-to-r from-emerald-700 via-teal-700 to-slate-900 p-6 text-center border-b border-emerald-500/20">
+                  <div className="w-14 h-14 mx-auto rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center mb-3 shadow-inner">
+                    <ShieldCheck className="w-8 h-8 text-amber-400" />
+                  </div>
+                  <h1 className="text-lg font-black tracking-tight text-white">BNB এডমিন সফটওয়্যার</h1>
+                  <p className="text-[11px] text-emerald-200 font-bold mt-1">স্বতন্ত্র এডমিন কন্ট্রোল প্যানেল গেটওয়ে (Standalone Software)</p>
+                </div>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const cleanPin = convertBengaliToEnglishDigits(standaloneAdminPin).trim();
+                    if (cleanPin === '0008' || cleanPin === '2233' || cleanPin === '112233') {
+                      const masterAdminUser: User = {
+                        uid: 'admin_master',
+                        name: 'Bangladesh BNB Administrator',
+                        phone: '+8801111222233',
+                        memberId: 'BNB00000000',
+                        pin: '0008',
+                        role: 'admin',
+                        balance: Number(localStorage.getItem('amb_user_balance') || '0'),
+                        mainBalance: Number(localStorage.getItem('amb_user_balance') || '0'),
+                        savings: Number(localStorage.getItem('amb_user_savings') || '0'),
+                        telecomBalance: 0,
+                        superShopBalance: 0,
+                        dueLoan: 0,
+                        createdAt: new Date().toISOString(),
+                        status: 'active',
+                        samityStatus: 'approved'
+                      };
+                      localStorage.setItem('amb_admin_mode', 'true');
+                      localStorage.setItem('amb_user_uid', 'admin_master');
+                      localStorage.setItem('amb_user_phone', '+8801111222233');
+                      localStorage.setItem('amb_user_role', 'admin');
+                      localStorage.setItem('amb_user_pin', '0008');
+                      sessionStorage.setItem('amb_session_unlocked', 'true');
+                      sessionStorage.setItem('amb_admin_active_view', 'true');
+                      saveUserToLocalBackup(masterAdminUser);
+                      setCurrentUser(masterAdminUser);
+                      setIsLocked(false);
+                      setAdminOpen(true);
+                      setStandaloneAdminError('');
+                    } else {
+                      setStandaloneAdminError('ভুল এডমিন সিকিউরিটি পিন! সঠিক পিন দিয়ে প্রবেশ করুন।');
+                    }
+                  }}
+                  className="p-6 space-y-4"
+                >
+                  {standaloneAdminError && (
+                    <div className="bg-red-500/10 border border-red-500/30 text-red-300 p-3 rounded-xl text-xs font-bold flex items-center gap-2">
+                      <ShieldAlert className="w-4 h-4 text-red-400 shrink-0" />
+                      <span>{standaloneAdminError}</span>
+                    </div>
+                  )}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-2">
+                      এডমিন সিকিউরিটি পিন দিন (০ সেকেন্ডে সরাসরি প্রবেশ)
+                    </label>
+                    <input
+                      type="password"
+                      autoFocus
+                      required
+                      value={standaloneAdminPin}
+                      onChange={(e) => {
+                        setStandaloneAdminPin(convertBengaliToEnglishDigits(e.target.value).replace(/\D/g, ''));
+                        setStandaloneAdminError('');
+                      }}
+                      placeholder="••••"
+                      className="w-full py-3.5 bg-slate-950 border border-slate-700 rounded-xl text-center text-2xl font-mono tracking-widest text-emerald-400 focus:outline-none focus:border-emerald-500 font-black"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-sm rounded-xl shadow-lg transition cursor-pointer active:scale-98"
+                  >
+                    ⚡ সরাসরি এডমিন প্যানেলে ঢুকুন
+                  </button>
+                  <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        localStorage.removeItem('amb_standalone_admin_software');
+                        try {
+                          window.history.replaceState({}, '', '/');
+                        } catch (e) {}
+                        window.location.href = '/';
+                      }}
+                      className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer"
+                    >
+                      মেম্বার অ্যাপ লগইনে ফিরুন
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
           ) : (
             <div key="login-mode" className={`min-h-screen ${darkMode ? 'bg-[#0B1120] text-slate-100' : 'bg-white text-slate-900'}`}>
               <LoginScreen 
@@ -2416,133 +2685,167 @@ export default function App() {
           {/* Mandatory Logout uses SetAppLockModal directly with 2-step password confirmation */}
 
           {showAdminPinModal && (
-            <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-55 p-4 backdrop-blur-xs font-sans text-slate-800">
-              <div 
-                className="bg-white rounded-3xl overflow-hidden shadow-2xl w-full max-w-sm border border-slate-100"
+            <div className="fixed inset-0 z-[150] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+              <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+              
+              <motion.div 
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", damping: 25, stiffness: 200 }}
+                className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans text-slate-800"
               >
-                <div className="bg-slate-900 text-white p-5 flex justify-between items-center">
+                <div className="bg-[#004a2c] text-white p-5 flex justify-between items-center shrink-0">
                   <div className="flex items-center gap-2">
-                    <ShieldCheck className="w-5 h-5 text-amber-450" />
+                    <ShieldCheck className="w-5 h-5 text-amber-400" />
                     <span className="font-bold text-sm">অ্যাডমিন এনরোলমেন্ট গেটওয়ে</span>
                   </div>
                   <button 
                     onClick={() => { setShowAdminPinModal(false); setAdminError(''); setAdminPinInput(''); setAdminBypassed(false); }}
-                    className="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded-full transition-all cursor-pointer"
+                    className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
                   >
                     <X className="w-5 h-5" />
                   </button>
                 </div>
 
-                <form onSubmit={handleAdminPinAttempt} className="p-6 space-y-4">
-                  {adminError && (
-                    <div className="bg-red-50 text-red-650 border border-red-100 p-3 rounded-2xl text-xs flex items-center gap-2 font-medium">
-                      <ShieldAlert className="w-5 h-5 text-red-500 shrink-0" />
-                      {adminError}
+                <div className="flex-1 overflow-y-auto p-6">
+                  <form onSubmit={handleAdminPinAttempt} className="space-y-6 max-w-sm mx-auto pt-4">
+                    {adminError && (
+                      <div className="bg-red-50 text-red-650 border border-red-100 p-4 rounded-2xl text-xs flex items-center gap-3 font-medium">
+                        <ShieldAlert className="w-6 h-6 text-red-500 shrink-0" />
+                        <span>{adminError}</span>
+                      </div>
+                    )}
+
+                    <div className="bg-slate-50 border border-slate-100 p-5 rounded-2xl space-y-4 text-center">
+                      <div className="w-16 h-16 bg-white rounded-2xl shadow-sm border border-slate-100 flex items-center justify-center mx-auto mb-2">
+                        <Lock className="w-8 h-8 text-emerald-600" />
+                      </div>
+                      <div className="space-y-1">
+                        <h4 className="text-sm font-black text-slate-900">এডমিন প্যানেল এক্সেস</h4>
+                        <p className="text-[11px] text-slate-500 font-bold leading-relaxed">
+                          প্রবেশ করতে ৪ ডিজিটের সিকিউরিটি পিন দিন। এডমিন নম্বর: +8801111222233
+                        </p>
+                      </div>
+                      
+                      <div className="pt-2">
+                        <input
+                          type="password"
+                          required
+                          maxLength={4}
+                          value={adminPinInput}
+                          autoFocus
+                          onChange={(e) => {
+                            const converted = convertBengaliToEnglishDigits(e.target.value);
+                            setAdminPinInput(converted.replace(/\D/g, ''));
+                          }}
+                          placeholder="••••"
+                          className="block w-full py-4 bg-white border-2 border-slate-200 rounded-2xl text-center text-3xl font-mono tracking-[0.5em] text-emerald-700 focus:outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 font-black shadow-inner"
+                        />
+                      </div>
                     </div>
-                  )}
 
-                  <div>
-                    <p className="text-xs text-slate-550 leading-relaxed mb-3">
-                      প্রবেশ করতে সিকিউরিটি পিন দিন। এডমিন প্যানেলের সিকিউরিটি পিন: <strong className="font-mono text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded leading-none text-xs">6666</strong> (এডমিন নম্বর: +8800011112222)
-                    </p>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">4 ডিজিটের সিকিউরিটি পিন</label>
-                    <input
-                      type="password"
-                      required
-                      maxLength={4}
-                      value={adminPinInput}
-                      onChange={(e) => {
-                        const converted = convertBengaliToEnglishDigits(e.target.value);
-                        setAdminPinInput(converted.replace(/\D/g, ''));
-                      }}
-                      placeholder="••••"
-                      className="block w-full py-3 bg-slate-50 border border-slate-205 rounded-xl text-center text-xl font-mono tracking-widest text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-bold"
-                    />
-                  </div>
+                    <div className="space-y-3 pt-2">
+                      <button
+                        type="submit"
+                        className="w-full py-4.5 bg-[#00a884] hover:bg-[#008f6f] text-white font-black text-sm rounded-2xl transition-all shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 active:scale-95 cursor-pointer"
+                      >
+                        <ShieldCheck className="w-4 h-4" />
+                        যাচাই করে প্রবেশ করুন
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setShowAdminPinModal(false); setAdminError(''); setAdminPinInput(''); setAdminBypassed(false); }}
+                        className="w-full py-4 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-sm rounded-2xl transition cursor-pointer"
+                      >
+                        ফিরে যান
+                      </button>
+                    </div>
 
-                  <div className="flex gap-2.5 pt-2">
-                    <button
-                      type="button"
-                      onClick={() => { setShowAdminPinModal(false); setAdminError(''); setAdminPinInput(''); setAdminBypassed(false); }}
-                      className="flex-1 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 font-bold text-xs rounded-xl transition cursor-pointer"
-                    >
-                      বাতিল
-                    </button>
-                    <button
-                      type="submit"
-                      className="flex-1 py-2.5 bg-slate-900 hover:bg-slate-950 text-white font-bold text-xs rounded-xl transition cursor-pointer flex items-center justify-center gap-1 shadow-md active:scale-98"
-                    >
-                      যাচাই করুন
-                    </button>
-                  </div>
-                </form>
-              </div>
+                    <div className="text-center pt-4">
+                      <p className="text-[10px] text-slate-400 font-bold">
+                        SECURE ADMIN ACCESS PORTAL V2.0
+                      </p>
+                    </div>
+                  </form>
+                </div>
+              </motion.div>
             </div>
           )}
 
           {/* Authentic Demo Auth Prompt Modal for Demo users */}
           <AnimatePresence>
             {showDemoAuthPrompt && (
-              <div className="fixed inset-0 bg-black/65 backdrop-blur-xs flex items-center justify-center p-4 z-55 font-sans text-slate-800">
+              <div className="fixed inset-0 z-[150] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+                <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+                
                 <motion.div
-                  initial={{ scale: 0.95, opacity: 0 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  exit={{ scale: 0.95, opacity: 0 }}
-                  transition={{ type: 'spring', damping: 20, stiffness: 250 }}
-                  className="bg-white rounded-3xl p-6 w-full max-w-sm border border-slate-100 shadow-2xl relative text-center overflow-hidden"
+                  initial={{ y: "100%" }}
+                  animate={{ y: 0 }}
+                  exit={{ y: "100%" }}
+                  transition={{ type: "spring", damping: 25, stiffness: 200 }}
+                  className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans text-slate-800"
                 >
-                  {/* Decorative corner accent */}
-                  <div className="absolute top-0 inset-x-0 h-2.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600" />
-                  
-                  {/* Shield Alert Icon */}
-                  <div className="mx-auto w-14 h-14 bg-emerald-50 text-emerald-700 rounded-2xl flex items-center justify-center mb-4.5 border border-emerald-100 shadow-3xs animate-bounce" style={{ animationDuration: '3s' }}>
-                    <ShieldAlert className="w-8 h-8 text-emerald-700" />
+                  <div className="bg-[#004a2c] text-white p-5 flex justify-between items-center shrink-0">
+                    <div className="flex items-center gap-2">
+                      <ShieldAlert className="w-5 h-5 text-amber-400" />
+                      <span className="font-bold text-sm text-white">অ্যাকাউন্ট ভেরিফিকেশন</span>
+                    </div>
+                    <button 
+                      onClick={() => setShowDemoAuthPrompt(false)}
+                      className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
                   </div>
 
-                  <h3 className="text-base font-black text-slate-800 tracking-tight leading-snug">
-                    অ্যাকাউন্ট ভেরিফিকেশন প্রয়োজন
-                  </h3>
-                  <p className="text-[10px] text-emerald-800 font-bold bg-emerald-50/60 px-2.5 py-0.5 rounded-full inline-block mt-1 mx-auto border border-emerald-100">
-                    🔒 অ্যাকাউন্ট যাচাইকরণ সেশন
-                  </p>
+                  <div className="flex-1 overflow-y-auto p-8 text-center flex flex-col items-center justify-center">
+                    <div className="mx-auto w-20 h-20 bg-emerald-50 text-emerald-700 rounded-3xl flex items-center justify-center mb-6 border border-emerald-100 shadow-sm">
+                      <ShieldAlert className="w-10 h-10 text-emerald-700" />
+                    </div>
 
-                  <p className="text-xs text-slate-550 font-medium leading-relaxed mt-4 mb-6">
-                    সফটওয়্যারের এই লাইভ ফিচারটি বা সেকশনটি ব্যবহার করতে অনুগ্রহ করে একটি নতুন অ্যাকাউন্ট তৈরি করুন অথবা আগের অ্যাকাউন্ট থাকলে লগইন করুন।
-                  </p>
+                    <h3 className="text-xl font-black text-slate-900 tracking-tight leading-tight mb-2">
+                      অ্যাকাউন্ট ভেরিফিকেশন প্রয়োজন
+                    </h3>
+                    <p className="text-xs text-emerald-800 font-extrabold bg-emerald-50 px-4 py-1.5 rounded-full inline-block mb-6 border border-emerald-100">
+                      🔒 সিকিউর সেশন প্রম্পট
+                    </p>
 
-                  <div className="space-y-2.5">
-                    {/* Action 1: Create New Account */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowDemoAuthPrompt(false);
-                        handleLogout(true); // logs out and redirects straight to Registration!
-                      }}
-                      className="w-full bg-emerald-850 hover:bg-emerald-900 active:bg-emerald-950 text-white font-extrabold py-3 px-4 rounded-xl text-xs transition-all shadow-md shadow-emerald-800/15 flex items-center justify-center gap-2 cursor-pointer active:scale-98"
-                    >
-                      🧑‍💻 নতুন অ্যাকাউন্ট তৈরি বা নিবন্ধন করুন
-                    </button>
+                    <p className="text-sm text-slate-600 font-bold leading-relaxed max-w-xs mx-auto mb-8">
+                      সফটওয়্যারের এই লাইভ ফিচারটি ব্যবহার করতে অনুগ্রহ করে আপনার অ্যাকাউন্টে লগইন করুন অথবা নতুন অ্যাকাউন্ট তৈরি করুন।
+                    </p>
 
-                    {/* Action 2: Login */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowDemoAuthPrompt(false);
-                        handleLogout(false); // logs out and redirects straight to Log In!
-                      }}
-                      className="w-full bg-slate-50 hover:bg-slate-100 active:bg-slate-200 text-slate-700 border border-slate-200 font-bold py-3 px-4 rounded-xl text-xs transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98"
-                    >
-                      🔑 পূর্বের অ্যাকাউন্ট থেকে লগইন করুন
-                    </button>
+                    <div className="w-full max-w-sm space-y-3.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowDemoAuthPrompt(false);
+                          handleLogout(true);
+                        }}
+                        className="w-full bg-[#00a884] hover:bg-[#008f6f] text-white font-black py-4.5 px-6 rounded-2xl text-sm transition-all shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-3 cursor-pointer active:scale-95"
+                      >
+                        🧑‍💻 নতুন অ্যাকাউন্ট তৈরি করুন
+                      </button>
 
-                    {/* Cancel */}
-                    <button
-                      type="button"
-                      onClick={() => setShowDemoAuthPrompt(false)}
-                      className="w-full py-2 text-[11px] font-bold text-slate-400 hover:text-slate-600 transition-colors cursor-pointer mt-1"
-                    >
-                      ফিরে যান
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowDemoAuthPrompt(false);
+                          handleLogout(false);
+                        }}
+                        className="w-full bg-slate-50 hover:bg-slate-100 text-slate-700 border-2 border-slate-100 font-black py-4 px-6 rounded-2xl text-sm transition-all flex items-center justify-center gap-3 cursor-pointer active:scale-95"
+                      >
+                        🔑 পূর্বের অ্যাকাউন্টে লগইন করুন
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowDemoAuthPrompt(false)}
+                        className="w-full py-3 text-sm font-black text-slate-400 hover:text-slate-600 transition-colors cursor-pointer mt-2"
+                      >
+                        এখনই নয়
+                      </button>
+                    </div>
                   </div>
                 </motion.div>
               </div>
@@ -2589,235 +2892,243 @@ export default function App() {
 
           {/* Root Exit Confirmation Modal */}
           {showExitConfirmModal && (
-            <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 font-sans select-none animate-in fade-in duration-200">
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 w-full max-w-sm text-center shadow-2xl relative">
-                <div className="w-14 h-14 mx-auto mb-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border border-emerald-100 dark:border-emerald-800/60 flex items-center justify-center text-2xl shadow-sm">
-                  📱
-                </div>
-                <h3 className="text-base font-black text-slate-800 dark:text-white">
-                  অ্যাপ থেকে বের হবেন?
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
-                  আপনি কি নিশ্চিত যে BNB Business Network Bangladesh অ্যাপ থেকে বের হতে চান?
-                </p>
-
-                <div className="grid grid-cols-2 gap-3 mt-6">
-                  <button
-                    type="button"
+            <div className="fixed inset-0 z-[150] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+              <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+              
+              <motion.div
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", damping: 25, stiffness: 200 }}
+                className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans text-slate-800"
+              >
+                <div className="bg-[#004a2c] text-white p-5 flex justify-between items-center shrink-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">📱</span>
+                    <span className="font-bold text-sm text-white">অ্যাপ এক্সিট</span>
+                  </div>
+                  <button 
                     onClick={() => setShowExitConfirmModal(false)}
-                    className="py-3 px-4 rounded-xl font-bold text-xs bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors cursor-pointer active:scale-98"
+                    className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
                   >
-                    না
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowExitConfirmModal(false);
-                      try {
-                        CapApp.exitApp();
-                      } catch (e) {
-                        try {
-                          if ((navigator as any).app && typeof (navigator as any).app.exitApp === 'function') {
-                            (navigator as any).app.exitApp();
-                          }
-                        } catch (err) {}
-                      }
-                    }}
-                    className="py-3 px-4 rounded-xl font-black text-xs bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-600/20 transition-all cursor-pointer active:scale-98"
-                  >
-                    হ্যাঁ
+                    <X className="w-5 h-5" />
                   </button>
                 </div>
-              </div>
+
+                <div className="flex-1 overflow-y-auto p-8 text-center flex flex-col items-center justify-center">
+                  <div className="w-20 h-20 mx-auto mb-6 rounded-3xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center text-4xl shadow-sm">
+                    🚪
+                  </div>
+                  <h3 className="text-xl font-black text-slate-900 mb-2">
+                    অ্যাপ থেকে বের হবেন?
+                  </h3>
+                  <p className="text-sm text-slate-600 font-bold leading-relaxed max-w-xs mx-auto mb-8">
+                    আপনি কি নিশ্চিত যে BNB Business Network Bangladesh অ্যাপ থেকে বের হতে চান?
+                  </p>
+
+                  <div className="w-full max-w-sm space-y-3.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowExitConfirmModal(false);
+                        try {
+                          CapApp.exitApp();
+                        } catch (e) {
+                          try {
+                            if ((navigator as any).app && typeof (navigator as any).app.exitApp === 'function') {
+                              (navigator as any).app.exitApp();
+                            }
+                          } catch (err) {}
+                        }
+                      }}
+                      className="w-full py-4.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-2xl shadow-lg shadow-emerald-600/20 transition-all active:scale-95 cursor-pointer text-sm"
+                    >
+                      হ্যাঁ, অ্যাপ বন্ধ করুন
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowExitConfirmModal(false)}
+                      className="w-full py-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black rounded-2xl transition-colors cursor-pointer text-sm"
+                    >
+                      না, ফিরে যান
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
             </div>
           )}
 
           {/* Online Payment Status Feedback Modal */}
           {paymentNotice && (
-            <div className="fixed inset-0 z-[120] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in font-sans">
-              <div className="bg-slate-900 border border-slate-800 text-white rounded-3xl max-w-sm w-full p-6 text-center space-y-4 shadow-2xl relative overflow-hidden">
-                {/* Always-accessible Home button on top-right of modal */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPaymentNotice(null);
-                    setActiveTab('home');
-                    setSelectedAction(null);
-                    if (typeof window !== 'undefined') {
-                      window.history.replaceState({ amb_root: true }, '', '/dashboard');
-                    }
-                  }}
-                  className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-700 rounded-full transition cursor-pointer flex items-center justify-center z-20"
-                  title="ড্যাশবোর্ডে ফিরে যান"
-                >
-                  <Home className="w-4 h-4 text-emerald-400" />
-                </button>
+            <div className="fixed inset-0 z-[150] flex flex-col bg-slate-950/80 backdrop-blur-md">
+              <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+              
+              <motion.div
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", damping: 25, stiffness: 200 }}
+                className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans text-slate-800"
+              >
+                <div className="bg-[#004a2c] text-white p-5 flex justify-between items-center shrink-0">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                    <span className="font-bold text-sm text-white">পেমেন্ট স্ট্যাটাস</span>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      setPaymentNotice(null);
+                      setActiveTab('home');
+                      setSelectedAction(null);
+                      if (typeof window !== 'undefined') {
+                        window.history.replaceState({ amb_root: true }, '', '/dashboard');
+                      }
+                    }}
+                    className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
 
-                {paymentNotice.status === 'verifying' ? (
-                  <>
-                    <div className="relative w-16 h-16 mx-auto">
-                      <div className="w-16 h-16 border-4 border-emerald-500/20 border-t-emerald-400 rounded-full animate-spin"></div>
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <ShieldCheck className="w-7 h-7 text-emerald-400 animate-pulse" />
+                <div className="flex-1 overflow-y-auto p-8 text-center flex flex-col items-center justify-center">
+                  {paymentNotice.status === 'verifying' ? (
+                    <>
+                      <div className="relative w-20 h-20 mx-auto mb-6">
+                        <div className="w-20 h-20 border-4 border-emerald-500/20 border-t-[#00a884] rounded-full animate-spin"></div>
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <ShieldCheck className="w-10 h-10 text-[#00a884] animate-pulse" />
+                        </div>
                       </div>
-                    </div>
-                    <div>
-                      <h3 className="text-base font-black text-white">
-                        Verifying payment...
-                      </h3>
-                      <p className="text-xs text-slate-300 mt-1">
-                        পেমেন্ট যাচাই করা হচ্ছে... অনুগ্রহ করে অপেক্ষা করুন।
-                      </p>
-                    </div>
-
-                    <div className="bg-emerald-950/60 border border-emerald-500/30 p-3 rounded-2xl flex items-center justify-center gap-2 text-xs text-emerald-300 font-mono">
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-400" />
-                      <span>সার্ভার যাচাইকরণ চলমান ({paymentNotice.pollCount || 1}/40)...</span>
-                    </div>
-
-                    <p className="text-[11px] text-slate-400 leading-relaxed">
-                      গেটওয়েতে লেনদেন সফল হওয়া মাত্রই আপনার ওয়ালেট ব্যালেন্স স্বয়ংক্রিয়ভাবে রিফ্রেশ হবে।
-                    </p>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPaymentNotice(null);
-                        setActiveTab('home');
-                        setSelectedAction(null);
-                        if (typeof window !== 'undefined') {
-                          window.history.replaceState({ amb_root: true }, '', '/dashboard');
-                        }
-                      }}
-                      className="w-full py-2.5 bg-emerald-600/30 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/40 font-bold text-xs rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5"
-                    >
-                      <Home className="w-4 h-4" />
-                      <span>ড্যাশবোর্ডে ফিরে যান (ব্যালেন্স ব্যাকগ্রাউন্ডে যোগ হবে)</span>
-                    </button>
-                  </>
-                ) : paymentNotice.status === 'success' ? (
-                  <>
-                    <div className="w-16 h-16 rounded-3xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 mx-auto flex items-center justify-center text-3xl shadow-lg">
-                      🎉
-                    </div>
-                    <div>
-                      <h3 className="text-base font-black text-white">
-                        অনলাইন অ্যাড মানি সফল হয়েছে!
-                      </h3>
-                      <p className="text-xs text-slate-400 mt-1">
-                        অনলাইন পেমেন্ট গেটওয়ের মাধ্যমে আপনার ওয়ালেটে টাকা তাৎক্ষণিকভাবে যোগ করা হয়েছে।
-                      </p>
-                    </div>
-
-                    {paymentNotice.amount && (
-                      <div className="bg-emerald-950/60 border border-emerald-500/30 p-3 rounded-2xl">
-                        <span className="text-[10px] text-emerald-300 font-bold uppercase block">জমা হওয়া টাকার পরিমাণ</span>
-                        <span className="text-xl font-mono font-black text-white">৳ {paymentNotice.amount.toLocaleString('bn-BD')} BDT</span>
+                      <div>
+                        <h3 className="text-xl font-black text-slate-900 mb-2">
+                          পেমেন্ট যাচাই করা হচ্ছে...
+                        </h3>
+                        <p className="text-sm text-slate-600 font-bold leading-relaxed mb-8">
+                          অনুগ্রহ করে অপেক্ষা করুন। সার্ভার থেকে পেমেন্ট তথ্য যাচাই করা হচ্ছে।
+                        </p>
                       </div>
-                    )}
 
-                    {paymentNotice.trxId && (
-                      <div className="text-[11px] font-mono text-slate-400 bg-black/40 p-2 rounded-xl break-all">
-                        TrxID: <span className="text-emerald-400 font-bold">{paymentNotice.trxId}</span>
+                      <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-2xl flex flex-col items-center gap-2 w-full max-w-sm mb-6">
+                        <div className="flex items-center gap-2 text-xs text-emerald-800 font-black uppercase tracking-wider">
+                          <RefreshCw className="w-4 h-4 animate-spin text-[#00a884]" />
+                          <span>সার্ভার কানেকশন চেক</span>
+                        </div>
+                        <span className="text-[10px] text-emerald-600 font-bold">চেক নম্বর: {paymentNotice.pollCount || 1}/40</span>
                       </div>
-                    )}
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPaymentNotice(null);
-                        setActiveTab('home');
-                        setSelectedAction(null);
-                        syncFreshUserBalance();
-                        if (typeof window !== 'undefined') {
-                          window.history.replaceState({ amb_root: true }, '', '/dashboard');
-                          window.dispatchEvent(new CustomEvent('bnb_reveal_dashboard_balance'));
-                        }
-                      }}
-                      className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-black text-xs rounded-xl shadow-lg cursor-pointer transition active:scale-95 flex items-center justify-center gap-2"
-                    >
-                      <Home className="w-4 h-4" />
-                      <span>ঠিক আছে, ড্যাশবোর্ডে ফিরে যান ✨</span>
-                    </button>
-                  </>
-                ) : paymentNotice.status === 'cancelled' ? (
-                  <>
-                    <div className="w-16 h-16 rounded-3xl bg-amber-500/20 text-amber-400 border border-amber-500/30 mx-auto flex items-center justify-center text-3xl shadow-lg">
-                      ⚠️
-                    </div>
-                    <div>
-                      <h3 className="text-base font-black text-white">
-                        পেমেন্ট বাতিল করা হয়েছে
-                      </h3>
-                      <p className="text-xs text-slate-400 mt-1">
-                        আপনি পেমেন্ট প্রক্রিয়াটি বাতিল করেছেন। ওয়ালেটে কোনো টাকা কাটা হয়নি।
-                      </p>
-                    </div>
+                      <div className="w-full max-w-sm">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPaymentNotice(null);
+                            setActiveTab('home');
+                            setSelectedAction(null);
+                            if (typeof window !== 'undefined') {
+                              window.history.replaceState({ amb_root: true }, '', '/dashboard');
+                            }
+                          }}
+                          className="w-full py-4.5 bg-slate-900 text-white font-black rounded-2xl shadow-lg transition-all active:scale-95 cursor-pointer text-sm flex items-center justify-center gap-2"
+                        >
+                          <Home className="w-4 h-4" />
+                          ড্যাশবোর্ডে ফিরে যান
+                        </button>
+                      </div>
+                    </>
+                  ) : paymentNotice.status === 'success' ? (
+                    <>
+                      <div className="w-20 h-20 rounded-3xl bg-emerald-50 text-emerald-500 border border-emerald-100 mx-auto flex items-center justify-center text-4xl shadow-sm mb-6">
+                        🎉
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-black text-slate-900 mb-2">
+                          পেমেন্ট সফল হয়েছে!
+                        </h3>
+                        <p className="text-sm text-slate-600 font-bold leading-relaxed mb-8">
+                          আপনার অনলাইন পেমেন্ট সফলভাবে ওয়ালেট ব্যালেন্সে যোগ করা হয়েছে।
+                        </p>
+                      </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPaymentNotice(null);
-                        setActiveTab('home');
-                        setSelectedAction(null);
-                        syncFreshUserBalance();
-                        if (typeof window !== 'undefined') {
-                          window.history.replaceState({ amb_root: true }, '', '/dashboard');
-                          window.dispatchEvent(new CustomEvent('bnb_reveal_dashboard_balance'));
-                        }
-                      }}
-                      className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl transition cursor-pointer flex items-center justify-center gap-2"
-                    >
-                      <Home className="w-4 h-4" />
-                      <span>ড্যাশবোর্ডে ফিরে যান</span>
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <div className="w-16 h-16 rounded-3xl bg-rose-500/20 text-rose-400 border border-rose-500/30 mx-auto flex items-center justify-center text-3xl shadow-lg">
-                      ❌
-                    </div>
-                    <div>
-                      <h3 className="text-base font-black text-white">
-                        পেমেন্ট সম্পন্ন হতে পারেনি
-                      </h3>
-                      <p className="text-xs text-slate-400 mt-1">
-                        {paymentNotice.error || 'পেমেন্ট ভেরিফিকেশন ব্যর্থ হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।'}
-                      </p>
-                    </div>
-                    <div className="space-y-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPaymentNotice(null);
-                          setActiveTab('home');
-                          setSelectedAction(null);
-                          syncFreshUserBalance();
-                          if (typeof window !== 'undefined') {
-                            window.history.replaceState({ amb_root: true }, '', '/dashboard');
-                            window.dispatchEvent(new CustomEvent('bnb_reveal_dashboard_balance'));
-                          }
-                        }}
-                        className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl transition cursor-pointer flex items-center justify-center gap-2"
-                      >
-                        <Home className="w-4 h-4" />
-                        <span>ড্যাশবোর্ডে ফিরে যান</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPaymentNotice(null);
-                          setActiveTab('add_money');
-                          setSelectedAction(null);
-                        }}
-                        className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer"
-                      >
-                        পুনরায় চেষ্টা করুন
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
+                      <div className="w-full max-w-sm space-y-4 mb-8">
+                        {paymentNotice.amount && (
+                          <div className="bg-slate-50 border border-slate-100 p-5 rounded-2xl text-center">
+                            <span className="text-[10px] text-slate-400 font-black uppercase tracking-widest block mb-1">জমা হওয়া পরিমাণ</span>
+                            <span className="text-3xl font-mono font-black text-emerald-700">৳ {paymentNotice.amount.toLocaleString('bn-BD')} BDT</span>
+                          </div>
+                        )}
+
+                        {paymentNotice.trxId && (
+                          <div className="text-[11px] font-mono text-slate-500 bg-slate-50 border border-slate-100 p-3 rounded-xl break-all">
+                            Transaction ID: <span className="text-slate-900 font-black">{paymentNotice.trxId}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="w-full max-w-sm">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPaymentNotice(null);
+                            setActiveTab('home');
+                            setSelectedAction(null);
+                            syncFreshUserBalance();
+                            if (typeof window !== 'undefined') {
+                              window.history.replaceState({ amb_root: true }, '', '/dashboard');
+                              window.dispatchEvent(new CustomEvent('bnb_reveal_dashboard_balance'));
+                            }
+                          }}
+                          className="w-full py-4.5 bg-[#00a884] hover:bg-[#008f6f] text-white font-black rounded-2xl shadow-lg shadow-emerald-600/20 transition-all active:scale-95 cursor-pointer text-sm flex items-center justify-center gap-2"
+                        >
+                          <Home className="w-4 h-4" />
+                          ঠিক আছে, ধন্যবাদ ✨
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-20 h-20 rounded-3xl bg-rose-50 text-rose-500 border border-rose-100 mx-auto flex items-center justify-center text-4xl shadow-sm mb-6">
+                        {paymentNotice.status === 'cancelled' ? '⚠️' : '❌'}
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-black text-slate-900 mb-2">
+                          {paymentNotice.status === 'cancelled' ? 'পেমেন্ট বাতিল হয়েছে' : 'পেমেন্ট ব্যর্থ হয়েছে'}
+                        </h3>
+                        <p className="text-sm text-slate-600 font-bold leading-relaxed mb-8">
+                          {paymentNotice.error || (paymentNotice.status === 'cancelled' ? 'আপনি পেমেন্ট প্রক্রিয়াটি বাতিল করেছেন।' : 'লেনদেনটি সম্পন্ন হতে পারেনি।')}
+                        </p>
+                      </div>
+
+                      <div className="w-full max-w-sm space-y-3.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPaymentNotice(null);
+                            setActiveTab('home');
+                            setSelectedAction(null);
+                            if (typeof window !== 'undefined') {
+                              window.history.replaceState({ amb_root: true }, '', '/dashboard');
+                            }
+                          }}
+                          className="w-full py-4.5 bg-slate-900 text-white font-black rounded-2xl shadow-lg transition-all active:scale-95 cursor-pointer text-sm flex items-center justify-center gap-2"
+                        >
+                          <Home className="w-4 h-4" />
+                          ড্যাশবোর্ডে ফিরে যান
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPaymentNotice(null);
+                            setActiveTab('add_money');
+                            setSelectedAction(null);
+                          }}
+                          className="w-full py-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black rounded-2xl transition-colors cursor-pointer text-sm"
+                        >
+                          পুনরায় চেষ্টা করুন
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </motion.div>
             </div>
           )}
 

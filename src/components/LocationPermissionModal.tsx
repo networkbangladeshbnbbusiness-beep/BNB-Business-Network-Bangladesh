@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Compass, MapPin, ShieldCheck, Bell, Zap } from 'lucide-react';
+import { motion } from 'motion/react';
+import { Compass, MapPin, ShieldCheck, Bell, Zap, X } from 'lucide-react';
 import { db } from '../lib/firebase';
 import { doc, updateDoc } from 'firebase/firestore';
 import { syncUserLocationNow, fetchRealIpAndLocation } from '../lib/locationUtils';
@@ -76,96 +77,110 @@ export const LocationPermissionModal: React.FC<LocationPermissionModalProps> = (
   };
 
   return (
-    <div className="fixed inset-0 bg-[#0b6623] flex flex-col justify-between z-[9999] p-4 sm:p-6 font-sans text-white animate-fade-in w-screen h-screen overflow-y-auto">
-      <div className="bg-white text-slate-800 rounded-3xl shadow-2xl w-full max-w-md mx-auto my-auto overflow-hidden relative p-6 space-y-5 border border-emerald-100">
-        
-        {/* Header Icon & Title */}
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
-              <Compass className="w-6 h-6 animate-pulse" />
+    <div className="fixed inset-0 z-[99999] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+      <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+      
+      <motion.div 
+        initial={{ y: "100%" }}
+        animate={{ y: 0 }}
+        exit={{ y: "100%" }}
+        transition={{ type: "spring", damping: 25, stiffness: 200 }}
+        className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
+      >
+        <div className="bg-[#004a2c] text-white px-6 py-5 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/10 rounded-xl">
+              <Compass className="w-6 h-6 text-emerald-400 animate-pulse" />
             </div>
-            <span className="text-[10px] sm:text-xs font-black tracking-wider text-emerald-400 uppercase bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
-              LOCATION ACCURACY SYSTEM
-            </span>
+            <div>
+              <h3 className="text-lg font-black leading-tight">লোকেশন ও নোটিফিকেশন</h3>
+              <p className="text-[10px] text-emerald-100/70 font-medium tracking-wider uppercase">Location Accuracy System</p>
+            </div>
           </div>
+          <button 
+            onClick={onClose} 
+            className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
+          >
+            <X className="w-5 h-5 text-white" />
+          </button>
+        </div>
 
-          <div>
-            <h3 className="text-lg sm:text-xl font-black text-white leading-snug">
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          <div className="space-y-2">
+            <h3 className="text-xl font-black text-slate-900 leading-tight">
               অধিকতর নির্ভুল অভিজ্ঞতার জন্য লোকেশন অন করুন
             </h3>
-            <p className="text-xs text-slate-400 font-medium leading-relaxed mt-1">
+            <p className="text-sm text-slate-500 font-medium leading-relaxed">
               For a better experience, your device will need to use Location Accuracy and live notifications.
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            <h4 className="text-xs font-black text-emerald-800 uppercase tracking-widest bg-emerald-50 px-3 py-1.5 rounded-lg inline-block">
+              প্রয়োজনীয় পারমিশনসমূহ:
+            </h4>
+
+            <div className="space-y-3">
+              {/* Item 1 */}
+              <div className="flex items-center gap-4 bg-slate-50 border border-slate-100 p-4 rounded-2xl transition hover:border-emerald-200">
+                <div className="w-12 h-12 rounded-xl bg-emerald-100 flex items-center justify-center text-emerald-600 shrink-0">
+                  <MapPin className="w-6 h-6" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h5 className="text-sm font-black text-slate-900">
+                    Device location (ডিভাইস লোকেশন)
+                  </h5>
+                  <p className="text-[11px] text-slate-500 font-medium leading-normal mt-0.5">
+                    নিকটস্থ এজেন্ট, পয়েন্ট, রেশন শপ ও কুরিয়ার হাব প্রদর্শন করার জন্য।
+                  </p>
+                </div>
+              </div>
+
+              {/* Item 2 */}
+              <div className="flex items-center gap-4 bg-slate-50 border border-slate-100 p-4 rounded-2xl transition hover:border-emerald-200">
+                <div className="w-12 h-12 rounded-xl bg-amber-100 flex items-center justify-center text-amber-600 shrink-0">
+                  <ShieldCheck className="w-6 h-6" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h5 className="text-sm font-black text-slate-900">
+                    Location Accuracy & Security (নিরাপদ লেনদেন)
+                  </h5>
+                  <p className="text-[11px] text-slate-500 font-medium leading-normal mt-0.5">
+                    Google sensor ও জিপিএস দিয়ে ভেরিফাইড ও নিরাপদ লেনদেন নিশ্চিতকরণ।
+                  </p>
+                </div>
+              </div>
+
+              {/* Item 3 */}
+              <div className="flex items-center gap-4 bg-slate-50 border border-slate-100 p-4 rounded-2xl transition hover:border-emerald-200">
+                <div className="w-12 h-12 rounded-xl bg-purple-100 flex items-center justify-center text-purple-600 shrink-0">
+                  <Bell className="w-6 h-6" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h5 className="text-sm font-black text-slate-900">
+                    Live Alerts (ইনস্ট্যান্ট অ্যালার্ট নোটিফিকেশন)
+                  </h5>
+                  <p className="text-[11px] text-slate-500 font-medium leading-normal mt-0.5">
+                    ক্যাশইন, ক্যাশআউট, ঋণ ও ডিপোজিটের তাৎক্ষণিক লাইভ মেসেজ।
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4">
+            <p className="text-[11px] text-amber-800 font-bold leading-relaxed">
+              <span className="mr-1">💡</span>
+              You can change this at any time in location settings. (যেকোনো সময় ডিভাইস সেটিংস থেকে পরিবর্তন করা যাবে।)
             </p>
           </div>
         </div>
 
-        {/* Requirements Box */}
-        <div className="space-y-3 pt-1">
-          <h4 className="text-[11px] font-black text-slate-400 uppercase tracking-wider">
-            THE FOLLOWING SETTINGS SHOULD BE ON (নিম্নলিখিত অপশনগুলো সচল রাখা হবে):
-          </h4>
-
-          <div className="space-y-2.5">
-            {/* Item 1 */}
-            <div className="flex items-center gap-3 bg-slate-900/90 border border-slate-800 p-3 rounded-2xl">
-              <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
-                <MapPin className="w-5 h-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <h5 className="text-xs font-bold text-slate-100">
-                  Device location (ডিভাইস লোকেশন)
-                </h5>
-                <p className="text-[11px] text-slate-400 leading-tight truncate">
-                  নিকটস্থ এজেন্ট, পয়েন্ট, রেশন শপ ও কুরিয়ার হাব প্রদর্শন করার জন্য।
-                </p>
-              </div>
-            </div>
-
-            {/* Item 2 */}
-            <div className="flex items-center gap-3 bg-slate-900/90 border border-slate-800 p-3 rounded-2xl">
-              <div className="w-9 h-9 rounded-xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0">
-                <ShieldCheck className="w-5 h-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <h5 className="text-xs font-bold text-slate-100">
-                  Location Accuracy & Security (নিরাপদ লেনদেন)
-                </h5>
-                <p className="text-[11px] text-slate-400 leading-tight truncate">
-                  Google sensor ও জিপিএস দিয়ে ভেরিফাইড ও নিরাপদ লেনদেন নিশ্চিতকরণ।
-                </p>
-              </div>
-            </div>
-
-            {/* Item 3 */}
-            <div className="flex items-center gap-3 bg-slate-900/90 border border-slate-800 p-3 rounded-2xl">
-              <div className="w-9 h-9 rounded-xl bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-purple-400 shrink-0">
-                <Bell className="w-5 h-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <h5 className="text-xs font-bold text-slate-100">
-                  Live Alerts (ইনস্ট্যান্ট অ্যালার্ট নোটিফিকেশন)
-                </h5>
-                <p className="text-[11px] text-slate-400 leading-tight truncate">
-                  ক্যাশইন, ক্যাশআউট, ঋণ ও ডিপোজিটের তাৎক্ষণিক লাইভ মেসেজ।
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Footer Note */}
-        <p className="text-[10px] text-slate-400 italic leading-snug">
-          You can change this at any time in location settings. (যেকোনো সময় ডিভাইস সেটিংস থেকে পরিবর্তন করা যাবে।)
-        </p>
-
-        {/* Action Buttons */}
-        <div className="flex items-center gap-3 pt-1">
+        <div className="p-6 bg-slate-50 border-t border-slate-100 grid grid-cols-2 gap-4">
           <button
             type="button"
             onClick={handleDecline}
-            disabled={loading}
-            className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-black py-3 px-4 rounded-2xl transition cursor-pointer text-center disabled:opacity-50"
+            className="bg-white hover:bg-slate-100 text-slate-600 text-sm font-black py-4 px-4 rounded-2xl border border-slate-200 transition-all active:scale-95 cursor-pointer text-center"
           >
             No, thanks (পরে করুন)
           </button>
@@ -173,20 +188,13 @@ export const LocationPermissionModal: React.FC<LocationPermissionModalProps> = (
           <button
             type="button"
             onClick={handleTurnOn}
-            disabled={loading}
-            className="flex-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black py-3 px-4 rounded-2xl transition cursor-pointer flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/25 disabled:opacity-50 active:scale-95"
+            className="bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-black py-4 px-4 rounded-2xl transition-all shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 active:scale-95 cursor-pointer"
           >
-            {loading ? (
-              <span className="inline-block w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <>
-                <Zap className="w-4 h-4 fill-slate-950" /> Turn on (অনুমতি দিন)
-              </>
-            )}
+            <Zap className="w-4 h-4 fill-white" />
+            <span>Turn on (অনুমতি দিন)</span>
           </button>
         </div>
-
-      </div>
+      </motion.div>
     </div>
   );
 };

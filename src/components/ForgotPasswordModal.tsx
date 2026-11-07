@@ -65,6 +65,7 @@ export default function ForgotPasswordModal({
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [countdown, setCountdown] = useState(60);
+  const [otpVerificationToken, setOtpVerificationToken] = useState('');
 
   // Countdown timer for OTP resend
   useEffect(() => {
@@ -139,7 +140,6 @@ export default function ForgotPasswordModal({
     return rawError;
   };
 
-  const [otpVerificationToken, setOtpVerificationToken] = useState('');
 
   // Step 1: Request OTP for Account via Server
   const handleRequestOtp = async (e: React.FormEvent) => {
@@ -461,16 +461,18 @@ export default function ForgotPasswordModal({
 
   return (
     <div
-      className={`fixed inset-0 z-50 overflow-y-auto min-h-screen flex flex-col font-sans select-none transition-colors ${
+      className={`fixed inset-0 z-[99999] overflow-hidden flex flex-col font-sans select-none transition-colors ${
         isDark ? 'bg-[#0B1120] text-slate-100' : 'bg-[#F4F6F8] text-slate-900'
       }`}
     >
+      <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+
       {/* Top BNB Branding Curved Header */}
       <div
         className={`bg-gradient-to-b ${
           isDark
             ? 'from-[#052e1a] via-[#074226] to-[#084d2b]'
-            : 'from-[#064e3b] via-[#047857] to-[#0B532C]'
+            : 'from-[#004a2c] via-[#005a36] to-[#0B532C]'
         } text-white pt-4 pb-12 px-4 relative overflow-hidden shadow-lg shrink-0`}
       >
         {/* Subtle decorative background curves */}

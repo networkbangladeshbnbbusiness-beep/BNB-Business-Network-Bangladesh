@@ -6,10 +6,10 @@ import {
   Sparkles, Heart, Star, ShieldCheck, Phone,
   Edit, Eye, Layers, RefreshCw
 } from 'lucide-react';
-import { User as UserType, AppConfig } from '../types';
+import { User as UserType, AppConfig, getEffectiveBalance } from '../types';
 import { db } from '../lib/firebase';
 import { useBackHandler } from '../lib/navigationManager';
-import { collection, addDoc, doc, updateDoc, onSnapshot, setDoc, deleteDoc } from 'firebase/firestore';
+import { collection, addDoc, doc, updateDoc, onSnapshot, setDoc, deleteDoc, runTransaction } from 'firebase/firestore';
 import SafiProductDetailsModal from './SafiProductDetailsModal';
 import SafiAdminProductModal from './SafiAdminProductModal';
 import SafiCheckoutModal from './SafiCheckoutModal';
@@ -71,8 +71,8 @@ export const SafiPremiumShop = React.memo(function SafiPremiumShop({
   syncLiveProfile,
   isAdminMode = false
 }: SafiPremiumShopProps) {
-  // Session Admin permissions
-  const isAdmin = isAdminMode || user?.role === 'admin' || user?.role === 'sub_admin';
+  // Session Admin permissions (Only active when opened inside Admin Panel via isAdminMode prop)
+  const isAdmin = Boolean(isAdminMode);
 
   // Navigation tabs: 'home' | 'shop' | 'vacation_sale' | 'cart' | 'account' | 'favorites'
   const [activeTab, setActiveTab] = useState<'home' | 'shop' | 'vacation_sale' | 'cart' | 'account' | 'favorites'>('home');
@@ -735,7 +735,7 @@ export const SafiPremiumShop = React.memo(function SafiPremiumShop({
   }) => {
     const orderAmount = orderData.totalAmount;
     
-    if (orderAmount > (user?.balance || 0)) {
+    if (orderAmount > getEffectiveBalance(user)) {
       showToast('আপনার মেইন ওয়ালেটে পর্যাপ্ত ব্যালেন্স নেই।', 'error');
       speakVoiceGuide("আপনার ব্যালেন্স পর্যাপ্ত নয়। ওয়ালেটে টাকা রিচার্জ করুন।");
       return;
@@ -747,9 +747,16 @@ export const SafiPremiumShop = React.memo(function SafiPremiumShop({
       setCheckoutLoading(true);
       
       const userRef = doc(db, "users", user.uid);
-      await updateDoc(userRef, {
-        balance: (user.balance || 0) - orderAmount,
-        mainBalance: (user.balance || 0) - orderAmount
+      await runTransaction(db, async (t) => {
+        const uSnap = await t.get(userRef);
+        if (!uSnap.exists()) throw new Error('User not found');
+        const liveBal = getEffectiveBalance(uSnap.data());
+        if (liveBal < orderAmount) throw new Error('অপর্যাপ্ত ব্যালেন্স');
+        const nextBal = liveBal - orderAmount;
+        t.update(userRef, {
+          balance: nextBal,
+          mainBalance: nextBal
+        });
       });
 
       const transactionId = `tx-safi-${Date.now()}`;

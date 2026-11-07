@@ -236,166 +236,190 @@ export const OtpVerificationModal: React.FC<OtpVerificationModalProps> = ({
     }
   };
 
-  if (!isOpen) return null;
-
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95, y: 10 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95, y: 10 }}
-          className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl border border-emerald-100 flex flex-col"
-        >
-          {/* Header */}
-          <div className="bg-gradient-to-r from-[#0B532C] to-[#0D6B3C] p-5 text-white relative">
-            <button
-              type="button"
-              onClick={onClose}
-              className="absolute top-4 right-4 text-white/80 hover:text-white p-1 rounded-full bg-white/10 hover:bg-white/20 transition cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            <div className="flex items-center gap-3">
-              <div className="w-11 h-11 rounded-2xl bg-white/15 flex items-center justify-center border border-white/20">
-                <ShieldCheck className="w-6 h-6 text-emerald-200" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-white">{actionTitle}</h3>
-                <p className="text-xs text-emerald-100/90 font-medium">আর্থিক সুরক্ষা ও অ্যান্ড-টু-অ্যান্ড ভেরিফিকেশন</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Body */}
-          <div className="p-6 space-y-5">
-            <div className="text-center space-y-1.5">
-              <p className="text-xs sm:text-sm text-slate-650 leading-relaxed font-medium">
-                {actionDescription}
-              </p>
-              {targetDestination && (
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-bold">
-                  <span>📱</span>
-                  <span>{targetDestination}</span>
+      {isOpen && (
+        <div className="fixed inset-0 z-[100000] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+          <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+          
+          <motion.div
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
+          >
+            {/* Header */}
+            <div className="bg-[#004a2c] p-5 text-white relative flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-white/15 flex items-center justify-center border border-white/20">
+                  <ShieldCheck className="w-6 h-6 text-emerald-200" />
                 </div>
-              )}
-            </div>
-
-            {/* Notification messages */}
-            {errorMessage && (
-              <motion.div
-                initial={{ opacity: 0, y: -4 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="bg-rose-50 border border-rose-200 text-rose-800 text-xs p-3 rounded-2xl font-bold flex items-start gap-2 shadow-xs"
-              >
-                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
-                <span>{errorMessage}</span>
-              </motion.div>
-            )}
-
-            {successMessage && (
-              <motion.div
-                initial={{ opacity: 0, y: -4 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs p-3 rounded-2xl font-bold flex items-start gap-2 shadow-xs"
-              >
-                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 mt-0.5" />
-                <span>{successMessage}</span>
-              </motion.div>
-            )}
-
-            {/* 6 Digit Input Boxes */}
-            <div>
-              <div className="flex items-center justify-between mb-2 px-1">
-                <label className="text-xs font-bold text-slate-700 flex items-center gap-1">
-                  <Lock className="w-3.5 h-3.5 text-emerald-700" />
-                  <span>৬-সংখ্যার ওটিপি লিখুন:</span>
-                </label>
-                <button
-                  type="button"
-                  onClick={handleAutoPasteFromClipboard}
-                  className="text-[11px] font-bold text-emerald-800 hover:text-emerald-950 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 transition cursor-pointer flex items-center gap-1"
-                >
-                  <span>📋</span>
-                  <span>অটো-পেস্ট</span>
-                </button>
+                <div>
+                  <h3 className="text-lg font-black text-white">{actionTitle}</h3>
+                  <p className="text-[10px] text-emerald-100/70 font-medium tracking-wide uppercase">Security Verification System</p>
+                </div>
               </div>
-
-              <div className="grid grid-cols-6 gap-2 sm:gap-2.5">
-                {digits.map((digit, idx) => (
-                  <input
-                    key={idx}
-                    ref={el => { inputRefs.current[idx] = el; }}
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={1}
-                    value={digit}
-                    onChange={e => handleDigitChange(idx, e.target.value)}
-                    onKeyDown={e => handleKeyDown(idx, e)}
-                    onPaste={handlePaste}
-                    className={`w-full aspect-square text-center text-xl sm:text-2xl font-mono font-black rounded-2xl border-2 transition-all focus:outline-none ${
-                      digit
-                        ? 'border-emerald-600 bg-emerald-50/40 text-emerald-950 shadow-inner'
-                        : 'border-slate-200 bg-slate-50 text-slate-900 focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-500/20'
-                    }`}
-                  />
-                ))}
-              </div>
-            </div>
-
-            {/* Timer and Countdown */}
-            <div className="flex items-center justify-between px-1 text-xs">
-              <div className={`flex items-center gap-1.5 font-bold ${timeLeft <= 60 ? 'text-rose-600 animate-pulse' : 'text-slate-600'}`}>
-                <Clock className="w-4 h-4" />
-                <span>মেয়াদ বাকি:</span>
-                <span className="font-mono text-sm tracking-wider">{formatTime(timeLeft)}</span>
-              </div>
-
               <button
                 type="button"
-                onClick={handleResend}
-                disabled={isResending || timeLeft > 240}
-                className={`flex items-center gap-1 font-bold text-xs transition cursor-pointer ${
-                  timeLeft <= 240
-                    ? 'text-emerald-700 hover:text-emerald-900 underline'
-                    : 'text-slate-400 cursor-not-allowed'
-                }`}
+                onClick={onClose}
+                className="p-2 text-white/80 hover:text-white rounded-full bg-white/10 hover:bg-white/20 transition cursor-pointer"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${isResending ? 'animate-spin' : ''}`} />
-                <span>পুনরায় কোড পাঠান</span>
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Primary Action Button */}
-            <button
-              type="button"
-              onClick={() => verifyCode()}
-              disabled={isVerifying || digits.join('').length !== 6 || timeLeft <= 0}
-              className={`w-full py-4 px-6 rounded-full font-bold text-sm sm:text-base flex items-center justify-center gap-2 shadow-md transition cursor-pointer ${
-                digits.join('').length === 6 && timeLeft > 0 && !isVerifying
-                  ? 'bg-[#0B532C] hover:bg-[#084223] active:bg-[#06331B] text-white active:scale-98'
-                  : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-              }`}
-            >
-              {isVerifying ? (
-                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              ) : (
-                <>
-                  <span>যাচাই ও কাজ সম্পন্ন করুন</span>
-                  <ArrowRight className="w-5 h-5 stroke-[2.5]" />
-                </>
-              )}
-            </button>
-          </div>
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              <div className="space-y-4">
+                <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 flex gap-3">
+                  <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shrink-0 shadow-sm">
+                    <Lock className="w-5 h-5 text-emerald-600" />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs sm:text-sm text-emerald-900 font-bold leading-relaxed">
+                      {actionDescription}
+                    </p>
+                    {targetDestination && (
+                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-emerald-200 text-emerald-900 text-[10px] font-black uppercase">
+                        <span>Destination:</span>
+                        <span>{targetDestination}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
 
-          {/* Footer Warning */}
-          <div className="bg-slate-50 px-6 py-3 border-t border-slate-100 text-center">
-            <p className="text-[11px] text-slate-500 font-medium">
-              ওটিপি কোডটি অত্যন্ত গোপনীয়। এটি কোনো অবস্থাতেই অন্যের সাথে শেয়ার করবেন না।
-            </p>
-          </div>
-        </motion.div>
-      </div>
+              {/* Notification messages */}
+              <AnimatePresence mode="wait">
+                {errorMessage && (
+                  <motion.div
+                    key="err"
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="bg-rose-50 border border-rose-200 text-rose-800 text-xs p-4 rounded-2xl font-bold flex items-start gap-2 shadow-sm"
+                  >
+                    <AlertTriangle className="w-5 h-5 shrink-0 text-rose-600 mt-0.5" />
+                    <span>{errorMessage}</span>
+                  </motion.div>
+                )}
+
+                {successMessage && (
+                  <motion.div
+                    key="success"
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs p-4 rounded-2xl font-bold flex items-start gap-2 shadow-sm"
+                  >
+                    <CheckCircle2 className="w-5 h-5 shrink-0 text-emerald-600 mt-0.5" />
+                    <span>{successMessage}</span>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* 6 Digit Input Boxes */}
+              <div className="space-y-4">
+                <div className="flex items-center justify-between px-1">
+                  <label className="text-xs font-black text-slate-700 uppercase tracking-wider">
+                    ৬-সংখ্যার ওটিপি কোড:
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleAutoPasteFromClipboard}
+                    className="text-[11px] font-black text-emerald-800 hover:text-emerald-950 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200 transition cursor-pointer flex items-center gap-1.5"
+                  >
+                    <span>📋</span>
+                    <span>অটো-পেস্ট</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-6 gap-2 sm:gap-3">
+                  {digits.map((digit, idx) => (
+                    <input
+                      key={idx}
+                      ref={el => { inputRefs.current[idx] = el; }}
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={1}
+                      value={digit}
+                      onChange={e => handleDigitChange(idx, e.target.value)}
+                      onKeyDown={e => handleKeyDown(idx, e)}
+                      onPaste={handlePaste}
+                      className={`w-full aspect-square text-center text-2xl sm:text-3xl font-mono font-black rounded-2xl border-2 transition-all focus:outline-none ${
+                        digit
+                          ? 'border-emerald-600 bg-emerald-50 text-emerald-950 shadow-sm'
+                          : 'border-slate-200 bg-slate-50 text-slate-900 focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10'
+                      }`}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* Timer and Countdown */}
+              <div className="bg-slate-50 rounded-2.5xl p-5 flex items-center justify-between border border-slate-100">
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${timeLeft <= 60 ? 'bg-rose-100 text-rose-600 animate-pulse' : 'bg-white text-slate-600 shadow-xs'}`}>
+                    <Clock className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black text-slate-400 uppercase">মেয়াদ বাকি</p>
+                    <p className={`font-mono text-lg font-black leading-none ${timeLeft <= 60 ? 'text-rose-600' : 'text-slate-800'}`}>
+                      {formatTime(timeLeft)}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleResend}
+                  disabled={isResending || timeLeft > 240}
+                  className={`px-4 py-2.5 rounded-xl font-black text-xs transition-all border ${
+                    timeLeft <= 240
+                      ? 'bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-50 cursor-pointer shadow-xs'
+                      : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <RefreshCw className={`w-3.5 h-3.5 ${isResending ? 'animate-spin' : ''}`} />
+                    <span>পুনরায় পাঠান</span>
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            {/* Footer Actions */}
+            <div className="p-6 bg-slate-50 border-t border-slate-100 space-y-4">
+              <button
+                type="button"
+                onClick={() => verifyCode()}
+                disabled={isVerifying || digits.join('').length !== 6 || timeLeft <= 0}
+                className={`w-full py-4.5 rounded-2xl font-black text-base flex items-center justify-center gap-3 shadow-lg transition-all active:scale-95 cursor-pointer ${
+                  digits.join('').length === 6 && timeLeft > 0 && !isVerifying
+                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20'
+                    : 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                }`}
+              >
+                {isVerifying ? (
+                  <>
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>যাচাই হচ্ছে...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>যাচাই ও কাজ সম্পন্ন করুন</span>
+                    <ArrowRight className="w-5 h-5 stroke-[3]" />
+                  </>
+                )}
+              </button>
+              <p className="text-[10px] text-slate-400 text-center font-bold px-4">
+                ওটিপি কোডটি অত্যন্ত গোপনীয়। এটি কোনো অবস্থাতেই অন্যের সাথে শেয়ার করবেন না।
+              </p>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </AnimatePresence>
   );
 };

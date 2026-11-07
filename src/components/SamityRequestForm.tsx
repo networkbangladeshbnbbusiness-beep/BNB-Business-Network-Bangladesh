@@ -93,8 +93,23 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
       return;
     }
 
-    if (!nid.trim()) {
-      setErrorCode('অনুগ্রহ করে জাতীয় পরিচয়পত্র (NID) অথবা পাসপোর্ট নম্বর লিখুন।');
+    if (!fatherName.trim()) {
+      setErrorCode('অনুগ্রহ করে আপনার পিতার নাম সঠিকভাবে প্রদান করুন।');
+      return;
+    }
+
+    if (!motherName.trim()) {
+      setErrorCode('অনুগ্রহ করে আপনার মাতার নাম সঠিকভাবে প্রদান করুন।');
+      return;
+    }
+
+    if (!nid.trim() || nid.trim().length < 6) {
+      setErrorCode('অনুগ্রহ করে সঠিক জাতীয় পরিচয়পত্র (NID), পাসপোর্ট অথবা জন্ম নিবন্ধন নম্বর প্রদান করুন।');
+      return;
+    }
+
+    if (!dob) {
+      setErrorCode('অনুগ্রহ করে আপনার সঠিক জন্ম তারিখ নির্বাচন করুন।');
       return;
     }
 
@@ -105,30 +120,32 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
     }
 
     if (!district.trim()) {
-      setErrorCode('অনুগ্রহ করে আপনার জেলা প্রদান করুন।');
+      setErrorCode('অনুগ্রহ করে আপনার জেলার নাম প্রদান করুন।');
       return;
     }
 
     if (!thana.trim()) {
-      setErrorCode('অনুগ্রহ করে আপনার থানা বা উপজেলা প্রদান করুন।');
+      setErrorCode('অনুগ্রহ করে আপনার থানা বা উপজেলার নাম প্রদান করুন।');
       return;
     }
 
     if (!postOffice.trim()) {
-      setErrorCode('অনুগ্রহ করে আপনার পোস্ট অফিস অথবা গ্রাম প্রদান করুন।');
+      setErrorCode('অনুগ্রহ করে আপনার পোস্ট অফিস অথবা গ্রামের নাম প্রদান করুন।');
       return;
     }
 
-    // Nominee validation based on category
-    const requiredNominees = user.memberCategory === 'owner' || user.memberCategory === 'shareholder' ? 3 : (user.memberCategory === 'investor' ? 2 : 1);
-    
     if (!nomineeName.trim()) {
-      setErrorCode(`অনুগ্রহ করে ${requiredNominees} জন নমিনির নাম প্রদান করুন।`);
+      setErrorCode('অনুগ্রহ করে আপনার মনোনীত নমিনির নাম প্রদান করুন।');
       return;
     }
 
-    if (!nomineePhone.trim() || nomineePhone.length < 7) {
-      setErrorCode('সঠিক নমিনির মোবাইল নম্বর লিখুন (ন্যূনতম 7 ডিজিট)।');
+    if (!nomineeRelation.trim()) {
+      setErrorCode('অনুগ্রহ করে নমিনির সাথে সম্পর্ক প্রদান করুন (যেমন: পিতা, মাতা, স্ত্রী, ভাই)।');
+      return;
+    }
+
+    if (!nomineePhone.trim() || nomineePhone.replace(/\D/g, '').length < 7) {
+      setErrorCode('সঠিক নমিনির সচল মোবাইল নম্বর লিখুন (ন্যূনতম ৭ ডিজিট)।');
       return;
     }
 
@@ -137,16 +154,32 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
       return;
     }
 
-    let savingsTarget = 500;
+    let savingsTarget = 1000;
+    let selectedCategory: 'owner' | 'shareholder' | 'investor' | 'supporter' | 'regular' = 'supporter';
+
     if (monthlySavingsOption === 'custom') {
       const parsedAmt = parseInt(customSavingsAmount, 10);
       if (isNaN(parsedAmt) || parsedAmt < 500) {
-        setErrorCode('আপনার কাঙ্ক্ষিত মাসিক সঞ্চয় অনুগ্রহ করে সংখ্যায় লিখুন এবং এটি অবশ্যই সর্বনিম্ন 500 টাকা হতে হবে।');
+        setErrorCode('আপনার কাঙ্ক্ষিত মাসিক সঞ্চয় অনুগ্রহ করে সংখ্যায় লিখুন এবং এটি অবশ্যই সর্বনিম্ন ৫০০ টাকা হতে হবে।');
         return;
       }
       savingsTarget = parsedAmt;
     } else {
       savingsTarget = parseInt(monthlySavingsOption, 10);
+    }
+
+    if (savingsTarget >= 5000) selectedCategory = 'owner';
+    else if (savingsTarget >= 3000) selectedCategory = 'shareholder';
+    else if (savingsTarget >= 2000) selectedCategory = 'investor';
+    else if (savingsTarget >= 1000) selectedCategory = 'supporter';
+    else selectedCategory = 'supporter';
+
+    const requiredFirstMonthAmount = savingsTarget;
+    const userCurrentMainBalance = Number(user.balance !== undefined ? user.balance : user.mainBalance) || 0;
+
+    if (userCurrentMainBalance < requiredFirstMonthAmount) {
+      setErrorCode(`⚠️ আপনার মেইন ওয়ালেটে ১ম মাসের সঞ্চয় কিস্তি ৳${requiredFirstMonthAmount.toLocaleString('bn-BD')} টাকা নেই! (আপনার বর্তমান মেইন ব্যালেন্স ৳${userCurrentMainBalance.toLocaleString('bn-BD')})। সমিতিতে আবেদনের পূর্বে অনুগ্রহ করে বিকাশ/নগদে অটো এড মানি করে মেইন ওয়ালেটে রিচার্জ করুন।`);
+      return;
     }
 
     setLoading(true);
@@ -155,10 +188,13 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
       const appRef = doc(db, 'samity_applications', user.uid);
       const nowIso = new Date().toISOString();
       
+      const newMainBalance = userCurrentMainBalance - requiredFirstMonthAmount;
       const isAutoApprove = appConfig?.autoApproveSomiti === true || appConfig?.autoApproveSamity === true;
       const targetSamityStatus = isAutoApprove ? 'approved' : 'pending';
 
       const updateData: Partial<User> = {
+        balance: newMainBalance,
+        mainBalance: newMainBalance,
         country: country,
         fatherName: fatherName.trim(),
         motherName: motherName.trim(),
@@ -172,13 +208,20 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
         nomineeRelation: nomineeRelation.trim(),
         nomineePhone: nomineePhone.trim(),
         monthlySavingsTarget: savingsTarget,
+        memberCategory: selectedCategory,
         samityStatus: targetSamityStatus,
         samityApproved: isAutoApprove ? true : false,
         isSamityMember: isAutoApprove ? true : (user.isSamityMember ?? false),
         approved: isAutoApprove ? true : (user.approved ?? false),
         samityAppliedAt: nowIso,
+        samityApplicationInstallmentAmount: requiredFirstMonthAmount,
         hasSetProfile: true
       };
+
+      if (isAutoApprove) {
+        updateData.savings = (Number(user.savings) || 0) + requiredFirstMonthAmount;
+        updateData.dpsBalance = (Number(user.dpsBalance) || 0) + requiredFirstMonthAmount;
+      }
 
       const appData = {
         id: user.uid,
@@ -200,6 +243,8 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
         nomineeRelation: nomineeRelation.trim(),
         nomineePhone: nomineePhone.trim(),
         monthlySavingsTarget: savingsTarget,
+        memberCategory: selectedCategory,
+        installmentAmount: requiredFirstMonthAmount,
         status: targetSamityStatus,
         samityStatus: targetSamityStatus,
         approved: isAutoApprove,
@@ -208,10 +253,31 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
         createdAt: nowIso
       };
 
-      // ⚡ Parallel Firestore writes (< 0.5s)
+      const txDocRef = doc(collection(db, 'transactions'));
+      const txData = {
+        id: txDocRef.id,
+        userId: user.uid,
+        userName: user.name,
+        userPhone: user.phone,
+        memberId: user.memberId || '',
+        type: 'deposit',
+        typeLabel: isAutoApprove ? 'সমবায় সমিতি ১ম মাসের সঞ্চয় কিস্তি' : 'সমবায় সমিতি ১ম মাসের কিস্তি আমানত (রিভিউ পেন্ডিং)',
+        category: 'samity_deposit',
+        amount: requiredFirstMonthAmount,
+        status: isAutoApprove ? 'success' : 'pending',
+        isApproved: isAutoApprove,
+        paymentMethod: 'মেইন ওয়ালেট কর্তন',
+        description: `সমবায় সমিতি সদস্যপদ আবেদনের ১ম মাসের কিস্তি ৳${requiredFirstMonthAmount.toLocaleString('bn-BD')} মেইন ওয়ালেট থেকে কেটে হোল্ডে রাখা হয়েছে। এডমিন অনুমোদন দিলে সঞ্চয়ে যুক্ত হবে, বাতিল হলে ওয়ালেটে রিফান্ড হবে।`,
+        createdAt: nowIso,
+        date: new Date().toLocaleDateString('en-GB'),
+        time: new Date().toLocaleTimeString(),
+        receiptNo: `REC-SAMITY-APP-${Date.now()}`
+      };
+
       await Promise.all([
         setDoc(userRef, updateData, { merge: true }),
-        setDoc(appRef, appData, { merge: true })
+        setDoc(appRef, appData, { merge: true }),
+        setDoc(txDocRef, txData)
       ]);
 
       if (isAutoApprove) {

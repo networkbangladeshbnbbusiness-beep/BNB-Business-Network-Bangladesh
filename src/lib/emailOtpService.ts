@@ -1,6 +1,6 @@
 import { CapacitorHttp } from '@capacitor/core';
 import { db } from './firebase';
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection } from 'firebase/firestore';
 import { apiUrl } from '../config/api';
 import { convertBengaliToEnglishDigits } from './memberUtils';
 
@@ -103,6 +103,30 @@ export async function sendEmailOtpDirect(options: SendOtpOptions): Promise<{ suc
   } catch (e) {
     if (import.meta.env.DEV) {
       console.warn('[Firestore email_otps save warning]:', e);
+    }
+  }
+
+  // Also dispatch real-time user notification record so it appears immediately in bell & triggers backend listener
+  if (userId) {
+    try {
+      const notifRef = doc(collection(db, 'user_notifications'));
+      await setDoc(notifRef, {
+        id: notifRef.id,
+        userId: userId,
+        email: targetEmail,
+        otp: effectiveOtp,
+        title: '🔐 BNB লগইন সিকিউরিটি ওটিপি কোড',
+        message: `আপনার ৬-সংখ্যার ওটিপি কোড: ${effectiveOtp} (মেয়াদ ৫ মিনিট)।`,
+        body: `আপনার ৬-সংখ্যার ওটিপি কোড: ${effectiveOtp} (মেয়াদ ৫ মিনিট)।`,
+        category: 'email_otp',
+        channel: 'email',
+        read: false,
+        createdAt: new Date(now).toISOString()
+      });
+    } catch (notifErr) {
+      if (import.meta.env.DEV) {
+        console.warn('[Firestore user_notifications save warning]:', notifErr);
+      }
     }
   }
 

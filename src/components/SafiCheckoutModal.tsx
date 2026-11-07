@@ -364,8 +364,10 @@ export default function SafiCheckoutModal({
 
   return (
     <div className="fixed inset-0 z-80 flex flex-col bg-[#f8fafc] font-sans text-slate-800 overflow-hidden">
+      <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+
       {/* 1. Full-Screen Sticky Header */}
-      <div className="bg-[#1e1e2d] text-white px-4 py-3 shrink-0 flex items-center justify-between shadow-md border-b border-white/10 z-20">
+      <div className="bg-[#004a2c] text-white px-4 py-3 shrink-0 flex items-center justify-between shadow-md border-b border-white/10 z-20">
         <div className="flex items-center gap-2.5">
           <button
             type="button"
@@ -388,7 +390,7 @@ export default function SafiCheckoutModal({
                 {step === 1 ? 'ধাপ ১/২' : 'ধাপ ২/২'}
               </span>
             </h2>
-            <span className="text-[9px] text-slate-300 font-medium">
+            <span className="text-[9px] text-emerald-100 font-medium">
               {step === 1 ? 'ঠিকানা ও যোগাযোগের তথ্য প্রদান' : 'অর্ডার রিভিউ ও সিকিউরিটি পিন'}
             </span>
           </div>

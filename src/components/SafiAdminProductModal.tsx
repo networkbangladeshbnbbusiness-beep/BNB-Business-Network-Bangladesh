@@ -166,6 +166,8 @@ export default function SafiAdminProductModal({
 
   return (
     <div className="fixed inset-0 z-70 flex flex-col bg-[#f8fafc] w-screen h-screen overflow-hidden font-sans">
+      <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+      
       <motion.div 
         initial={{ scale: 0.98, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
@@ -173,19 +175,19 @@ export default function SafiAdminProductModal({
         className="bg-white w-full h-full flex flex-col overflow-hidden text-left"
       >
         {/* Modal Header */}
-        <div className="bg-gradient-to-r from-amber-600 via-orange-600 to-amber-700 text-white p-4 flex items-center justify-between shrink-0 shadow-md">
+        <div className="bg-[#004a2c] text-white p-4 flex items-center justify-between shrink-0 shadow-md border-b border-white/10">
           <div>
             <h3 className="text-sm sm:text-base font-black flex items-center gap-1.5">
               <span>{editingProduct ? '✏️ সাফি পণ্য তথ্য আপডেট' : '➕ নতুন সাফি পণ্য আপলোড (AliExpress Style)'}</span>
             </h3>
-            <p className="text-[10px] text-amber-100 font-medium">৩-৪টি গ্যালারি ছবি ও বিস্তারিত ডেসক্রিপশন বক্স সহ পোস্ট করুন</p>
+            <p className="text-[10px] text-emerald-100/70 font-medium">৩-৪টি গ্যালারি ছবি ও বিস্তারিত ডেসক্রিপশন বক্স সহ পোস্ট করুন</p>
           </div>
           <button 
             type="button"
             onClick={onClose}
-            className="w-7 h-7 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-white cursor-pointer font-bold"
+            className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white cursor-pointer transition"
           >
-            ✕
+            <X className="w-5 h-5" />
           </button>
         </div>
 

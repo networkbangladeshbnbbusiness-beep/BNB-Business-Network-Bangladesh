@@ -30,18 +30,20 @@ export interface WalletTransactionRequest {
  */
 export const getEffectiveBalance = (u: any): number => {
   if (!u) return 0;
-  const numBalance = (u.balance !== undefined && u.balance !== null && u.balance !== '' && !isNaN(Number(u.balance)))
+  const numBalance = (u.balance !== undefined && u.balance !== null && u.balance !== '' && Number.isFinite(Number(u.balance)))
     ? Number(u.balance)
     : null;
-  const numMainBalance = (u.mainBalance !== undefined && u.mainBalance !== null && u.mainBalance !== '' && !isNaN(Number(u.mainBalance)))
+  const numMainBalance = (u.mainBalance !== undefined && u.mainBalance !== null && u.mainBalance !== '' && Number.isFinite(Number(u.mainBalance)))
     ? Number(u.mainBalance)
     : null;
 
   if (numBalance !== null && numMainBalance !== null) {
+    if (numBalance <= 0 && numMainBalance > 0) return numMainBalance;
+    if (numMainBalance <= 0 && numBalance > 0) return numBalance;
     return numBalance;
   }
-  if (numBalance !== null) return numBalance;
-  if (numMainBalance !== null) return numMainBalance;
+  if (numBalance !== null) return Math.max(0, numBalance);
+  if (numMainBalance !== null) return Math.max(0, numMainBalance);
   return 0;
 };
 

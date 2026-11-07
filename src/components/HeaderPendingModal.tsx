@@ -613,18 +613,20 @@ export const HeaderPendingModal: React.FC<HeaderPendingModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-[100000] bg-slate-900/75 backdrop-blur-xs flex flex-col w-screen h-screen min-h-screen text-left overflow-hidden animate-fade-in font-sans p-0 m-0 text-slate-800">
+      <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+      
       <div className="bg-[#f8fafc] w-full h-full flex flex-col overflow-hidden font-sans">
         
         {/* TOAST COPIED NOTICE */}
         {copiedText && (
-          <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100002] bg-slate-900 text-amber-300 border border-amber-400/50 shadow-2xl px-4 py-1.5 rounded-full font-bold text-xs flex items-center gap-1.5 animate-bounce">
+          <div className="fixed top-14 left-1/2 -translate-x-1/2 z-[100002] bg-slate-900 text-amber-300 border border-amber-400/50 shadow-2xl px-4 py-1.5 rounded-full font-bold text-xs flex items-center gap-1.5 animate-bounce">
             <Check className="w-3.5 h-3.5 text-emerald-400" />
             <span>{copiedText}</span>
           </div>
         )}
 
         {/* 1. TOP HEADER BAR */}
-        <div className="px-3 sm:px-4 py-2 bg-[#0f172a] text-white flex items-center justify-between shrink-0 border-b border-slate-800 shadow-xs">
+        <div className="px-3 sm:px-4 py-2 bg-[#004a2c] text-white flex items-center justify-between shrink-0 border-b border-white/10 shadow-xs">
           <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
             <div className="flex items-center gap-1.5 font-black text-xs sm:text-sm text-white">
               <span>🕒</span>

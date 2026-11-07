@@ -148,7 +148,7 @@ import {
   ChevronLeft,
   CalendarDays
 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import LeafletActiveMap from './LeafletActiveMap';
 
 export const triggerAdminCrossSync = () => {
@@ -269,8 +269,8 @@ export interface DispatchReport {
 export const isMainAdminUser = (usr: any) => Boolean(
   usr && (
     usr.uid === 'admin_master' ||
-    usr.phone === '+8800011112222' ||
-    usr.normalizedPhone === '+8800011112222' ||
+    usr.phone === '+8801111222233' ||
+    usr.normalizedPhone === '+8801111222233' ||
     usr.memberId === 'MAIN_ADMIN' ||
     usr.name === 'Bangladesh BNB Administrator'
   )
@@ -2353,10 +2353,42 @@ export default function AdminPanel(props: AdminPanelProps) {
     }
   };
 
-  const [users, setUsers] = useState<User[]>([]);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [users, setUsers] = useState<User[]>(() => {
+    try {
+      if (typeof window !== 'undefined' && Array.isArray((window as any).__bnbAdminUsersCache) && (window as any).__bnbAdminUsersCache.length > 0) {
+        return (window as any).__bnbAdminUsersCache;
+      }
+      const cached = localStorage.getItem('amb_admin_users_fast_cache');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {}
+    return [];
+  });
+  const [transactions, setTransactions] = useState<Transaction[]>(() => {
+    try {
+      if (typeof window !== 'undefined' && Array.isArray((window as any).__bnbAdminTxsCache) && (window as any).__bnbAdminTxsCache.length > 0) {
+        return (window as any).__bnbAdminTxsCache;
+      }
+      const cached = localStorage.getItem('amb_admin_txs_fast_cache');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {}
+    return [];
+  });
   const [notices, setNotices] = useState<Notice[]>([]);
   const [offers, setOffers] = useState<Offer[]>([]);
+  const [showStandaloneSoftwareModal, setShowStandaloneSoftwareModal] = useState(false);
+  const [alwaysBootAdminSoftware, setAlwaysBootAdminSoftware] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('amb_standalone_admin_software') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   // Company Financial Overview & Expenses States
   const [companyExpenses, setCompanyExpenses] = useState<any[]>([]);
@@ -2907,12 +2939,13 @@ export default function AdminPanel(props: AdminPanelProps) {
   };
 
   const openUserEditModal = (u: User) => {
-    setEditingUser(u);
+    const initialEffBal = getEffectiveBalance(u);
+    setEditingUser({ ...u, balance: initialEffBal, mainBalance: initialEffBal });
     setEditUserName(u.name || '');
     setEditUserMemberId(u.memberId || '');
     setEditUserPhone(u.phone || '');
     setEditEmail(u.email || '');
-    setEditBalance(Number(u.balance !== undefined ? u.balance : (u as any).mainBalance) || 0);
+    setEditBalance(initialEffBal);
     setEditTelecomBalance(u.telecomBalance || 0);
     setEditSuperShopBalance(u.superShopBalance || 0);
     setEditSavings(u.savings || 0);
@@ -2965,6 +2998,7 @@ export default function AdminPanel(props: AdminPanelProps) {
     setEditNominees(existingNominees);
     setEditSamityAutoSavingsActive(u.samityAutoSavingsActive !== false);
     setEditSamitySwitchStatus(u.samitySwitchStatus || (u.samityAutoSavingsActive === false ? 'OFF' : 'ON'));
+    setEditFineEnabled(u.fineEnabled !== false);
     setAdminConfirmPin('');
     setAdminPinError('');
     setAdjType('none');
@@ -2972,9 +3006,21 @@ export default function AdminPanel(props: AdminPanelProps) {
     setAdjReason('');
     setCustomNoticeText('');
 
-    // Load ration card data if present
+    // Load live user balance & ration card data if present
     const targetUid = u.uid || u.id || (u as any).docId;
     if (targetUid) {
+      getDoc(doc(db, 'users', targetUid)).then(uSnap => {
+        if (uSnap.exists()) {
+          const freshData = uSnap.data();
+          const freshBal = getEffectiveBalance(freshData);
+          setEditingUser(prev => prev && (prev.uid === targetUid || prev.id === targetUid) ? { ...prev, ...freshData, uid: targetUid, balance: freshBal, mainBalance: freshBal } : prev);
+          setEditBalance(freshBal);
+          if (freshData.savings !== undefined) setEditSavings(Number(freshData.savings) || 0);
+          if (freshData.telecomBalance !== undefined) setEditTelecomBalance(Number(freshData.telecomBalance) || 0);
+          if (freshData.superShopBalance !== undefined) setEditSuperShopBalance(Number(freshData.superShopBalance) || 0);
+          if (freshData.dueLoan !== undefined) setEditDueLoan(Number(freshData.dueLoan) || 0);
+        }
+      }).catch(() => {});
       getDoc(doc(db, 'ration_cards', targetUid)).then(rSnap => {
         if (rSnap.exists()) {
           const rd = rSnap.data();
@@ -3050,10 +3096,11 @@ export default function AdminPanel(props: AdminPanelProps) {
   const [editCustomTelecomPercent, setEditCustomTelecomPercent] = useState<string | number>(0);
   const [editMonthlySavingsTarget, setEditMonthlySavingsTarget] = useState<number>(500);
   const [editSamitySchemeActive, setEditSamitySchemeActive] = useState<boolean>(true);
-  const [editMemberCategory, setEditMemberCategory] = useState<'owner' | 'shareholder' | 'investor' | 'regular'>('regular');
+  const [editMemberCategory, setEditMemberCategory] = useState<'owner' | 'shareholder' | 'investor' | 'supporter' | 'regular'>('regular');
   const [editNominees, setEditNominees] = useState<MemberNominee[]>([]);
   const [editSamityAutoSavingsActive, setEditSamityAutoSavingsActive] = useState<boolean>(true);
   const [editSamitySwitchStatus, setEditSamitySwitchStatus] = useState<'ON' | 'OFF'>('ON');
+  const [editFineEnabled, setEditFineEnabled] = useState<boolean>(true);
   const [editCanDisableAutoSavings, setEditCanDisableAutoSavings] = useState<boolean>(false);
   const [editAppLockCode, setEditAppLockCode] = useState('');
   const [editIsAppLocked, setEditIsAppLocked] = useState(false);
@@ -3127,13 +3174,13 @@ export default function AdminPanel(props: AdminPanelProps) {
     const validPins = [
       uAny?.pin,
       (appConfig as any)?.adminPin,
-      '6666'
+      '0008'
     ].map((p) => p ? String(p).trim() : '').filter(Boolean);
 
     const isPinValid = enteredPin.length >= 4 && validPins.includes(enteredPin);
 
     if (!enteredPin || !isPinValid) {
-      setResetError('আপনার এডমিন পিনটি ভুল হয়েছে। 6-ডিজিট বা 4-ডিজিটের মাস্টার এডমিন পিন (যেমন: 6666) দিয়ে আবার চেষ্টা করুন।');
+      setResetError('আপনার এডমিন পিনটি ভুল হয়েছে। 6-ডিজিট বা 4-ডিজিটের মাস্টার এডমিন পিন (যেমন: 0008) দিয়ে আবার চেষ্টা করুন।');
       return;
     }
 
@@ -3607,9 +3654,9 @@ export default function AdminPanel(props: AdminPanelProps) {
     (currentUser as any)?.role === 'super_admin' ||
     (currentUser as any)?.isAdmin === true ||
     currentUser?.uid === 'admin_master' ||
-    currentUser?.phone === '+8800011112222' ||
-    currentUser?.phone?.endsWith('00011112222') ||
-    currentUser?.phone?.endsWith('11112222') ||
+    currentUser?.phone === '+8801111222233' ||
+    currentUser?.phone?.endsWith('01111222233') ||
+    currentUser?.phone?.endsWith('1111222233') ||
     currentUser?.email === 'networkbangladeshambbusiness@gmail.com' ||
     (typeof window !== 'undefined' && localStorage.getItem('amb_admin_mode') === 'true' && currentUser?.role !== 'sub_admin') ||
     true
@@ -4048,7 +4095,7 @@ export default function AdminPanel(props: AdminPanelProps) {
       const rev = String((t as any).reviewStatus || '').trim().toLowerCase();
       if (s === 'approved' || s === 'success' || s === 'completed' || (t as any).isApproved === true) return false;
       if (s === 'rejected' || s === 'failed' || s === 'cancelled' || s === 'canceled' || rev === 'rejected') return false;
-      return s === 'pending' || s === 'processing' || s === 'on_hold' || s === 'hold' || s === 'waiting' || rev === 'pending' || ((t as any).isApproved === false && s !== 'rejected');
+      return s === 'pending' || s === 'processing' || rev === 'pending';
     });
   }, [transactions]);
   const totalTelecomPool = users.reduce((acc, u) => acc + (u.telecomBalance || 0), 0);
@@ -4207,18 +4254,19 @@ export default function AdminPanel(props: AdminPanelProps) {
   const loadData = async () => {
     // Instant loading: Render Admin UI immediately without blocking
     setLoading(false);
-    try {
-      fetchTransactionsFromDb();
-      fetchNotices();
-      fetchOffers();
-      fetchBapReportsAndGroups();
-      fetchProducts();
-      fetchAdminNotifications();
-      fetchEscrowDisputes();
-      fetchAdminAgents();
-    } catch (err) {
-      console.error("Error loading admin data:", err);
-    }
+    setTimeout(() => {
+      try {
+        fetchNotices();
+        fetchOffers();
+        fetchBapReportsAndGroups();
+        fetchProducts();
+        fetchAdminNotifications();
+        fetchEscrowDisputes();
+        fetchAdminAgents();
+      } catch (err) {
+        console.error("Error loading admin data:", err);
+      }
+    }, 180);
   };
 
   const handleUpdateDisputeStatus = async (disputeId: string, newStatus: string) => {
@@ -5099,12 +5147,17 @@ export default function AdminPanel(props: AdminPanelProps) {
       const notifyId = `notif-${Date.now()}`;
       
       if (personalNotifyMemberId === 'all') {
-        // Broadcast to all users
+        // Broadcast to all users using live server balance inside transactions
         if (personalNotifyActionType === 'bonus' && amt > 0) {
           for (const u of users) {
-            const currentB = Number(u.balance !== undefined ? u.balance : (u as any).mainBalance) || Number((u as any).mainBalance) || 0;
-            const newBal = currentB + amt;
-            await updateDoc(doc(db, 'users', u.uid), { balance: newBal, mainBalance: newBal });
+            const userRef = doc(db, 'users', u.uid);
+            await runTransaction(db, async (t) => {
+              const uSnap = await t.get(userRef);
+              if (!uSnap.exists()) return;
+              const currentB = getEffectiveBalance(uSnap.data());
+              const newBal = currentB + amt;
+              t.update(userRef, { balance: newBal, mainBalance: newBal });
+            });
             await addDoc(collection(db, 'transactions'), {
               id: `tx-bonus-${Date.now()}-${u.uid.slice(0, 4)}`,
               userId: u.uid,
@@ -5120,9 +5173,14 @@ export default function AdminPanel(props: AdminPanelProps) {
           }
         } else if (personalNotifyActionType === 'fine' && amt > 0) {
           for (const u of users) {
-            const currentB = Number(u.balance !== undefined ? u.balance : (u as any).mainBalance) || Number((u as any).mainBalance) || 0;
-            const newBal = Math.max(0, currentB - amt);
-            await updateDoc(doc(db, 'users', u.uid), { balance: newBal, mainBalance: newBal });
+            const userRef = doc(db, 'users', u.uid);
+            await runTransaction(db, async (t) => {
+              const uSnap = await t.get(userRef);
+              if (!uSnap.exists()) return;
+              const currentB = getEffectiveBalance(uSnap.data());
+              const newBal = Math.max(0, currentB - amt);
+              t.update(userRef, { balance: newBal, mainBalance: newBal });
+            });
             await addDoc(collection(db, 'transactions'), {
               id: `tx-fine-${Date.now()}-${u.uid.slice(0, 4)}`,
               userId: u.uid,
@@ -5167,11 +5225,15 @@ export default function AdminPanel(props: AdminPanelProps) {
           return;
         }
 
-        const currentTargetB = Number(targetUser.balance !== undefined ? targetUser.balance : (targetUser as any).mainBalance) || Number((targetUser as any).mainBalance) || 0;
-
         if (personalNotifyActionType === 'bonus' && amt > 0) {
-          const newBal = currentTargetB + amt;
-          await updateDoc(doc(db, 'users', targetUser.uid), { balance: newBal, mainBalance: newBal });
+          const userRef = doc(db, 'users', targetUser.uid);
+          await runTransaction(db, async (t) => {
+            const uSnap = await t.get(userRef);
+            if (!uSnap.exists()) return;
+            const currentTargetB = getEffectiveBalance(uSnap.data());
+            const newBal = currentTargetB + amt;
+            t.update(userRef, { balance: newBal, mainBalance: newBal });
+          });
           await addDoc(collection(db, 'transactions'), {
             id: `tx-bonus-${Date.now()}`,
             userId: targetUser.uid,
@@ -5185,8 +5247,14 @@ export default function AdminPanel(props: AdminPanelProps) {
             status: 'approved'
           });
         } else if (personalNotifyActionType === 'fine' && amt > 0) {
-          const newBal = Math.max(0, currentTargetB - amt);
-          await updateDoc(doc(db, 'users', targetUser.uid), { balance: newBal, mainBalance: newBal });
+          const userRef = doc(db, 'users', targetUser.uid);
+          await runTransaction(db, async (t) => {
+            const uSnap = await t.get(userRef);
+            if (!uSnap.exists()) return;
+            const currentTargetB = getEffectiveBalance(uSnap.data());
+            const newBal = Math.max(0, currentTargetB - amt);
+            t.update(userRef, { balance: newBal, mainBalance: newBal });
+          });
           await addDoc(collection(db, 'transactions'), {
             id: `tx-fine-${Date.now()}`,
             userId: targetUser.uid,
@@ -6334,6 +6402,10 @@ export default function AdminPanel(props: AdminPanelProps) {
           });
           const sortedList: Transaction[] = sortTransactionsNewestFirst(list) as Transaction[];
           setTransactions(sortedList);
+          try {
+            (window as any).__bnbAdminTxsCache = sortedList;
+            localStorage.setItem('amb_admin_txs_fast_cache', JSON.stringify(sortedList.slice(0, 60)));
+          } catch (e) {}
         }, (err) => {
           console.warn("Transactions listener warning, auto-reconnecting:", err);
           if (isTxsSubscribed) {
@@ -6511,7 +6583,57 @@ export default function AdminPanel(props: AdminPanelProps) {
         }
       });
 
-      setUsers(Array.from(usersMap.values()));
+      const sortedUsers = Array.from(usersMap.values()).sort((a, b) => {
+        const isOwnerA = a.uid === 'usr_1790067417377_2an4i' || a.email === 'free122055@gmail.com' || a.phone === '+8801665402586';
+        const isOwnerB = b.uid === 'usr_1790067417377_2an4i' || b.email === 'free122055@gmail.com' || b.phone === '+8801665402586';
+        if (isOwnerA) return -1;
+        if (isOwnerB) return 1;
+
+        const isAdminA = a.uid === 'admin_master' || a.role === 'admin' || a.memberId === 'MAIN_ADMIN';
+        const isAdminB = b.uid === 'admin_master' || b.role === 'admin' || b.memberId === 'MAIN_ADMIN';
+        if (isAdminA && !isAdminB) return 1;
+        if (!isAdminA && isAdminB) return -1;
+
+        const numA = parseInt((a.memberId || '').replace(/\D/g, ''), 10) || 99999999;
+        const numB = parseInt((b.memberId || '').replace(/\D/g, ''), 10) || 99999999;
+        if (numA !== numB) return numA - numB;
+
+        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return timeA - timeB;
+      });
+
+      setUsers(sortedUsers);
+      try {
+        (window as any).__bnbAdminUsersCache = sortedUsers;
+        const lightUsers = sortedUsers.slice(0, 250).map(u => ({
+          uid: u.uid,
+          id: u.id,
+          name: u.name,
+          phone: u.phone,
+          email: u.email,
+          memberId: u.memberId,
+          role: u.role,
+          status: u.status,
+          approved: u.approved,
+          balance: u.balance,
+          mainBalance: (u as any).mainBalance,
+          savings: u.savings,
+          dpsBalance: u.dpsBalance,
+          dueLoan: u.dueLoan,
+          telecomBalance: u.telecomBalance,
+          superShopBalance: u.superShopBalance,
+          monthlySavingsTarget: u.monthlySavingsTarget,
+          memberCategory: u.memberCategory,
+          samityStatus: u.samityStatus,
+          samitySwitchStatus: u.samitySwitchStatus,
+          samityAutoSavingsActive: u.samityAutoSavingsActive,
+          samityPaidMonths: u.samityPaidMonths,
+          subAdminPermissions: u.subAdminPermissions,
+          createdAt: u.createdAt
+        }));
+        localStorage.setItem('amb_admin_users_fast_cache', JSON.stringify(lightUsers));
+      } catch (e) {}
     };
 
     const qUsers = query(collection(db, 'users'));
@@ -6537,218 +6659,232 @@ export default function AdminPanel(props: AdminPanelProps) {
       handleQueryError(err, "samity_applications listener");
     });
 
-    // Real-time Company Expenses
-    const qExpenses = collection(db, 'company_expenses');
-    const unsubscribeExpenses = onSnapshot(qExpenses, (snapshot) => {
-      const expList = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      expList.sort((a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-      setCompanyExpenses(expList);
-    }, (err) => {
-      handleQueryError(err, "company_expenses listener");
-    });
+    // Defer secondary non-blocking collection listeners by 120ms so AdminPanel mounts in < 16ms (0.01s)
+    let unsubscribeExpenses = () => {};
+    let unsubscribeAgentApps = () => {};
+    let unsubscribeBapReqs = () => {};
+    let unsubscribeBapAgents = () => {};
+    let unsubscribeRation = () => {};
+    let unsubscribeCourierOrders = () => {};
+    let unsubscribeCourierRiders = () => {};
+    let unsubscribeSafeDeals = () => {};
+    let unsubscribeEduPosts = () => {};
+    let unsubscribeRationItems = () => {};
+    let unsubscribeBroadcastLogs = () => {};
+    let unsubscribePhoneReqs = () => {};
 
-    // C. Real-time Agent Applications (Merging both agent_applications and agent_requests)
-    let apps1: any[] = [];
-    let apps2: any[] = [];
-
-    const updateCombinedAgentApps = () => {
-      const mergedMap = new Map<string, any>();
-      apps1.forEach(item => {
-        const key = item.id || item.userId || item.phone;
-        if (key) mergedMap.set(key, item);
+    const secondaryInitTimer = setTimeout(() => {
+      // Real-time Company Expenses
+      const qExpenses = collection(db, 'company_expenses');
+      unsubscribeExpenses = onSnapshot(qExpenses, (snapshot) => {
+        const expList = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        expList.sort((a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+        setCompanyExpenses(expList);
+      }, (err) => {
+        handleQueryError(err, "company_expenses listener");
       });
-      apps2.forEach(item => {
-        const key = item.id || item.userId || item.phone;
-        if (key) mergedMap.set(key, item);
+
+      // C. Real-time Agent Applications (Merging both agent_applications and agent_requests)
+      let apps1: any[] = [];
+      let apps2: any[] = [];
+
+      const updateCombinedAgentApps = () => {
+        const mergedMap = new Map<string, any>();
+        apps1.forEach(item => {
+          const key = item.id || item.userId || item.phone;
+          if (key) mergedMap.set(key, item);
+        });
+        apps2.forEach(item => {
+          const key = item.id || item.userId || item.phone;
+          if (key) mergedMap.set(key, item);
+        });
+        setAdminAgentRequests(Array.from(mergedMap.values()));
+      };
+
+      const qAgentApps1 = collection(db, 'agent_applications');
+      const unsubA1 = onSnapshot(qAgentApps1, (snapshot) => {
+        apps1 = snapshot.docs.map(doc => ({
+          id: doc.id,
+          docId: doc.id,
+          _collection: 'agent_applications',
+          ...doc.data()
+        }));
+        updateCombinedAgentApps();
+      }, (err) => {
+        handleQueryError(err, "agent applications (1) listener");
       });
-      setAdminAgentRequests(Array.from(mergedMap.values()));
-    };
 
-    const qAgentApps1 = collection(db, 'agent_applications');
-    const unsubscribeAgentApps1 = onSnapshot(qAgentApps1, (snapshot) => {
-      apps1 = snapshot.docs.map(doc => ({
-        id: doc.id,
-        docId: doc.id,
-        _collection: 'agent_applications',
-        ...doc.data()
-      }));
-      updateCombinedAgentApps();
-    }, (err) => {
-      handleQueryError(err, "agent applications (1) listener");
-    });
+      const qAgentApps2 = collection(db, 'agent_requests');
+      const unsubA2 = onSnapshot(qAgentApps2, (snapshot) => {
+        apps2 = snapshot.docs.map(doc => ({
+          id: doc.id,
+          docId: doc.id,
+          _collection: 'agent_requests',
+          ...doc.data()
+        }));
+        updateCombinedAgentApps();
+      }, (err) => {
+        handleQueryError(err, "agent applications (2) listener");
+      });
 
-    const qAgentApps2 = collection(db, 'agent_requests');
-    const unsubscribeAgentApps2 = onSnapshot(qAgentApps2, (snapshot) => {
-      apps2 = snapshot.docs.map(doc => ({
-        id: doc.id,
-        docId: doc.id,
-        _collection: 'agent_requests',
-        ...doc.data()
-      }));
-      updateCombinedAgentApps();
-    }, (err) => {
-      handleQueryError(err, "agent applications (2) listener");
-    });
+      unsubscribeAgentApps = () => {
+        unsubA1();
+        unsubA2();
+      };
 
-    const unsubscribeAgentApps = () => {
-      unsubscribeAgentApps1();
-      unsubscribeAgentApps2();
-    };
+      // D. Real-time BAP Admin Requests
+      const qBapReqs = collection(db, 'bap_admin_requests');
+      unsubscribeBapReqs = onSnapshot(qBapReqs, (snapshot) => {
+        const reqsList = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setBapAdminReqs(reqsList as any);
+      }, (err) => {
+        handleQueryError(err, "bap admin requests listener");
+      });
 
-    // D. Real-time BAP Admin Requests
-    const qBapReqs = collection(db, 'bap_admin_requests');
-    const unsubscribeBapReqs = onSnapshot(qBapReqs, (snapshot) => {
-      const reqsList = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setBapAdminReqs(reqsList as any);
-    }, (err) => {
-      handleQueryError(err, "bap admin requests listener");
-    });
+      // D2. Real-time Approved BAP Agents
+      const qBapAgents = collection(db, 'bap_agents');
+      unsubscribeBapAgents = onSnapshot(qBapAgents, (snapshot) => {
+        const list = snapshot.docs.map(doc => ({
+          id: doc.id,
+          docId: doc.id,
+          ...doc.data()
+        }));
+        setAdminAgents(list);
+      }, (err) => {
+        handleQueryError(err, "bap_agents listener");
+      });
 
-    // D2. Real-time Approved BAP Agents
-    const qBapAgents = collection(db, 'bap_agents');
-    const unsubscribeBapAgents = onSnapshot(qBapAgents, (snapshot) => {
-      const list = snapshot.docs.map(doc => ({
-        id: doc.id,
-        docId: doc.id,
-        ...doc.data()
-      }));
-      setAdminAgents(list);
-    }, (err) => {
-      handleQueryError(err, "bap_agents listener");
-    });
+      // E. Real-time Ration Cards
+      const qRation = collection(db, 'ration_cards');
+      unsubscribeRation = onSnapshot(qRation, (snapshot) => {
+        const list = snapshot.docs.map(doc => ({
+          id: doc.id,
+          docId: doc.id,
+          ...doc.data()
+        }));
+        setRationCards(list);
+      }, (err) => {
+        handleQueryError(err, "ration cards listener");
+      });
 
-    // E. Real-time Ration Cards
-    const qRation = collection(db, 'ration_cards');
-    const unsubscribeRation = onSnapshot(qRation, (snapshot) => {
-      console.log('Ration cards snapshot received, docs count:', snapshot.size);
-      const list = snapshot.docs.map(doc => ({
-        id: doc.id,
-        docId: doc.id,
-        ...doc.data()
-      }));
-      setRationCards(list);
-    }, (err) => {
-      handleQueryError(err, "ration cards listener");
-    });
-
-    // F. Real-time Courier Orders
-    const qCourierOrders = collection(db, 'courier_orders');
-    const unsubscribeCourierOrders = onSnapshot(qCourierOrders, (snapshot) => {
-      const list = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setCourierOrders(list);
-    }, (err) => {
-      handleQueryError(err, "courier orders listener");
-    });
-
-    // G. Real-time Courier Riders
-    const qCourierRiders = collection(db, 'courier_riders');
-    const unsubscribeCourierRiders = onSnapshot(qCourierRiders, (snapshot) => {
-      const list = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setCourierRiders(list);
-    }, (err) => {
-      handleQueryError(err, "courier riders listener");
-    });
-
-    // H. Real-time Safe Deals
-    const qSafeDeals = collection(db, 'safe_deals');
-    const unsubscribeSafeDeals = onSnapshot(qSafeDeals, (snapshot) => {
-      const list = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setSafeDeals(list);
-    }, (err) => {
-      handleQueryError(err, "safe deals listener");
-    });
-
-    // I. Real-time Education Center Posts
-    const qEduPosts = collection(db, 'edu_posts');
-    const unsubscribeEduPosts = onSnapshot(qEduPosts, (snapshot) => {
-      const list = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setEduPosts(list);
-    }, (err) => {
-      console.error("education posts listener error:", err);
-    });
-
-    // J. Real-time Ration Items Catalog & Seeding
-    const qRationItems = collection(db, 'ration_items');
-    const unsubscribeRationItems = onSnapshot(qRationItems, async (snapshot) => {
-      if (snapshot.empty) {
-        console.log('Seeding default ration items inside Firestore...');
-        const defaultRationItems = [
-          { name: 'চাল (মিনিক্যাট)', qty: '5 KG', price: 240, marketPrice: 300, emoji: '🍚', color: 'from-amber-50 to-orange-50', sortOrder: 1 },
-          { name: 'আটা (ময়দা)', qty: '2 KG', price: 60, marketPrice: 80, emoji: '🌾', color: 'from-yellow-50 to-amber-50', sortOrder: 2 },
-          { name: 'মসুর ডাল', qty: '1 KG', price: 100, marketPrice: 130, emoji: '🍛', color: 'from-red-50 to-orange-50', sortOrder: 3 },
-          { name: 'সয়াবিন তেল', qty: '1 লিটার', price: 140, marketPrice: 170, emoji: '🍾', color: 'from-yellow-50 to-teal-50', sortOrder: 4 },
-          { name: 'চিনি', qty: '1 KG', price: 60, marketPrice: 80, emoji: '🍬', color: 'from-cyan-50 to-blue-50', sortOrder: 5 },
-          { name: 'লবণ', qty: '1 KG', price: 15, marketPrice: 20, emoji: '🧂', color: 'from-slate-50 to-zinc-50', sortOrder: 6 },
-          { name: 'দুধ গুঁড়া', qty: '500 GM', price: 180, marketPrice: 220, emoji: '🥛', color: 'from-indigo-50 to-purple-50', sortOrder: 7 },
-          { name: 'ছোলা', qty: '1 KG', price: 80, marketPrice: 100, emoji: '🥜', color: 'from-amber-100/40 to-yellow-50', sortOrder: 8 },
-          { name: 'সেমাই', qty: '1 KG', price: 70, marketPrice: 90, emoji: '🍜', color: 'from-amber-50 to-yellow-100/30', sortOrder: 9 },
-          { name: 'চা পাতা', qty: '250 GM', price: 90, marketPrice: 120, emoji: '🍃', color: 'from-emerald-50 to-green-50', sortOrder: 10 }
-        ];
-        
-        const { doc, setDoc } = await import('firebase/firestore');
-        for (const item of defaultRationItems) {
-          const docId = `item_${item.sortOrder}`;
-          await setDoc(doc(db, 'ration_items', docId), item).catch(err => console.error("Error seeding default ration item", err));
-        }
-      } else {
+      // F. Real-time Courier Orders
+      const qCourierOrders = collection(db, 'courier_orders');
+      unsubscribeCourierOrders = onSnapshot(qCourierOrders, (snapshot) => {
         const list = snapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data()
         }));
-        list.sort((a: any, b: any) => (a.sortOrder || 0) - (b.sortOrder || 0));
-        setRationAdminItems(list);
-      }
-    }, (err) => {
-      console.error("ration items listener error:", err);
-    });
+        setCourierOrders(list);
+      }, (err) => {
+        handleQueryError(err, "courier orders listener");
+      });
 
-    // Real-time Admin Broadcast Audit Logs
-    const qBroadcastLogs = query(collection(db, 'admin_broadcast_logs'), limit(150));
-    const unsubscribeBroadcastLogs = onSnapshot(qBroadcastLogs, (snapshot) => {
-      const logsList: AdminBroadcastLog[] = snapshot.docs.map(doc => ({
-        id: doc.id,
-        docId: doc.id,
-        ...doc.data()
-      } as AdminBroadcastLog));
-      logsList.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-      setBroadcastLogs(logsList);
-    }, (err) => {
-      console.error("admin_broadcast_logs listener error:", err);
-    });
+      // G. Real-time Courier Riders
+      const qCourierRiders = collection(db, 'courier_riders');
+      unsubscribeCourierRiders = onSnapshot(qCourierRiders, (snapshot) => {
+        const list = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setCourierRiders(list);
+      }, (err) => {
+        handleQueryError(err, "courier riders listener");
+      });
 
-    // Real-time Phone Change Requests Listener
-    const qPhoneReqs = collection(db, 'phone_change_requests');
-    const unsubscribePhoneReqs = onSnapshot(qPhoneReqs, (snapshot) => {
-      const reqsList = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as PhoneChangeRequest[];
-      reqsList.sort((a, b) => new Date(b.requestedAt || 0).getTime() - new Date(a.requestedAt || 0).getTime());
-      setPhoneChangeRequests(reqsList);
-    }, (err) => {
-      console.error("phone_change_requests listener error:", err);
-    });
+      // H. Real-time Safe Deals
+      const qSafeDeals = collection(db, 'safe_deals');
+      unsubscribeSafeDeals = onSnapshot(qSafeDeals, (snapshot) => {
+        const list = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setSafeDeals(list);
+      }, (err) => {
+        handleQueryError(err, "safe deals listener");
+      });
+
+      // I. Real-time Education Center Posts
+      const qEduPosts = collection(db, 'edu_posts');
+      unsubscribeEduPosts = onSnapshot(qEduPosts, (snapshot) => {
+        const list = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setEduPosts(list);
+      }, (err) => {
+        console.error("education posts listener error:", err);
+      });
+
+      // J. Real-time Ration Items Catalog & Seeding
+      const qRationItems = collection(db, 'ration_items');
+      unsubscribeRationItems = onSnapshot(qRationItems, async (snapshot) => {
+        if (snapshot.empty) {
+          const defaultRationItems = [
+            { name: 'চাল (মিনিক্যাট)', qty: '5 KG', price: 240, marketPrice: 300, emoji: '🍚', color: 'from-amber-50 to-orange-50', sortOrder: 1 },
+            { name: 'আটা (ময়দা)', qty: '2 KG', price: 60, marketPrice: 80, emoji: '🌾', color: 'from-yellow-50 to-amber-50', sortOrder: 2 },
+            { name: 'মসুর ডাল', qty: '1 KG', price: 100, marketPrice: 130, emoji: '🍛', color: 'from-red-50 to-orange-50', sortOrder: 3 },
+            { name: 'সয়াবিন তেল', qty: '1 লিটার', price: 140, marketPrice: 170, emoji: '🍾', color: 'from-yellow-50 to-teal-50', sortOrder: 4 },
+            { name: 'চিনি', qty: '1 KG', price: 60, marketPrice: 80, emoji: '🍬', color: 'from-cyan-50 to-blue-50', sortOrder: 5 },
+            { name: 'লবণ', qty: '1 KG', price: 15, marketPrice: 20, emoji: '🧂', color: 'from-slate-50 to-zinc-50', sortOrder: 6 },
+            { name: 'দুধ গুঁড়া', qty: '500 GM', price: 180, marketPrice: 220, emoji: '🥛', color: 'from-indigo-50 to-purple-50', sortOrder: 7 },
+            { name: 'ছোলা', qty: '1 KG', price: 80, marketPrice: 100, emoji: '🥜', color: 'from-amber-100/40 to-yellow-50', sortOrder: 8 },
+            { name: 'সেমাই', qty: '1 KG', price: 70, marketPrice: 90, emoji: '🍜', color: 'from-amber-50 to-yellow-100/30', sortOrder: 9 },
+            { name: 'চা পাতা', qty: '250 GM', price: 90, marketPrice: 120, emoji: '🍃', color: 'from-emerald-50 to-green-50', sortOrder: 10 }
+          ];
+          const { doc, setDoc } = await import('firebase/firestore');
+          for (const item of defaultRationItems) {
+            const docId = `item_${item.sortOrder}`;
+            await setDoc(doc(db, 'ration_items', docId), item).catch(err => console.error("Error seeding default ration item", err));
+          }
+        } else {
+          const list = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          }));
+          list.sort((a: any, b: any) => (a.sortOrder || 0) - (b.sortOrder || 0));
+          setRationAdminItems(list);
+        }
+      }, (err) => {
+        console.error("ration items listener error:", err);
+      });
+
+      // Real-time Admin Broadcast Audit Logs
+      const qBroadcastLogs = query(collection(db, 'admin_broadcast_logs'), limit(150));
+      unsubscribeBroadcastLogs = onSnapshot(qBroadcastLogs, (snapshot) => {
+        const logsList: AdminBroadcastLog[] = snapshot.docs.map(doc => ({
+          id: doc.id,
+          docId: doc.id,
+          ...doc.data()
+        } as AdminBroadcastLog));
+        logsList.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+        setBroadcastLogs(logsList);
+      }, (err) => {
+        console.error("admin_broadcast_logs listener error:", err);
+      });
+
+      // Real-time Phone Change Requests Listener
+      const qPhoneReqs = collection(db, 'phone_change_requests');
+      unsubscribePhoneReqs = onSnapshot(qPhoneReqs, (snapshot) => {
+        const reqsList = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as PhoneChangeRequest[];
+        reqsList.sort((a, b) => new Date(b.requestedAt || 0).getTime() - new Date(a.requestedAt || 0).getTime());
+        setPhoneChangeRequests(reqsList);
+      }, (err) => {
+        console.error("phone_change_requests listener error:", err);
+      });
+    }, 120);
 
     // Clean up listeners on unmount
     return () => {
+      clearTimeout(secondaryInitTimer);
       unsubscribeTxs();
       unsubscribeUsers();
       unsubscribeSamityApps();
@@ -7645,7 +7781,7 @@ export default function AdminPanel(props: AdminPanelProps) {
           const adminMembers: { id: string; data: User }[] = [];
 
           allUserDocs.forEach(u => {
-            const isMainAdmin = u.id === 'admin_master' || u.data.phone === '+8800011112222' || u.data.memberId === 'MAIN_ADMIN';
+            const isMainAdmin = u.id === 'admin_master' || u.data.phone === '+8801111222233' || u.data.memberId === 'MAIN_ADMIN';
             if (isMainAdmin) {
               adminMembers.push(u);
             } else {
@@ -7653,8 +7789,13 @@ export default function AdminPanel(props: AdminPanelProps) {
             }
           });
 
-          // Sort regular members by existing memberId numerical order first, fallback to createdAt
+          // Sort regular members: Owner account (Rajibul Islam) is ALWAYS #1 at index 0!
           regularMembers.sort((a, b) => {
+            const isOwnerA = a.id === 'usr_1790067417377_2an4i' || a.data.email === 'free122055@gmail.com' || a.data.phone === '+8801665402586';
+            const isOwnerB = b.id === 'usr_1790067417377_2an4i' || b.data.email === 'free122055@gmail.com' || b.data.phone === '+8801665402586';
+            if (isOwnerA) return -1;
+            if (isOwnerB) return 1;
+
             const numA = parseInt((a.data.memberId || '').replace(/\D/g, ''), 10) || 99999999;
             const numB = parseInt((b.data.memberId || '').replace(/\D/g, ''), 10) || 99999999;
             if (numA !== numB) {
@@ -8521,19 +8662,19 @@ export default function AdminPanel(props: AdminPanelProps) {
 
         if (isDeductedType) {
           const targetUserRef = doc(db, 'users', targetTx.userId);
-          const targetUserSnap = await getDoc(targetUserRef);
-          if (targetUserSnap.exists()) {
+          const refundTotal = targetTx.totalDeducted || (targetTx.amount + (targetTx.charge || 0));
+          await runTransaction(db, async (t) => {
+            const targetUserSnap = await t.get(targetUserRef);
+            if (!targetUserSnap.exists()) return;
             const freshUser = targetUserSnap.data();
-            const currentBal = Number(freshUser.balance !== undefined ? freshUser.balance : freshUser.mainBalance) || 0;
-            const refundTotal = targetTx.totalDeducted || (targetTx.amount + (targetTx.charge || 0));
-            
-            promises.push(updateDoc(targetUserRef, {
+            const currentBal = getEffectiveBalance(freshUser);
+            t.update(targetUserRef, {
               balance: currentBal + refundTotal,
               mainBalance: currentBal + refundTotal
-            }));
-            wasRefunded = true;
-            actualRefundAmt = refundTotal;
-          }
+            });
+          });
+          wasRefunded = true;
+          actualRefundAmt = refundTotal;
         }
 
         // Live real-time notification to user
@@ -9080,19 +9221,33 @@ export default function AdminPanel(props: AdminPanelProps) {
         return isNaN(num) ? 0 : num;
       };
 
-      let currentMainBalance = parseBal(editBalance);
-
-      if (adjType === 'bonus' && delta > 0) {
-        currentMainBalance += delta;
-      } else if (adjType === 'deduct' && delta > 0) {
-        currentMainBalance = Math.max(0, currentMainBalance - delta);
-      }
-
       const targetUserId = editingUser.uid || editingUser.id || (editingUser as any).docId;
       if (!targetUserId) {
         alert('❌ সদস্য আইডি সনাক্ত করা যায়নি!');
         setIsSavingUser(false);
         return;
+      }
+
+      // Fetch live server user state right before saving so we NEVER overwrite a user's live balance with stale modal state!
+      let liveServerBal = getEffectiveBalance(editingUser);
+      try {
+        const freshSnap = await getDoc(doc(db, 'users', targetUserId));
+        if (freshSnap.exists()) {
+          liveServerBal = getEffectiveBalance(freshSnap.data());
+        }
+      } catch (e) {}
+
+      const initialModalBal = getEffectiveBalance(editingUser);
+      const typedMainBal = parseBal(editBalance);
+      const didAdminDirectlyChangeMainBal = Math.abs(typedMainBal - initialModalBal) > 0.001;
+
+      const baseMainBal = didAdminDirectlyChangeMainBal ? typedMainBal : liveServerBal;
+      let currentMainBalance = baseMainBal;
+
+      if (adjType === 'bonus' && delta > 0) {
+        currentMainBalance = baseMainBal + delta;
+      } else if (adjType === 'deduct' && delta > 0) {
+        currentMainBalance = Math.max(0, baseMainBal - delta);
       }
 
       const safeTrim = (val: any): string => {
@@ -9146,6 +9301,7 @@ export default function AdminPanel(props: AdminPanelProps) {
         nominees: editNominees || [],
         samityAutoSavingsActive: Boolean(editSamityAutoSavingsActive),
         samitySwitchStatus: editSamitySwitchStatus || (editSamityAutoSavingsActive ? 'ON' : 'OFF'),
+        fineEnabled: Boolean(editFineEnabled),
         profilePic: safeTrim(editProfilePic),
         nidFrontPic: safeTrim(editNidFrontPic),
         nidFrontUrl: safeTrim(editNidFrontPic),
@@ -9236,7 +9392,7 @@ export default function AdminPanel(props: AdminPanelProps) {
           await fetch('/api/admin/update-user', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ uid: uId, updates: cleanUpdatedFields })
+            body: JSON.stringify({ userId: uId, uid: uId, updates: cleanUpdatedFields })
           });
         } catch (e) {}
         try {
@@ -9292,8 +9448,8 @@ export default function AdminPanel(props: AdminPanelProps) {
         hour12: true
       });
 
-      const originalMainBal = parseBal(editingUser.balance ?? editingUser.mainBalance ?? 0);
-      const directMainDiff = currentMainBalance - originalMainBal;
+      const originalMainBal = liveServerBal;
+      const directMainDiff = didAdminDirectlyChangeMainBal ? (currentMainBalance - originalMainBal) : 0;
       const logUserId = targetUserId || Array.from(targetDocIds)[0] || 'user';
 
       if (adjType !== 'none' && delta > 0) {
@@ -9741,20 +9897,22 @@ export default function AdminPanel(props: AdminPanelProps) {
           const targetUid = u.uid || (u as any).id || (u as any).docId;
 
           if (targetUid) {
-            const currentBal = Number(u.balance) || 0;
-            const currentMain = Number((u as any).mainBalance || u.balance) || currentBal;
+            let currentBal = getEffectiveBalance(u);
+            try {
+              const liveSnap = await getDoc(doc(db, 'users', targetUid));
+              if (liveSnap.exists()) {
+                currentBal = getEffectiveBalance(liveSnap.data());
+              }
+            } catch (e) {}
 
             let newBal = currentBal;
-            let newMain = currentMain;
             let balanceSummary = '';
 
             if (notifyActionType === 'bonus') {
               newBal = currentBal + amtNum;
-              newMain = currentMain + amtNum;
               balanceSummary = `আপনার পূর্বে ওয়ালেট ব্যালেন্স ছিল ৳${currentBal.toLocaleString('en-US')} টাকা। বর্তমান +৳${amtNum.toLocaleString('en-US')} টাকা বোনাস প্রদান করায় আপনার সর্বমোট নতুন ব্যালেন্স ৳${newBal.toLocaleString('en-US')} টাকা।`;
             } else if (notifyActionType === 'fine') {
               newBal = Math.max(0, currentBal - amtNum);
-              newMain = Math.max(0, currentMain - amtNum);
               balanceSummary = `আপনার পূর্বে ওয়ালেট ব্যালেন্স ছিল ৳${currentBal.toLocaleString('en-US')} টাকা। বর্তমান -৳${amtNum.toLocaleString('en-US')} টাকা জরিমানা/চার্জ কর্তন করায় আপনার সর্বমোট নতুন ব্যালেন্স ৳${newBal.toLocaleString('en-US')} টাকা।`;
             }
 
@@ -9767,11 +9925,19 @@ export default function AdminPanel(props: AdminPanelProps) {
               : effectiveMessage;
 
             if (notifyActionType === 'bonus' || notifyActionType === 'fine') {
-              promises.push(setDoc(doc(db, 'users', targetUid), {
-                balance: newBal,
-                mainBalance: newMain,
-                updatedAt: timestamp
-              }, { merge: true }));
+              const userRef = doc(db, 'users', targetUid);
+              promises.push(runTransaction(db, async (t) => {
+                const uSnap = await t.get(userRef);
+                if (!uSnap.exists()) return;
+                const liveB = getEffectiveBalance(uSnap.data());
+                const updatedB = notifyActionType === 'bonus' ? (liveB + amtNum) : Math.max(0, liveB - amtNum);
+                updatedUserBalances[targetUid] = updatedB;
+                t.update(userRef, {
+                  balance: updatedB,
+                  mainBalance: updatedB,
+                  updatedAt: timestamp
+                });
+              }));
 
               promises.push(addDoc(collection(db, 'transactions'), {
                 id: `tx-${notifyActionType}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
@@ -9838,7 +10004,7 @@ export default function AdminPanel(props: AdminPanelProps) {
             createdAt: timestamp
           }));
 
-          // Balance updates & targeted user notification dispatch
+          // Balance updates & targeted user notification dispatch using atomic transactions
           for (const u of targetUsersList) {
             const targetUid = u.uid || (u as any).id || (u as any).docId;
             if (!targetUid) continue;
@@ -9846,19 +10012,25 @@ export default function AdminPanel(props: AdminPanelProps) {
             let personalSummary = globalBody;
 
             if (notifyActionType === 'bonus' && amtNum > 0) {
-              const currentBal = Number(u.balance) || 0;
-              const currentMain = Number((u as any).mainBalance || u.balance) || currentBal;
+              const currentBal = getEffectiveBalance(u);
               const newBal = currentBal + amtNum;
-              const newMain = currentMain + amtNum;
               updatedUserBalances[targetUid] = newBal;
 
               personalSummary = `আপনার পূর্বে ওয়ালেট ব্যালেন্স ছিল ৳${currentBal.toLocaleString('en-US')} টাকা। বর্তমান +৳${amtNum.toLocaleString('en-US')} টাকা বোনাস জমা হওয়ায় আপনার সর্বমোট নতুন ব্যালেন্স ৳${newBal.toLocaleString('en-US')} টাকা।`;
 
-              promises.push(setDoc(doc(db, 'users', targetUid), {
-                balance: newBal,
-                mainBalance: newMain,
-                updatedAt: timestamp
-              }, { merge: true }));
+              const userRef = doc(db, 'users', targetUid);
+              promises.push(runTransaction(db, async (t) => {
+                const uSnap = await t.get(userRef);
+                if (!uSnap.exists()) return;
+                const liveB = getEffectiveBalance(uSnap.data());
+                const updatedB = liveB + amtNum;
+                updatedUserBalances[targetUid] = updatedB;
+                t.update(userRef, {
+                  balance: updatedB,
+                  mainBalance: updatedB,
+                  updatedAt: timestamp
+                });
+              }));
 
               promises.push(addDoc(collection(db, 'transactions'), {
                 id: `tx-bonus-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
@@ -9874,19 +10046,25 @@ export default function AdminPanel(props: AdminPanelProps) {
                 createdAt: timestamp
               }));
             } else if (notifyActionType === 'fine' && amtNum > 0) {
-              const currentBal = Number(u.balance) || 0;
-              const currentMain = Number((u as any).mainBalance || u.balance) || currentBal;
+              const currentBal = getEffectiveBalance(u);
               const newBal = Math.max(0, currentBal - amtNum);
-              const newMain = Math.max(0, currentMain - amtNum);
               updatedUserBalances[targetUid] = newBal;
 
               personalSummary = `আপনার পূর্বে ওয়ালেট ব্যালেন্স ছিল ৳${currentBal.toLocaleString('en-US')} টাকা। বর্তমান -৳${amtNum.toLocaleString('en-US')} টাকা জরিমানা/চার্জ কর্তন করায় আপনার সর্বমোট নতুন ব্যালেন্স ৳${newBal.toLocaleString('en-US')} টাকা।`;
 
-              promises.push(setDoc(doc(db, 'users', targetUid), {
-                balance: newBal,
-                mainBalance: newMain,
-                updatedAt: timestamp
-              }, { merge: true }));
+              const userRef = doc(db, 'users', targetUid);
+              promises.push(runTransaction(db, async (t) => {
+                const uSnap = await t.get(userRef);
+                if (!uSnap.exists()) return;
+                const liveB = getEffectiveBalance(uSnap.data());
+                const updatedB = Math.max(0, liveB - amtNum);
+                updatedUserBalances[targetUid] = updatedB;
+                t.update(userRef, {
+                  balance: updatedB,
+                  mainBalance: updatedB,
+                  updatedAt: timestamp
+                });
+              }));
 
               promises.push(addDoc(collection(db, 'transactions'), {
                 id: `tx-fine-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
@@ -11268,6 +11446,8 @@ export default function AdminPanel(props: AdminPanelProps) {
     setEditSamityAutoSavingsActive,
     editSamitySwitchStatus,
     setEditSamitySwitchStatus,
+    editFineEnabled,
+    setEditFineEnabled,
     hasRationCard,
     editRationEnabled,
     setEditRationEnabled,
@@ -11451,8 +11631,17 @@ export default function AdminPanel(props: AdminPanelProps) {
             </div>
           </div>
 
-          {/* Right Side: Bell Icon, Refresh, User View */}
+          {/* Right Side: Standalone Software Button, Bell Icon, Refresh, User View */}
           <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowStandaloneSoftwareModal(true)}
+              className="px-2 sm:px-2.5 py-1 bg-slate-900/90 hover:bg-slate-950 text-emerald-300 font-black rounded-full text-[9.5px] sm:text-[11px] flex items-center gap-1 shadow-xs transition active:scale-95 cursor-pointer shrink-0 border border-emerald-400/40"
+              title="এডমিন প্যানেল আলাদা সফটওয়্যার সেটিংস ও প্রোডাকশন লিংক"
+            >
+              <Cpu className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-emerald-400 shrink-0" />
+              <span className="hidden xs:inline whitespace-nowrap">এডমিন সফটওয়্যার</span>
+            </button>
             <button 
               type="button"
               onClick={() => setShowAdminNotifyModal(true)}
@@ -11481,6 +11670,7 @@ export default function AdminPanel(props: AdminPanelProps) {
               type="button"
               onClick={() => {
                 localStorage.setItem('amb_admin_mode', 'true');
+                sessionStorage.setItem('amb_admin_active_view', 'false');
                 onBack();
               }}
               className="px-2.5 sm:px-3 py-1 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black rounded-full text-[10px] sm:text-xs flex items-center gap-1 shadow-md transition active:scale-95 cursor-pointer shrink-0 border border-amber-300"
@@ -11492,93 +11682,238 @@ export default function AdminPanel(props: AdminPanelProps) {
           </div>
         </div>
 
+        {/* Standalone Admin Software Modal (প্রোডাকশন আলাদা সফটওয়্যার কন্ট্রোল) */}
+        <AnimatePresence>
+          {showStandaloneSoftwareModal && (
+            <div className="fixed inset-0 z-[99999] flex flex-col bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+              <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+              
+              <motion.div 
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", damping: 25, stiffness: 200 }}
+                className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
+              >
+                <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-white/10 rounded-xl">
+                      <Cpu className="w-5 h-5 text-amber-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-black text-white">BNB এডমিন সফটওয়্যার</h3>
+                      <p className="text-[10px] text-emerald-100/70 font-medium tracking-wide uppercase">Standalone Controller</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setShowStandaloneSoftwareModal(false)} 
+                    className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                  <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-5 flex gap-4 shadow-sm">
+                    <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shrink-0 shadow-xs text-emerald-600">
+                      <Zap className="w-6 h-6 animate-pulse" />
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="text-sm font-black text-emerald-900 uppercase tracking-wider">সুপার-ফাস্ট অ্যাক্সেস</h4>
+                      <p className="text-xs sm:text-sm text-emerald-800 font-bold leading-relaxed">
+                        প্রোডাকশনে বা যেকোনো ডিভাইসে মেম্বার অ্যাপ ছাড়াই সরাসরি আলাদা এডমিন সফটওয়্যার হিসেবে ব্যবহার করতে নিচের ডেডিকেটেড লিংকটি ব্যবহার করুন।
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <label className="block text-xs font-black text-slate-700 uppercase tracking-wider px-1">১. ডেডিকেটেড এডমিন লিংক (/admin)</label>
+                      <div className="bg-slate-50 border-2 border-slate-200 rounded-2xl p-4 space-y-3">
+                        <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-4 py-3 font-mono text-sm text-emerald-700 break-all shadow-inner">
+                          <span className="flex-1 truncate">{typeof window !== 'undefined' ? `${window.location.origin}/admin` : 'https://businessnetworkbangladesh.com/admin'}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const url = typeof window !== 'undefined' ? `${window.location.origin}/admin` : 'https://businessnetworkbangladesh.com/admin';
+                              copyTextToClipboard(url, 'এডমিন সফটওয়্যার লিংক');
+                            }}
+                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-sans font-black rounded-lg text-xs shrink-0 cursor-pointer shadow-md transition-all active:scale-95"
+                          >
+                            কপি লিংক
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-4 py-3 font-mono text-sm text-slate-500 break-all shadow-inner">
+                          <span className="flex-1 truncate">https://businessnetworkbangladesh.com/admin</span>
+                          <button
+                            type="button"
+                            onClick={() => copyTextToClipboard('https://businessnetworkbangladesh.com/admin', 'প্রোডাকশন এডমিন ডোমেইন লিংক')}
+                            className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-sans font-black rounded-lg text-xs shrink-0 cursor-pointer shadow-md transition-all active:scale-95"
+                          >
+                            কপি ডোমেইন
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-amber-50 border border-amber-200 rounded-2.5xl p-5 flex items-center justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="font-black text-amber-950 text-sm">২. সবসময় সরাসরি এডমিন মোড</div>
+                        <p className="text-[11px] text-amber-800/80 mt-1 font-bold leading-relaxed">
+                          এটি চালু রাখলে এই ডিভাইসে অ্যাপ ওপেন করার সাথে সাথে ১ সেকেন্ডের কম সময়ে সরাসরি এডমিন প্যানেল সফটওয়্যার ওপেন হবে।
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                    onClick={() => {
+                      const next = !alwaysBootAdminSoftware;
+                      setAlwaysBootAdminSoftware(next);
+                      try {
+                        localStorage.setItem('amb_standalone_admin_software', next ? 'true' : 'false');
+                        if (next) {
+                          localStorage.setItem('amb_admin_mode', 'true');
+                          sessionStorage.setItem('amb_admin_active_view', 'true');
+                          window.history.replaceState({ appView: 'admin_panel' }, '', '/admin');
+                        }
+                      } catch (e) {}
+                    }}
+                    className={`px-3.5 py-2 rounded-xl font-black text-xs shrink-0 cursor-pointer transition ${
+                      alwaysBootAdminSoftware
+                        ? 'bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20'
+                        : 'bg-slate-800 text-slate-300 border border-slate-700'
+                    }`}
+                  >
+                    {alwaysBootAdminSoftware ? '✅ চালু আছে (ON)' : 'চালু করুন (OFF)'}
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                  <a
+                    href="/admin?standalone=1"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setShowStandaloneSoftwareModal(false)}
+                    className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md transition cursor-pointer text-center"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    আলাদা সফটওয়্যার উইন্ডো খুলুন
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      try {
+                        window.history.replaceState({ appView: 'admin_panel' }, '', '/admin');
+                        localStorage.setItem('amb_standalone_admin_software', 'true');
+                        setAlwaysBootAdminSoftware(true);
+                      } catch (e) {}
+                      setShowStandaloneSoftwareModal(false);
+                      requestAlert('স্ট্যান্ডঅ্যালোন এডমিন মোড সক্রিয় ⚡', 'এখন থেকে এই ব্রাউজার/ডিভাইসে এডমিন প্যানেল সম্পূর্ণ আলাদা সফটওয়্যার (/admin) হিসেবে কাজ করবে এবং ১ সেকেন্ডের মধ্যে সরাসরি ওপেন হবে।');
+                    }}
+                    className="w-full py-2.5 px-3 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md transition cursor-pointer"
+                  >
+                    <Zap className="w-3.5 h-3.5" />
+                    /admin মোড সেট করুন
+                  </button>
+                </div>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
         {/* OVERVIEW (4-SECTION TRACKING + 12 BOX DASHBOARD + 12 GRID MATRIX + DRILLDOWN) */}
         {viewingGrid && (
           <AdminDashboardOverview {...adminScopeProps} />
         )}
 
+        {/* SUB-SECTIONS: Only mount when viewingGrid is false for instantaneous <16ms initial render */}
+        {!viewingGrid && (
+          <>
+            {/* 1. SAMITY SECTION */}
+            <AdminSamitySection {...adminScopeProps} />
 
+            {/* SALARY ADMIN SECTION */}
+            <AdminSalarySection
+              adminTab={adminTab}
+              setViewingGrid={setViewingGrid}
+              setAdminTab={setAdminTab}
+            />
 
-        {/* 1. SAMITY SECTION */}
-        <AdminSamitySection {...adminScopeProps} />
+            {/* AUTO RECHARGE ADMIN SECTION */}
+            <AdminAutoRechargeSection
+              adminTab={adminTab}
+              setViewingGrid={setViewingGrid}
+              setAdminTab={setAdminTab}
+              users={users}
+              transactions={transactions}
+              appConfig={appConfig}
+              requestAlert={requestAlert}
+              requestConfirm={requestConfirm}
+              isMasterAdmin={isMasterAdmin}
+            />
 
-        {/* SALARY ADMIN SECTION */}
-        <AdminSalarySection
-          adminTab={adminTab}
-          setViewingGrid={setViewingGrid}
-          setAdminTab={setAdminTab}
-        />
+            {/* BILL PAY ADMIN SECTION */}
+            <AdminBillPaySection
+              adminTab={adminTab}
+              setViewingGrid={setViewingGrid}
+              setAdminTab={setAdminTab}
+              users={users}
+              transactions={transactions}
+              appConfig={appConfig}
+              requestAlert={requestAlert}
+              requestConfirm={requestConfirm}
+              isMasterAdmin={isMasterAdmin}
+            />
 
-        {/* AUTO RECHARGE ADMIN SECTION */}
-        <AdminAutoRechargeSection
-          adminTab={adminTab}
-          setViewingGrid={setViewingGrid}
-          setAdminTab={setAdminTab}
-          users={users}
-          transactions={transactions}
-          appConfig={appConfig}
-          requestAlert={requestAlert}
-          requestConfirm={requestConfirm}
-          isMasterAdmin={isMasterAdmin}
-        />
+            {/* 2. APPROVALS SECTION */}
+            <AdminApprovalsSection {...adminScopeProps} />
 
-        {/* BILL PAY ADMIN SECTION */}
-        <AdminBillPaySection
-          adminTab={adminTab}
-          setViewingGrid={setViewingGrid}
-          setAdminTab={setAdminTab}
-          users={users}
-          transactions={transactions}
-          appConfig={appConfig}
-          requestAlert={requestAlert}
-          requestConfirm={requestConfirm}
-          isMasterAdmin={isMasterAdmin}
-        />
+            {/* NOTICES & BAP SECTION */}
+            <AdminNoticesBapSection {...adminScopeProps} />
+            
+            {/* 3. CONFIG SECTION */}
+            <AdminConfigSection {...adminScopeProps} />
 
-        {/* 2. APPROVALS SECTION */}
-        <AdminApprovalsSection {...adminScopeProps} />
+            {/* 4. RECEIPT SECTION */}
+            <AdminReceiptSection {...adminScopeProps} />
 
-        {/* NOTICES & BAP SECTION */}
-        <AdminNoticesBapSection {...adminScopeProps} />
-        
-        {/* 3. CONFIG SECTION */}
-        <AdminConfigSection {...adminScopeProps} />
+            {/* 5. SHOP SECTION */}
+            <AdminShopSection {...adminScopeProps} />
 
-        {/* 4. RECEIPT SECTION */}
-        <AdminReceiptSection {...adminScopeProps} />
+            {/* 6. BANK SECTION */}
+            <AdminBankSection {...adminScopeProps} />
 
-        {/* 5. SHOP SECTION */}
-        <AdminShopSection {...adminScopeProps} />
+            {/* 7. QARD SECTION */}
+            <AdminQardSection {...adminScopeProps} />
 
-        {/* 6. BANK SECTION */}
-        <AdminBankSection {...adminScopeProps} />
+            {/* 8. BANNERS SECTION */}
+            <AdminBannersSection {...adminScopeProps} />
 
-        {/* 7. QARD SECTION */}
-        <AdminQardSection {...adminScopeProps} />
+            {/* 9. AGENT SECTION */}
+            <AdminAgentSection {...adminScopeProps} />
 
-        {/* 8. BANNERS SECTION */}
-        <AdminBannersSection {...adminScopeProps} />
+            {/* 10. RATION SECTION */}
+            <AdminRationSection {...adminScopeProps} />
 
-        {/* 9. AGENT SECTION */}
-        <AdminAgentSection {...adminScopeProps} />
+            {/* 11. SAFE DEALS SECTION */}
+            <AdminSafeDealsSection {...adminScopeProps} />
 
-        {/* 10. RATION SECTION */}
-        <AdminRationSection {...adminScopeProps} />
+            {/* 12. COURIER SECTION */}
+            <AdminCourierSection {...adminScopeProps} />
 
-        {/* 11. SAFE DEALS SECTION */}
-        <AdminSafeDealsSection {...adminScopeProps} />
+            {/* 13. LEDGER SECTION */}
+            <AdminLedgerSection {...adminScopeProps} />
 
-        {/* 12. COURIER SECTION */}
-        <AdminCourierSection {...adminScopeProps} />
-
-        {/* 13. LEDGER SECTION */}
-        <AdminLedgerSection {...adminScopeProps} />
-
-        {/* 14. SYSTEM RESET SECTION */}
-        <AdminSystemResetSection {...adminScopeProps} />
+            {/* 14. SYSTEM RESET SECTION */}
+            <AdminSystemResetSection {...adminScopeProps} />
+          </>
+        )}
 
         {/* 15. USER EDIT MODAL */}
-        <AdminUserEditModal {...adminScopeProps} />
+        {Boolean(editingUser) && (
+          <AdminUserEditModal {...adminScopeProps} />
+        )}
 
         {/* 16. BOTTOM MODALS */}
         <AdminBottomModals {...adminScopeProps} />

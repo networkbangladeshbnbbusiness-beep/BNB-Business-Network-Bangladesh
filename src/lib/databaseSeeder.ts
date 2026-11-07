@@ -27,10 +27,10 @@ export async function restoreAndSeedDatabase() {
     const defaultAdmin: User = {
       uid: 'admin_master',
       name: 'Bangladesh BNB Administrator',
-      phone: '+8800011112222',
-      normalizedPhone: '+8800011112222',
+      phone: '+8801111222233',
+      normalizedPhone: '+8801111222233',
       memberId: 'MAIN_ADMIN',
-      pin: '6666',
+      pin: '0008',
       role: 'admin',
       balance: 0,
       savings: 0,
@@ -51,11 +51,11 @@ export async function restoreAndSeedDatabase() {
         await setDoc(userRef, defaultAdmin);
       } else {
         const snapData = snap.data();
-        if (snapData?.phone !== '+8800011112222' || snapData?.pin !== '6666' || snapData?.memberId !== 'MAIN_ADMIN' || snapData?.role !== 'admin') {
+        if (snapData?.phone !== '+8801111222233' || snapData?.pin !== '0008' || snapData?.memberId !== 'MAIN_ADMIN' || snapData?.role !== 'admin') {
           await setDoc(userRef, {
-            phone: '+8800011112222',
-            normalizedPhone: '+8800011112222',
-            pin: '6666',
+            phone: '+8801111222233',
+            normalizedPhone: '+8801111222233',
+            pin: '0008',
             memberId: 'MAIN_ADMIN',
             role: 'admin',
             approved: true

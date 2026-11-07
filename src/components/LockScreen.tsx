@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, AppConfig } from '../types';
 import { maskSecretPhone, convertBengaliToEnglishDigits, verifyUserPin, findUserInFirestoreByPhone, verifyPinUniversal, hashPinClientAsync } from '../lib/memberUtils';
 import { sendEmailOtpDirect, verifyEmailOtpUniversal } from '../lib/emailOtpService';
@@ -159,8 +159,35 @@ export default function LockScreen({
   }, [userIdentifier]);
 
   const [pin, setPin] = useState('');
+  const pinRef = useRef('');
+  const prefetchedUserDocRef = useRef<any>(user || null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Immediately prefetch and subscribe to the user's Firestore document on LockScreen mount
+  // so that when the 4th PIN digit is pressed, verification happens in <150ms without network latency
+  useEffect(() => {
+    if (user) {
+      prefetchedUserDocRef.current = { ...(prefetchedUserDocRef.current || {}), ...user };
+    }
+    if (!user?.uid) return;
+    let isMounted = true;
+    const userRef = doc(db, 'users', user.uid);
+    getDoc(userRef).then((snap) => {
+      if (isMounted && snap.exists()) {
+        prefetchedUserDocRef.current = { ...user, ...snap.data(), uid: user.uid };
+      }
+    }).catch(() => {});
+    const unsub = onSnapshot(userRef, (snap) => {
+      if (isMounted && snap.exists()) {
+        prefetchedUserDocRef.current = { ...user, ...snap.data(), uid: user.uid };
+      }
+    }, () => {});
+    return () => {
+      isMounted = false;
+      unsub();
+    };
+  }, [user?.uid]);
 
   // Secret App Lock (2nd step lock) states
   const [secretCodeInput, setSecretCodeInput] = useState('');
@@ -482,29 +509,35 @@ export default function LockScreen({
   // Allow keyboard input
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (loading) return;
       if (e.key >= '0' && e.key <= '9') {
-        if (pin.length < 4) {
-          const nextPin = pin + e.key;
+        if (pinRef.current.length < 4) {
+          const nextPin = pinRef.current + e.key;
+          pinRef.current = nextPin;
           setPin(nextPin);
           if (nextPin.length === 4) {
             handleVerifyPin(nextPin);
           }
         }
       } else if (e.key === 'Backspace') {
-        setPin(prev => prev.slice(0, -1));
+        const nextPin = pinRef.current.slice(0, -1);
+        pinRef.current = nextPin;
+        setPin(nextPin);
       } else if (e.key === 'Enter') {
-        if (pin.length === 4) {
-          handleVerifyPin();
+        if (pinRef.current.length === 4) {
+          handleVerifyPin(pinRef.current);
         }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [pin]);
+  }, [loading]);
 
   const handleKeyPress = (num: string) => {
-    if (pin.length < 4) {
-      const nextPin = pin + num;
+    if (loading) return;
+    if (pinRef.current.length < 4) {
+      const nextPin = pinRef.current + num;
+      pinRef.current = nextPin;
       setPin(nextPin);
       if (nextPin.length === 4) {
         handleVerifyPin(nextPin);
@@ -513,16 +546,21 @@ export default function LockScreen({
   };
 
   const handleBackspace = () => {
-    setPin(prev => prev.slice(0, -1));
+    if (loading) return;
+    const nextPin = pinRef.current.slice(0, -1);
+    pinRef.current = nextPin;
+    setPin(nextPin);
   };
 
   const handleClear = () => {
+    if (loading) return;
     setError('');
+    pinRef.current = '';
     setPin('');
   };
 
   const handleVerifyPin = async (overridePin?: string) => {
-    const rawTarget = overridePin !== undefined ? overridePin : pin;
+    const rawTarget = overridePin !== undefined ? overridePin : pinRef.current;
     const targetPin = convertBengaliToEnglishDigits(rawTarget).trim();
     if (targetPin.length !== 4) return;
 
@@ -536,7 +574,12 @@ export default function LockScreen({
     setLoading(true);
 
     try {
-      const data = await verifyPinUniversal(user?.uid || '', user?.email || '', targetPin);
+      const data = await verifyPinUniversal(
+        user?.uid || '',
+        user?.email || '',
+        targetPin,
+        prefetchedUserDocRef.current || user
+      );
 
       if (data.verified) {
         clearLockoutState(userIdentifier);
@@ -546,6 +589,7 @@ export default function LockScreen({
           onUnlock();
         }
       } else if (data.forcePinReset) {
+        pinRef.current = '';
         setPin('');
         setShowForgotPinModal(true);
         setResetError(
@@ -579,12 +623,15 @@ export default function LockScreen({
           const fallbackEn = rem !== undefined ? `Incorrect PIN! ${rem} attempts remaining.` : 'Incorrect PIN! Please enter your 4-digit PIN or reset it below.';
           setError(localizeLockError(data.error, fallbackBn, fallbackEn));
         }
+        pinRef.current = '';
         setPin('');
       }
     } catch (err) {
       if (import.meta.env.DEV) {
         console.error("PIN verification error:", err);
       }
+      pinRef.current = '';
+      setPin('');
       setError(isBn ? 'পিন যাচাই করতে সমস্যা হয়েছে। ইন্টারনেট সংযোগ চেক করুন।' : 'Failed to verify PIN. Please check your internet connection.');
     } finally {
       setLoading(false);
@@ -609,7 +656,12 @@ export default function LockScreen({
     setLoading(true);
 
     try {
-      const data = await verifyPinUniversal(user?.uid || '', user?.email || '', cleanInput);
+      const data = await verifyPinUniversal(
+        user?.uid || '',
+        user?.email || '',
+        cleanInput,
+        prefetchedUserDocRef.current || user
+      );
 
       if (data.verified) {
         clearLockoutState(userIdentifier);
@@ -933,11 +985,9 @@ export default function LockScreen({
                 { bd: '0', en: '0' },
                 { bd: '⌫', en: 'Backspace', isAction: true }
               ].map((key) => (
-                <motion.button
+                <button
                   key={key.en}
                   type="button"
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
                   onClick={() => {
                     if (key.en === 'Clear') {
                       handleClear();
@@ -947,14 +997,14 @@ export default function LockScreen({
                       handleKeyPress(key.en);
                     }
                   }}
-                  className={`h-13 rounded-2xl flex flex-col items-center justify-center transition-all cursor-pointer border shadow-2xs ${
+                  className={`h-13 rounded-2xl flex flex-col items-center justify-center transition-transform duration-75 active:scale-95 select-none touch-manipulation cursor-pointer border shadow-2xs ${
                     key.isAction
                       ? 'bg-slate-100 border-slate-250 text-slate-700 hover:bg-slate-200 hover:text-slate-900 font-bold'
                       : 'bg-white border-slate-250 text-slate-900 hover:bg-emerald-50 hover:border-emerald-300 font-black'
                   }`}
                 >
-                  <span className={`font-bold ${key.isAction ? 'text-xs' : 'text-xl font-mono'}`}>{key.bd}</span>
-                </motion.button>
+                  <span className={`font-bold pointer-events-none ${key.isAction ? 'text-xs' : 'text-xl font-mono'}`}>{key.bd}</span>
+                </button>
               ))}
             </div>
 

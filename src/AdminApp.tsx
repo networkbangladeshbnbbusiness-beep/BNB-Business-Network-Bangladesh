@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { ensureAuth, db } from './lib/firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, query, where, getDocs, limit } from 'firebase/firestore';
 import { User, AppConfig } from './types';
 import { loadAppConfig, DEFAULT_CONFIG } from './lib/config';
+import { getStoredLanguage } from './lib/i18n';
 import AdminPanel from './components/AdminPanel';
 import { Shield, Lock, Phone, Key, AlertCircle, RefreshCw } from 'lucide-react';
 
@@ -21,7 +22,17 @@ export default function AdminApp() {
   const [error, setError] = useState('');
   const [appConfig, setAppConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const [darkMode, setDarkMode] = useState(true);
-  const [appLanguage, setAppLanguage] = useState('bn');
+  const [appLanguage, setAppLanguage] = useState(() => getStoredLanguage());
+
+  useEffect(() => {
+    const handleLangEvent = (e: any) => {
+      setAppLanguage(e?.detail?.lang || getStoredLanguage());
+    };
+    window.addEventListener('bnb-language-change', handleLangEvent);
+    return () => {
+      window.removeEventListener('bnb-language-change', handleLangEvent);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window !== 'undefined' && (window as any).__hideAppSplash) {
@@ -204,11 +215,8 @@ export default function AdminApp() {
           localStorage.setItem('amb_app_config', JSON.stringify(newConfig));
         }}
         appLanguage={appLanguage}
-        darkMode={darkMode}
       />
     </div>
   );
 }
 
-// Helper imports for firestore collection query in AdminApp
-import { collection, query, where, getDocs, limit } from 'firebase/firestore';

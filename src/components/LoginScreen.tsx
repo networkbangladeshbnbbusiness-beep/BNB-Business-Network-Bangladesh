@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../lib/firebase';
 import { doc, getDoc, setDoc, updateDoc, getDocs, collection, query, where, addDoc, limit } from 'firebase/firestore';
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
-import { User, AppConfig } from '../types';
+import { User, AppConfig, getEffectiveBalance } from '../types';
 import { ShieldCheck, UserPlus, LogIn, Mail, KeyRound, Globe, Lock, ArrowRight, AlertTriangle, CheckCircle2, User as UserIcon, Sparkles, Moon, Sun, ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { BNBLogo } from './BNBLogo';
@@ -251,34 +251,57 @@ export default function LoginScreen({
 
       // Direct Firestore lookup fallback (if server returned 404/500 or user has legacy uppercase email)
       try {
-        const exactSnap = await getDocs(query(collection(db, 'users'), where('email', '==', trimmedInput), limit(5)));
-        const activeExact = exactSnap.docs.filter(d => !d.data()?.isArchivedDuplicate);
-        if (activeExact.length > 0) {
-          const docSnap = activeExact[0];
-          const located = { ...(docSnap.data() as User), uid: docSnap.id };
-          cacheLocatedUser(cleanInput, located);
-          return located;
+        const pickRichestUser = (docs: any[]): User | null => {
+          const valid = docs
+            .filter(d => {
+              const data = d.data?.() || {};
+              return !data.isArchivedDuplicate && data.status !== 'archived_duplicate' && !data.deleted && !data.isDeleted;
+            })
+            .map(d => {
+              const data = d.data() as User;
+              const effBal = getEffectiveBalance(data);
+              return { ...data, uid: d.id, balance: effBal, mainBalance: effBal };
+            });
+          if (valid.length === 0) return null;
+          valid.sort((a, b) => {
+            const score = (u: User) => {
+              const bal = getEffectiveBalance(u);
+              const sav = Number(u.savings ?? u.dpsBalance ?? 0) || 0;
+              const hasMid = Boolean(u.memberId && String(u.memberId).startsWith('BNB') && u.memberId !== 'BNB000000' && u.memberId !== 'BNB00000000');
+              return (bal + sav) * 100000 + (hasMid ? 10000 : 0) + ((u as any).pinHash || u.pin ? 100 : 0);
+            };
+            return score(b) - score(a);
+          });
+          return valid[0];
+        };
+
+        const exactSnap = await getDocs(query(collection(db, 'users'), where('email', '==', trimmedInput), limit(10)));
+        const bestExact = pickRichestUser(exactSnap.docs);
+        if (bestExact) {
+          cacheLocatedUser(cleanInput, bestExact);
+          return bestExact;
         }
 
         if (trimmedInput !== cleanInput) {
-          const lowerSnap = await getDocs(query(collection(db, 'users'), where('email', '==', cleanInput), limit(5)));
-          const activeLower = lowerSnap.docs.filter(d => !d.data()?.isArchivedDuplicate);
-          if (activeLower.length > 0) {
-            const docSnap = activeLower[0];
-            const located = { ...(docSnap.data() as User), uid: docSnap.id };
-            cacheLocatedUser(cleanInput, located);
-            return located;
+          const lowerSnap = await getDocs(query(collection(db, 'users'), where('email', '==', cleanInput), limit(10)));
+          const bestLower = pickRichestUser(lowerSnap.docs);
+          if (bestLower) {
+            cacheLocatedUser(cleanInput, bestLower);
+            return bestLower;
           }
         }
 
         if (!serverRespondedAuthoritatively) {
           const mapSnap = await getDocs(query(collection(db, 'uid_mappings'), where('email', '==', cleanInput), limit(5)));
           if (!mapSnap.empty) {
-            const primaryUid = mapSnap.docs[0].data()?.primaryUid;
+            const mapData = mapSnap.docs[0].data();
+            const primaryUid = mapData?.primary_uid || mapData?.primaryUid;
             if (primaryUid) {
               const pDoc = await getDoc(doc(db, 'users', String(primaryUid)));
-              if (pDoc.exists() && !pDoc.data()?.isArchivedDuplicate) {
-                const located = { ...(pDoc.data() as User), uid: pDoc.id };
+              if (pDoc.exists() && !pDoc.data()?.isArchivedDuplicate && pDoc.data()?.status !== 'archived_duplicate') {
+                const pData = pDoc.data() as User;
+                const effBal = getEffectiveBalance(pData);
+                const located = { ...pData, uid: pDoc.id, balance: effBal, mainBalance: effBal };
                 cacheLocatedUser(cleanInput, located);
                 return located;
               }
@@ -1208,6 +1231,11 @@ export default function LoginScreen({
                           : 'bg-white border-slate-200 text-slate-950 placeholder-slate-400 focus:border-emerald-600'
                       }`}
                     />
+                    <p className={`mt-2 text-center text-[11px] leading-relaxed ${isDark ? 'text-emerald-400/80' : 'text-emerald-700'}`}>
+                      {isBn
+                        ? '💡 ইনবক্সে না পেলে অনুগ্রহ করে আপনার Gmail অ্যাপের Spam (স্প্যাম) বা Promotions ফোল্ডার চেক করুন।'
+                        : '💡 If not found in inbox, please check your Spam or Promotions folder.'}
+                    </p>
                   </div>
 
                   <button

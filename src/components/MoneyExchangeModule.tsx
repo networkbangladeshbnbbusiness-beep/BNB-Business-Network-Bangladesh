@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Bell, Megaphone, ShieldCheck, Clock, CheckCircle, CheckCircle2, AlertCircle, PhoneCall, RefreshCw, Lock, HelpCircle, FileText, ArrowRight, Copy, Share2, Printer, Loader2, Check } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { User as UserType, AppConfig } from '../types';
 import { db } from '../lib/firebase';
 import { collection, query, onSnapshot, doc, runTransaction, getDocs, where, addDoc } from 'firebase/firestore';
@@ -1009,220 +1010,260 @@ const MoneyExchangeModule: React.FC<MoneyExchangeModuleProps> = ({
         )}
       </div>
 
-      {/* 6. PIN VERIFICATION DIALOG MODAL */}
-      {showPinPrompt && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 w-full max-w-sm border border-slate-150 shadow-2xl space-y-4 animate-scale-up">
-            <div className="text-center space-y-1">
-              <div className="w-12 h-12 bg-rose-50 text-rose-600 rounded-full flex items-center justify-center mx-auto mb-2">
-                <Lock className="w-6 h-6 animate-pulse" />
-              </div>
-              <h3 className="font-extrabold text-sm text-slate-800">নিরাপত্তা নিশ্চিতকরণ</h3>
-              <p className="text-xs text-slate-500 font-bold leading-normal">
-                {showPinPrompt.action === 'yes_received'
-                  ? 'টাকা বুঝে পেয়েছেন তা নিশ্চিত করতে দয়া করে আপনার ওয়ালেট পিন নম্বরটি প্রদান করুন।'
-                  : 'লেনদেন সম্পূর্ণ করতে দয়া করে আপনার ওয়ালেট পিন নম্বরটি প্রদান করুন।'}
-              </p>
-            </div>
-
-            <div className="space-y-4">
-              <input
-                type="password"
-                placeholder="আপনার ওয়ালেট পিন লিখুন"
-                maxLength={5}
-                value={actionPin}
-                onChange={e => setActionPin(e.target.value)}
-                className="w-full bg-slate-50 p-3.5 rounded-2xl border border-slate-200 text-sm font-extrabold text-center font-mono focus:bg-white outline-none"
-              />
-
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setShowPinPrompt(null)}
-                  disabled={isProcessing}
-                  className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-black transition cursor-pointer"
-                >
-                  বাতিল
-                </button>
-                <button
-                  onClick={executePinVerifiedAction}
-                  disabled={isProcessing}
-                  className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black transition cursor-pointer flex items-center justify-center gap-1"
-                >
-                  {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : 'নিশ্চিত করুন'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 7. HIGH-SPEED CUSTOM DIGITAL TRANSACTION MONEY RECEIPT POPUP MODAL (মানি রিসিট পপআপ) */}
-      {receiptModal && (
-        <div className="fixed inset-0 z-[1200] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-fade-in text-left font-sans">
-          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
-            {/* Top Receipt Header */}
-            <div className="bg-gradient-to-r from-[#014022] via-[#015E34] to-[#014022] text-white p-5 text-center relative shrink-0">
-              <button
-                onClick={() => setReceiptModal(null)}
-                className="absolute top-3.5 right-3.5 p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-              <div className="w-12 h-12 bg-white/10 rounded-full flex items-center justify-center mx-auto mb-2 border border-white/20 text-emerald-300">
-                <CheckCircle2 className="w-7 h-7 text-emerald-300 animate-bounce-slow" />
-              </div>
-              <h2 className="text-base font-black tracking-wide text-white">{receiptModal.title}</h2>
-              <p className="text-[10px] text-emerald-200 font-mono uppercase tracking-widest mt-0.5">
-                BNB Business Network Gateway
-              </p>
-            </div>
-
-            {/* Money Receipt Body */}
-            <div className="p-5 overflow-y-auto max-h-[70vh] space-y-4">
-              
-              {/* Main Amount Display Badge */}
-              <div className="bg-emerald-50 border border-emerald-200/80 rounded-2xl p-4 text-center">
-                <span className="text-[10px] font-extrabold text-emerald-800 uppercase tracking-widest block">টাকার পরিমাণ (Amount)</span>
-                <span className="text-3xl font-black text-emerald-950 font-mono mt-0.5 block">
-                  ৳{receiptModal.amount.toLocaleString('bn-BD')}
-                </span>
-                <span className="inline-block mt-2 px-3 py-1 bg-emerald-100 text-emerald-900 border border-emerald-200 text-[10.5px] font-black rounded-full">
-                  {receiptModal.statusBadge}
-                </span>
-              </div>
-
-              {/* Detailed Itemized Ledger Table */}
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2.5 text-xs">
-                
-                {/* Transaction ID */}
-                <div className="flex justify-between items-center border-b border-slate-200/60 pb-2">
-                  <span className="text-slate-500 font-bold text-[11px]">ট্রানজেকশন নম্বর:</span>
-                  <span className="font-mono font-black text-slate-800 text-xs bg-white px-2 py-0.5 rounded border border-slate-200">
-                    {receiptModal.txnId}
-                  </span>
-                </div>
-
-                {/* Date & Time (কখন গেছে) */}
-                <div className="flex justify-between items-start border-b border-slate-200/60 pb-2">
-                  <span className="text-slate-500 font-bold text-[11px] shrink-0">সময় ও তারিখ:</span>
-                  <span className="font-extrabold text-slate-800 text-right text-[11px]">
-                    {receiptModal.timestamp}
-                  </span>
-                </div>
-
-                {/* Sender (দাতা) */}
-                <div className="flex justify-between items-center border-b border-slate-200/60 pb-2">
-                  <span className="text-slate-500 font-bold text-[11px]">সবুজ পক্ষ (দাতা):</span>
-                  <span className="font-extrabold text-slate-900">
-                    {receiptModal.senderName} {receiptModal.senderPhone ? `(${receiptModal.senderPhone})` : ''}
-                  </span>
-                </div>
-
-                {/* Recipient (গ্রহীতা) */}
-                <div className="flex justify-between items-center border-b border-slate-200/60 pb-2">
-                  <span className="text-slate-500 font-bold text-[11px]">লাল পক্ষ (গ্রহীতা):</span>
-                  <span className="font-extrabold text-slate-900">
-                    {receiptModal.recipientName} {receiptModal.recipientPhone ? `(${receiptModal.recipientPhone})` : ''}
-                  </span>
-                </div>
-
-                {/* Fine if any */}
-                {receiptModal.fine !== undefined && receiptModal.fine > 0 && (
-                  <div className="flex justify-between items-center border-b border-slate-200/60 pb-2 text-rose-700">
-                    <span className="font-bold text-[11px]">অতিরিক্ত সময় জরিমানা:</span>
-                    <span className="font-black font-mono text-xs">৳{receiptModal.fine}</span>
+      <AnimatePresence>
+        {/* 6. PIN VERIFICATION DIALOG MODAL */}
+        {showPinPrompt && (
+          <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            <motion.div 
+              initial={{ y: "100%" }} 
+              animate={{ y: 0 }} 
+              exit={{ y: "100%" }} 
+              transition={{ type: "spring", damping: 25, stiffness: 200 }} 
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden text-left"
+            >
+              <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-white/10 rounded-xl">
+                    <Lock className="w-5 h-5 text-white" />
                   </div>
-                )}
+                  <div>
+                    <h3 className="font-bold text-lg">নিরাপত্তা নিশ্চিতকরণ</h3>
+                    <p className="text-[10px] text-emerald-200 uppercase tracking-widest font-bold">Wallet Security PIN</p>
+                  </div>
+                </div>
+                <button onClick={() => setShowPinPrompt(null)} className="p-2 hover:bg-white/10 rounded-full transition cursor-pointer">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
 
-                {/* Status Description */}
-                <div className="pt-1 text-[11px] text-slate-700 leading-relaxed font-medium">
-                  <strong>বিবরণ:</strong> {receiptModal.note}
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                <div className="text-center space-y-2">
+                  <p className="text-sm text-slate-600 font-bold leading-normal">
+                    {showPinPrompt.action === 'yes_received'
+                      ? 'টাকা বুঝে পেয়েছেন তা নিশ্চিত করতে দয়া করে আপনার ওয়ালেট পিন নম্বরটি প্রদান করুন।'
+                      : 'লেনদেন সম্পূর্ণ করতে দয়া করে আপনার ওয়ালেট পিন নম্বরটি প্রদান করুন।'}
+                  </p>
+                </div>
+
+                <div className="space-y-6">
+                  <input
+                    type="password"
+                    placeholder="আপনার ওয়ালেট পিন লিখুন"
+                    maxLength={5}
+                    value={actionPin}
+                    onChange={e => setActionPin(e.target.value)}
+                    className="w-full bg-slate-50 p-5 rounded-2xl border border-slate-200 text-2xl font-extrabold text-center font-mono focus:bg-white outline-none focus:ring-4 focus:ring-emerald-500/10 transition-all"
+                  />
+
+                  <div className="grid grid-cols-2 gap-4 pt-4">
+                    <button
+                      onClick={() => setShowPinPrompt(null)}
+                      disabled={isProcessing}
+                      className="py-4 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-2xl text-sm font-black transition cursor-pointer"
+                    >
+                      বাতিল করুন
+                    </button>
+                    <button
+                      onClick={executePinVerifiedAction}
+                      disabled={isProcessing}
+                      className="py-4 bg-[#004a2c] hover:bg-[#003a22] text-white rounded-2xl text-sm font-black transition cursor-pointer flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20"
+                    >
+                      {isProcessing ? <Loader2 className="w-5 h-5 animate-spin" /> : 'নিশ্চিত করুন'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* 7. HIGH-SPEED CUSTOM DIGITAL TRANSACTION MONEY RECEIPT POPUP MODAL */}
+        {receiptModal && (
+          <div className="fixed inset-0 z-[200] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            <motion.div 
+              initial={{ y: "100%" }} 
+              animate={{ y: 0 }} 
+              exit={{ y: "100%" }} 
+              transition={{ type: "spring", damping: 25, stiffness: 200 }} 
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden text-left"
+            >
+              <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-white/10 rounded-xl">
+                    <FileText className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-lg">{receiptModal.title}</h3>
+                    <p className="text-[10px] text-emerald-200 uppercase tracking-widest font-bold">BNB Business Network Gateway</p>
+                  </div>
+                </div>
+                <button onClick={() => setReceiptModal(null)} className="p-2 hover:bg-white/10 rounded-full transition cursor-pointer">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                <div className="bg-emerald-50 border border-emerald-200/80 rounded-[2rem] p-8 text-center space-y-2">
+                  <span className="text-[12px] font-black text-emerald-800 uppercase tracking-widest block">টাকার পরিমাণ (Amount)</span>
+                  <span className="text-5xl font-black text-emerald-950 font-mono block">
+                    ৳{receiptModal.amount.toLocaleString('bn-BD')}
+                  </span>
+                  <div className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-emerald-100 text-emerald-900 border border-emerald-200 text-xs font-black rounded-full shadow-sm">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    {receiptModal.statusBadge}
+                  </div>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200 rounded-[2rem] p-6 space-y-4">
+                  <div className="flex justify-between items-center border-b border-slate-200/60 pb-3">
+                    <span className="text-slate-500 font-bold text-xs uppercase tracking-wider">ট্রানজেকশন আইডি</span>
+                    <span className="font-mono font-black text-slate-950 bg-white px-3 py-1 rounded-lg border border-slate-200">
+                      {receiptModal.txnId}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between items-start border-b border-slate-200/60 pb-3">
+                    <span className="text-slate-500 font-bold text-xs uppercase tracking-wider">সময় ও তারিখ</span>
+                    <span className="font-black text-slate-900 text-right text-xs">
+                      {receiptModal.timestamp}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between items-center border-b border-slate-200/60 pb-3">
+                    <span className="text-slate-500 font-bold text-xs uppercase tracking-wider">সবুজ পক্ষ (দাতা)</span>
+                    <span className="font-black text-slate-900 text-xs">
+                      {receiptModal.senderName} {receiptModal.senderPhone ? `(${receiptModal.senderPhone})` : ''}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between items-center border-b border-slate-200/60 pb-3">
+                    <span className="text-slate-500 font-bold text-xs uppercase tracking-wider">লাল পক্ষ (গ্রহীতা)</span>
+                    <span className="font-black text-slate-900 text-xs">
+                      {receiptModal.recipientName} {receiptModal.recipientPhone ? `(${receiptModal.recipientPhone})` : ''}
+                    </span>
+                  </div>
+
+                  {receiptModal.fine !== undefined && receiptModal.fine > 0 && (
+                    <div className="flex justify-between items-center border-b border-slate-200/60 pb-3 text-rose-700">
+                      <span className="font-bold text-xs uppercase tracking-wider">জরিমানা</span>
+                      <span className="font-black font-mono text-sm">৳{receiptModal.fine}</span>
+                    </div>
+                  )}
+
+                  <div className="pt-2 text-xs text-slate-700 leading-relaxed font-bold bg-white/50 p-4 rounded-2xl border border-slate-100">
+                    <span className="text-slate-400 block mb-1 uppercase tracking-tighter text-[10px]">লেনদেন বিবরণ</span>
+                    {receiptModal.note}
+                  </div>
+                </div>
+
+                <div className="text-[10px] text-slate-400 text-center font-bold pb-4">
+                  🔒 100% নিরাপদ এনক্রিপ্টেড ডিজিটাল মানি রিসিট • BNB Bangladesh
                 </div>
               </div>
 
-              {/* Security Seal Note */}
-              <div className="text-[10px] text-slate-400 text-center font-bold">
-                🔒 100% নিরাপদ এনক্রিপ্টেড ডিজিটাল মানি রিসিট • BNB Bangladesh
-              </div>
-            </div>
+              <div className="p-6 bg-slate-50 border-t border-slate-200 flex gap-4 shrink-0">
+                <button
+                  onClick={copyReceiptToClipboard}
+                  className="flex-1 py-4 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-2xl text-sm font-black transition cursor-pointer flex items-center justify-center gap-2 shadow-sm"
+                >
+                  {copiedReceipt ? (
+                    <>
+                      <Check className="w-5 h-5 text-emerald-600" />
+                      <span className="text-emerald-700">কপি হয়েছে!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-5 h-5" />
+                      <span>রিসিট কপি করুন</span>
+                    </>
+                  )}
+                </button>
 
-            {/* Bottom Action Footer */}
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
-              <button
-                onClick={copyReceiptToClipboard}
-                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-xl text-xs font-black transition cursor-pointer flex items-center justify-center gap-1.5"
-              >
-                {copiedReceipt ? (
-                  <>
-                    <Check className="w-4 h-4 text-emerald-600" />
-                    <span className="text-emerald-700">কপি হয়েছে!</span>
-                  </>
+                <button
+                  onClick={() => setReceiptModal(null)}
+                  className="flex-1 py-4 bg-[#004a2c] hover:bg-[#003a22] text-white rounded-2xl text-sm font-black transition cursor-pointer shadow-lg shadow-emerald-900/20"
+                >
+                  সম্পন্ন
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* 8. PREVIOUS DEALS HISTORY MODAL */}
+        {showHistoryModal && (
+          <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            <motion.div 
+              initial={{ y: "100%" }} 
+              animate={{ y: 0 }} 
+              exit={{ y: "100%" }} 
+              transition={{ type: "spring", damping: 25, stiffness: 200 }} 
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden text-left"
+            >
+              <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-white/10 rounded-xl">
+                    <Clock className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-lg">পূর্ববর্তী লেনদেন হিসাব</h3>
+                    <p className="text-[10px] text-emerald-200 uppercase tracking-widest font-bold">Transaction History</p>
+                  </div>
+                </div>
+                <button onClick={() => setShowHistoryModal(false)} className="p-2 hover:bg-white/10 rounded-full transition cursor-pointer">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+                {historyDeals.length === 0 ? (
+                  <div className="py-20 text-center space-y-4">
+                    <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mx-auto border border-slate-100">
+                      <Clock className="w-10 h-10 text-slate-200" />
+                    </div>
+                    <p className="text-slate-400 font-bold">এখনো কোনো নিরাপদ লেনদেন সম্পন্ন হয়নি।</p>
+                  </div>
                 ) : (
-                  <>
-                    <Copy className="w-4 h-4" />
-                    <span>রিসিট কপি করুন</span>
-                  </>
-                )}
-              </button>
-
-              <button
-                onClick={() => setReceiptModal(null)}
-                className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-black transition cursor-pointer"
-              >
-                সম্পন্ন / বন্ধ করুন
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 8. PREVIOUS DEALS HISTORY DRAWER/MODAL */}
-      {showHistoryModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end justify-center">
-          <div className="bg-white rounded-t-[2.5rem] w-full max-w-md p-6 max-h-[80vh] overflow-y-auto shadow-2xl border-t border-slate-150 space-y-5 animate-slide-up text-left">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <h3 className="font-extrabold text-sm text-[#015E34] flex items-center gap-1.5">
-                <Clock className="w-5 h-5" /> পূর্ববর্তী লেনদেন হিসাব
-              </h3>
-              <button
-                onClick={() => setShowHistoryModal(false)}
-                className="p-1.5 bg-slate-100 hover:bg-slate-200 rounded-full transition text-slate-500 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {historyDeals.length === 0 ? (
-              <div className="py-12 text-center text-slate-400 space-y-2">
-                <span className="text-3xl block">📁</span>
-                <p className="text-xs font-bold">এখনো কোনো নিরাপদ লেনদেন সম্পন্ন হয়নি।</p>
-              </div>
-            ) : (
-              <div className="space-y-3.5">
-                {historyDeals.map((deal, idx) => (
-                  <div key={`${deal.id}-${idx}`} className="bg-slate-50 p-4 rounded-2xl border border-slate-150/80 flex justify-between items-center text-xs">
-                    <div className="space-y-1 text-left">
-                      <p className="font-black text-slate-800">৳{deal.amount.toLocaleString()} BNB</p>
-                      <p className="text-[10px] text-slate-500 font-bold">গ্রহীতাঃ {deal.recipientName}</p>
-                      <p className="text-[8px] text-slate-400 font-mono">
-                        {deal.completedAt ? new Date(deal.completedAt).toLocaleString('bn-BD') : ''}
-                      </p>
-                    </div>
-                    <div className="text-right space-y-1">
-                      <span className="text-[8px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-0.5 rounded-full font-black uppercase">
-                        সম্পন্ন
-                      </span>
-                      {deal.fine > 0 && (
-                        <p className="text-[8.5px] text-rose-600 font-black">জরিমানাঃ ৳{deal.fine}</p>
-                      )}
-                    </div>
+                  <div className="space-y-4 pb-12">
+                    {historyDeals.map((deal, idx) => (
+                      <div key={`${deal.id}-${idx}`} className="bg-white p-5 rounded-[2rem] border border-slate-100 shadow-sm hover:shadow-md transition-shadow flex justify-between items-center group">
+                        <div className="space-y-1 text-left">
+                          <p className="font-black text-lg text-slate-900">৳{deal.amount.toLocaleString()} <span className="text-[10px] text-slate-400 font-mono">BNB</span></p>
+                          <p className="text-xs text-slate-500 font-bold">প্রাপকঃ <span className="text-slate-800">{deal.recipientName}</span></p>
+                          <div className="flex items-center gap-1 text-[10px] text-slate-400 font-bold uppercase tracking-tighter">
+                            <Clock className="w-3 h-3" />
+                            {deal.completedAt ? new Date(deal.completedAt).toLocaleString('bn-BD') : ''}
+                          </div>
+                        </div>
+                        <div className="text-right space-y-2">
+                          <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-100 px-4 py-1 rounded-full font-black uppercase tracking-widest shadow-xs">
+                            সম্পন্ন
+                          </span>
+                          {deal.fine > 0 && (
+                            <p className="text-[11px] text-rose-600 font-black bg-rose-50 px-3 py-1 rounded-lg">জরিমানাঃ ৳{deal.fine}</p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
-            )}
+
+              <div className="p-6 bg-slate-50 border-t border-slate-100 shrink-0">
+                <button
+                  onClick={() => setShowHistoryModal(false)}
+                  className="w-full py-4 bg-[#004a2c] hover:bg-[#003a22] text-white rounded-2xl text-sm font-black transition cursor-pointer shadow-lg shadow-emerald-900/20"
+                >
+                  ফিরে যান
+                </button>
+              </div>
+            </motion.div>
           </div>
-        </div>
-      )}
+        )}
+      </AnimatePresence>
     </div>
   );
 };

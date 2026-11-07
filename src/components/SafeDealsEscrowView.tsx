@@ -29,7 +29,11 @@ import {
   Printer,
   Copy,
   UploadCloud,
-  ClipboardList
+  ClipboardList,
+  RefreshCw,
+  Scale,
+  ArrowUpRight,
+  ArrowDownRight
 } from 'lucide-react';
 import { db } from '../lib/firebase';
 import { 
@@ -1246,124 +1250,149 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
       {/* MODAL I: টাকা পাঠান (Send secure money form) */}
       <AnimatePresence>
         {showSendModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-4 z-55 font-sans">
+          <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            
             <motion.div
-              initial={{ y: 80, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 80, opacity: 0 }}
-              className="bg-white rounded-t-3xl sm:rounded-3xl p-5 w-full max-w-md border border-slate-100 shadow-2xl relative overflow-hidden text-left space-y-4"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
             >
-              <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-blue-600 to-indigo-600" />
-              
-              <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">
-                <h3 className="text-sm font-extrabold text-blue-700 flex items-center gap-2">
-                  <Send className="w-4 h-4" /> নিরাপদ এসক্রো টাকা পাঠান
-                </h3>
+              <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-white/10 rounded-xl">
+                    <Send className="w-5 h-5" />
+                  </div>
+                  <h3 className="text-lg font-black">নিরাপদ এসক্রো টাকা পাঠান</h3>
+                </div>
                 <button 
                   type="button"
                   onClick={() => {
                     setShowSendModal(false);
                     setErrorMsg('');
                   }}
-                  className="p-1 hover:bg-slate-100 rounded-lg transition"
+                  className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
                 >
-                  <X className="w-5 h-5 text-slate-400" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 
-              <form onSubmit={handleSendEscrow} className="space-y-4">
-                {/* Search recipient */}
-                <div className="space-y-1">
-                  <label className="block text-xs font-extrabold text-slate-600">প্রাপকের মোবাইল নম্বর অথবা মেম্বার আইডি *</label>
-                  <div className="relative">
-                    <input 
-                      type="text"
-                      required
-                      placeholder="উদাঃ BNB00005327 অথবা মোবাইল"
-                      value={sendPhone}
-                      onChange={(e) => setSendPhone(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-slate-900 rounded-xl focus:outline-none focus:border-blue-500 font-mono text-sm pl-10"
-                    />
-                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                <form onSubmit={handleSendEscrow} className="space-y-6">
+                  {/* Search recipient */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-black text-slate-700 uppercase tracking-wider">প্রাপকের মোবাইল নম্বর অথবা মেম্বার আইডি *</label>
+                    <div className="relative">
+                      <input 
+                        type="text"
+                        required
+                        placeholder="উদাঃ BNB00005327 অথবা মোবাইল"
+                        value={sendPhone}
+                        onChange={(e) => setSendPhone(e.target.value)}
+                        className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-200 text-slate-900 rounded-2xl focus:outline-none focus:border-emerald-500 font-mono text-sm pl-12 shadow-inner transition-all"
+                      />
+                      <Search className="w-5 h-5 text-slate-400 absolute left-4 top-3.5" />
+                    </div>
+
+                    {checkingRecipient && (
+                      <div className="flex items-center gap-2 text-[10px] text-emerald-600 font-black animate-pulse px-1">
+                        <div className="w-3 h-3 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+                        ডাটাবেসে প্রাপক খোঁজা হচ্ছে...
+                      </div>
+                    )}
+
+                    {resolvedRecipient ? (
+                      <div className="bg-emerald-50 border-2 border-emerald-100 p-4 rounded-2xl flex items-center justify-between text-xs shadow-sm animate-in zoom-in duration-300">
+                        <div className="text-left space-y-1">
+                          <p className="font-black text-emerald-800 flex items-center gap-1.5 uppercase tracking-wide">
+                            <CheckCircle className="w-4 h-4" /> প্রাপক সঠিকঃ
+                          </p>
+                          <p className="text-slate-700 font-black text-sm">{resolvedRecipient.name}</p>
+                          <p className="text-slate-500 font-bold text-[10px]">{resolvedRecipient.memberId || 'সাধারণ সদস্য'} • {resolvedRecipient.phone}</p>
+                        </div>
+                        <span className="text-[10px] font-black bg-emerald-600 text-white px-3 py-1 rounded-full shadow-sm">ভেরিফাইড</span>
+                      </div>
+                    ) : sendPhone.length >= 5 && !checkingRecipient && (
+                      <div className="bg-rose-50 border-2 border-rose-100 p-4 rounded-2xl text-xs text-rose-800 leading-relaxed font-black shadow-sm animate-in slide-in-from-top-2 duration-300">
+                        <div className="flex items-center gap-2 mb-1">
+                          <AlertCircle className="w-4 h-4" />
+                          <span className="uppercase tracking-wider">ত্রুটি</span>
+                        </div>
+                        প্রাপক ডাটাবেসে নিবন্ধিত পাওয়া যায়নি। আপনার দেওয়া তথ্য পুনরায় নিশ্চিত করুন।
+                      </div>
+                    )}
                   </div>
 
-                  {checkingRecipient && (
-                    <p className="text-[9.5px] text-blue-600 font-bold animate-pulse">ডাটাবেসে প্রাপক খোঁজা হচ্ছে...</p>
-                  )}
-
-                  {resolvedRecipient ? (
-                    <div className="bg-emerald-50 border border-emerald-100 p-2.5 rounded-xl flex items-center justify-between text-xs mt-1.5">
-                      <div className="text-left">
-                        <p className="font-extrabold text-emerald-800 flex items-center gap-1">
-                          <Check className="w-3.5 h-3.5" /> প্রাপক সঠিকঃ
-                        </p>
-                        <p className="text-slate-700 mt-0.5 font-bold">{resolvedRecipient.name} ({resolvedRecipient.memberId || 'সাধারণ সদস্য'})</p>
-                      </div>
-                      <span className="text-[9.5px] font-black bg-emerald-600 text-white px-2 py-0.5 rounded-md">ভেরিফাইড</span>
+                  {/* Amount */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-black text-slate-700 uppercase tracking-wider">টাকার পরিমাণ (৳ BDT) *</label>
+                    <div className="relative">
+                      <input 
+                        type="number"
+                        required
+                        min="100"
+                        placeholder="নূন্যতম 100 টাকা"
+                        value={sendAmount}
+                        onChange={(e) => setSendAmount(e.target.value)}
+                        className="w-full px-4 py-4 bg-slate-50 border-2 border-slate-200 text-slate-900 rounded-2xl text-xl font-black focus:border-emerald-500 font-mono text-center shadow-inner transition-all"
+                      />
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-black text-lg">৳</span>
                     </div>
-                  ) : sendPhone.length >= 5 && !checkingRecipient && (
-                    <div className="bg-amber-50 border border-amber-200 p-2 rounded-xl text-[10.5px] text-amber-800 leading-relaxed font-bold">
-                      ⚠ প্রাপক ডাটাবেসে নিবন্ধিত পাওয়া যায়নি। আপনার দেওয়া তথ্য পুনরায় নিশ্চিত করুন।
+                    <div className="flex items-center justify-between px-1">
+                      <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">বর্তমান ব্যালেন্সঃ</p>
+                      <p className="text-[11px] text-emerald-700 font-black">৳ {(liveUser.balance || 0).toLocaleString('bn-BD')} BDT</p>
                     </div>
-                  )}
-                </div>
+                  </div>
 
-                {/* Amount */}
-                <div className="space-y-1">
-                  <label className="block text-xs font-extrabold text-slate-600">টাকার পরিমাণ (৳ BDT) *</label>
-                  <input 
-                    type="number"
-                    required
-                    min="100"
-                    placeholder="নূন্যতম 100 টাকা"
-                    value={sendAmount}
-                    onChange={(e) => setSendAmount(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-slate-900 rounded-xl text-sm font-black focus:border-blue-500 font-mono"
-                  />
-                  <p className="text-[9.5px] text-slate-400">আপনার বর্তমান ব্যালেন্সঃ ৳{liveUser.balance?.toLocaleString('bn-BD')} BDT</p>
-                </div>
+                  {/* Purpose/Description */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-black text-slate-700 uppercase tracking-wider">লেনদেনের উদ্দেশ্য / বিবরণ (ঐচ্ছিক)</label>
+                    <textarea 
+                      rows={2}
+                      placeholder="উদাঃ শাড়ি ও জামা কাপড়ের পেমেন্ট"
+                      value={sendPurpose}
+                      onChange={(e) => setSendPurpose(e.target.value)}
+                      className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-200 text-slate-900 rounded-2xl text-sm font-bold focus:border-emerald-500 shadow-inner transition-all"
+                    />
+                  </div>
 
-                {/* Purpose/Description */}
-                <div className="space-y-1">
-                  <label className="block text-xs font-extrabold text-slate-600">লেনদেনের উদ্দেশ্য / বিবরণ (ঐচ্ছিক)</label>
-                  <input 
-                    type="text"
-                    placeholder="উদাঃ শাড়ি ও জামা কাপড়ের পেমেন্ট"
-                    value={sendPurpose}
-                    onChange={(e) => setSendPurpose(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-slate-900 rounded-xl text-xs"
-                  />
-                </div>
+                  {/* Security Pin */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-black text-slate-700 uppercase tracking-wider">আপনার 4 ডিজিটের নিরাপত্তা পিন নাম্বার *</label>
+                    <input 
+                      type="password"
+                      required
+                      maxLength={4}
+                      placeholder="••••"
+                      value={sendPin}
+                      onChange={(e) => setSendPin(e.target.value)}
+                      className="w-full px-4 py-4 bg-slate-50 border-2 border-slate-200 text-slate-900 rounded-2xl text-center focus:border-emerald-500 font-mono tracking-[1em] text-xl shadow-inner transition-all"
+                    />
+                  </div>
 
-                {/* Security Pin */}
-                <div className="space-y-1">
-                  <label className="block text-xs font-extrabold text-slate-600">আপনার 4 ডিজিটের নিরাপত্তা পিন নাম্বার *</label>
-                  <input 
-                    type="password"
-                    required
-                    maxLength={4}
-                    placeholder="••••"
-                    value={sendPin}
-                    onChange={(e) => setSendPin(e.target.value)}
-                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 text-slate-900 rounded-xl text-center focus:border-blue-500 font-mono tracking-widest text-sm"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-extrabold py-3.5 px-4 rounded-2xl transition shadow-md flex items-center justify-center gap-2 cursor-pointer text-xs"
-                >
-                  {submitting ? (
-                    <>
-                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      টাকা পাঠানো হচ্ছে...
-                    </>
-                  ) : (
-                    <>✓ বুকিং নিশ্চিত ও সুরক্ষিত হোল্ড করুন</>
-                  )}
-                </button>
-              </form>
+                  <div className="pt-2">
+                    <button
+                      type="submit"
+                      disabled={submitting}
+                      className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black py-4 px-6 rounded-2xl transition-all shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-3 cursor-pointer text-base active:scale-95"
+                    >
+                      {submitting ? (
+                        <>
+                          <div className="w-5 h-5 border-3 border-white border-t-transparent rounded-full animate-spin" />
+                          <span>টাকা পাঠানো হচ্ছে...</span>
+                        </>
+                      ) : (
+                        <>
+                          <ShieldCheck className="w-5 h-5" />
+                          <span>বুকিং নিশ্চিত ও সুরক্ষিত হোল্ড করুন</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              </div>
             </motion.div>
           </div>
         )}
@@ -1372,76 +1401,102 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
       {/* MODAL II: টাকা গ্রহণ করুন (Receive/Accept orders list overlay) */}
       <AnimatePresence>
         {showReceiveModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-4 z-55 font-sans">
+          <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            
             <motion.div
-              initial={{ y: 85, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 85, opacity: 0 }}
-              className="bg-white rounded-t-3xl sm:rounded-3xl p-5 w-full max-w-lg border border-slate-100 shadow-2xl relative overflow-hidden text-left space-y-4 max-h-[85vh] overflow-y-auto"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
             >
-              <div className="absolute top-0 inset-x-0 h-1.5 bg-emerald-600" />
-
-              <div className="flex justify-between items-center border-b border-slate-100 pb-2">
-                <h3 className="text-sm font-extrabold text-emerald-800 flex items-center gap-1.5">
-                  <ArrowDown className="w-4 h-4" /> সুরক্ষিত ডিল টাকা ও কুরিয়ার গ্রহণ করুন
-                </h3>
+              <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-white/10 rounded-xl">
+                    <ArrowDown className="w-5 h-5" />
+                  </div>
+                  <h3 className="text-lg font-black">সুরক্ষিত ডিল টাকা ও কুরিয়ার গ্রহণ করুন</h3>
+                </div>
                 <button 
                   type="button"
                   onClick={() => setShowReceiveModal(false)}
-                  className="p-1 hover:bg-slate-100 rounded-lg transition"
+                  className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
                 >
-                  <X className="w-5 h-5 text-slate-400" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 
-              {/* Find list where Seller is current user and status is Payment Held */}
-              {(() => {
-                const pendingSales = orders.filter(o => o.sellerUid === liveUser.uid && o.status === 'Payment Held');
-                return (
-                  <div className="space-y-3">
-                    <p className="text-xs text-slate-500 font-bold mb-2">কেউ নিরাপদ লেনদেনের মাধ্যমে আপনাকে টাকা বুকিং করলে নিচে দেখতে পাবেন এবং কুরিয়ার প্রদানের পর রিলিজ নিতে পারবেনঃ</p>
-                    
-                    {pendingSales.length === 0 ? (
-                      <div className="p-8 text-center border border-dashed border-slate-200 rounded-2xl text-slate-400 text-xs font-bold leading-relaxed">
-                        আপাতত আপনার জন্য কোনো পেন্ডিং বুকিং পাওয়া যায়নি। ক্রেতাদের আপনার BNB মোবাইল নম্বরে বা BNB মেম্বার আইডিতে "টাকা পাঠান" সেকশন ব্যবহার করে পেমেন্ট করার কথা বলুন।
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {/* Find list where Seller is current user and status is Payment Held */}
+                {(() => {
+                  const pendingSales = orders.filter(o => o.sellerUid === liveUser.uid && o.status === 'Payment Held');
+                  return (
+                    <div className="space-y-4">
+                      <div className="bg-emerald-50 border-2 border-emerald-100 p-4 rounded-2xl">
+                        <p className="text-xs text-emerald-800 font-bold leading-relaxed">
+                          কেউ নিরাপদ লেনদেনের মাধ্যমে আপনাকে টাকা বুকিং করলে নিচে দেখতে পাবেন এবং কুরিয়ার প্রদানের পর রিলিজ নিতে পারবেনঃ
+                        </p>
                       </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {pendingSales.map((item, idx) => (
-                          <div key={`${item.id}-${idx}`} className="p-4 bg-[#F9FAFB] border border-slate-205 border-slate-200 rounded-2xl space-y-3">
-                            <div className="flex justify-between items-start">
-                              <div>
-                                <h4 className="text-xs font-extrabold text-slate-800 flex items-center gap-1">
-                                  <span>👤 {item.buyerName}</span>
-                                  <span className="text-[10px] font-mono text-slate-400 bg-white border px-1.5 rounded">ID: {item.buyerMemberId}</span>
-                                </h4>
-                                <p className="text-[10px] text-slate-400 font-mono mt-0.5">বুকিং আইডিঃ #{item.id.substring(0, 6).toUpperCase()}</p>
-                              </div>
-                              <span className="text-sm font-black text-[#0D9488] font-mono">৳ {item.totalAmount.toLocaleString('en-US')}</span>
-                            </div>
-
-                            <div className="bg-white p-2.5 rounded-xl text-[11px] text-slate-600 font-bold border border-slate-150 relative">
-                              <span className="text-[8.5px] uppercase font-black tracking-wider text-slate-400 block mb-0.5">লেনদেনের উদ্দেশ্যঃ</span>
-                              "{item.dealTitle || 'নিরাপদ ক্রয় ডিল'}"
-                            </div>
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectedOrder(item);
-                                setShowReceiveModal(false);
-                              }}
-                              className="w-full bg-[#057A55] hover:bg-emerald-800 text-white font-extrabold py-2 px-3 rounded-xl text-xs transition cursor-pointer text-center flex items-center justify-center gap-1"
-                            >
-                              পণ্য শিপিং ট্র্যাকিং বা রিফান্ড পরিচালনা করুন <ChevronRight className="w-4 h-4" />
-                            </button>
+                      
+                      {pendingSales.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-16 px-6 text-center border-2 border-dashed border-slate-200 rounded-[32px] bg-slate-50/50 space-y-4">
+                          <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center shadow-sm text-slate-300">
+                            <Clock className="w-8 h-8" />
                           </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
+                          <p className="text-sm text-slate-400 font-black leading-relaxed">
+                            আপাতত আপনার জন্য কোনো পেন্ডিং বুকিং পাওয়া যায়নি। ক্রেতাদের আপনার BNB মোবাইল নম্বরে বা BNB মেম্বার আইডিতে "টাকা পাঠান" সেকশন ব্যবহার করে পেমেন্ট করার কথা বলুন।
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {pendingSales.map((item, idx) => (
+                            <div key={`${item.id}-${idx}`} className="p-5 bg-white border-2 border-slate-100 rounded-[28px] space-y-4 shadow-sm hover:border-emerald-200 transition-all">
+                              <div className="flex justify-between items-start">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-12 h-12 bg-emerald-100 text-emerald-700 rounded-2xl flex items-center justify-center font-black text-xl shadow-inner">
+                                    {item.buyerName ? item.buyerName.charAt(0).toUpperCase() : 'B'}
+                                  </div>
+                                  <div>
+                                    <h4 className="text-sm font-black text-slate-800">{item.buyerName}</h4>
+                                    <div className="flex items-center gap-1.5 mt-0.5">
+                                      <span className="text-[10px] font-black text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full uppercase tracking-wider">ID: {item.buyerMemberId}</span>
+                                      <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">#{item.id.substring(0, 6).toUpperCase()}</span>
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-lg font-black text-emerald-700 font-mono">৳ {item.totalAmount.toLocaleString('bn-BD')}</p>
+                                  <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">বুকিং ফান্ড</p>
+                                </div>
+                              </div>
+
+                              <div className="bg-slate-50 p-4 rounded-2xl space-y-1.5 border border-slate-100">
+                                <span className="text-[9px] uppercase font-black tracking-[0.1em] text-slate-400 block">লেনদেনের উদ্দেশ্য ও বিবরণঃ</span>
+                                <p className="text-xs text-slate-700 font-bold italic leading-relaxed">
+                                  "{item.dealTitle || 'নিরাপদ ক্রয় ডিল'}"
+                                </p>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedOrder(item);
+                                  setShowReceiveModal(false);
+                                }}
+                                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-4 px-4 rounded-2xl text-xs transition-all cursor-pointer flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/10 active:scale-95"
+                              >
+                                <span>পণ্য শিপিং ট্র্যাকিং বা রিফান্ড পরিচালনা করুন</span>
+                                <ChevronRight className="w-4 h-4" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
             </motion.div>
           </div>
         )}
@@ -1450,19 +1505,25 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
       {/* MODAL III: TRANSACTION DETAIL TIMELINE MODAL */}
       <AnimatePresence>
         {selectedOrder && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-4 z-55 font-sans">
+          <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            
             <motion.div
-              initial={{ y: 90, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 90, opacity: 0 }}
-              className="bg-white rounded-t-3xl sm:rounded-3xl p-5 w-full max-w-sm border border-slate-100 shadow-2xl relative overflow-hidden text-left space-y-4 max-h-[90vh] overflow-y-auto"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
             >
-              <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-blue-600 to-indigo-600" />
-
-              <div className="flex justify-between items-center border-b border-slate-100 pb-2">
-                <div>
-                  <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">নিরাপদ লেনদেন ভাউচার</h3>
-                  <p className="text-[11px] text-slate-500 font-mono mt-0.5">বুকিং আইডিঃ #{selectedOrder.id.toUpperCase()}</p>
+              <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-white/10 rounded-xl">
+                    <ClipboardList className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black leading-tight">নিরাপদ লেনদেন ভাউচার</h3>
+                    <p className="text-[10px] text-emerald-100/70 font-medium tracking-wide uppercase">Booking ID: #{selectedOrder.id.toUpperCase()}</p>
+                  </div>
                 </div>
                 <button 
                   type="button"
@@ -1470,289 +1531,334 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
                     setSelectedOrder(null);
                     setShowShipForm(false);
                   }}
-                  className="p-1 hover:bg-slate-100 rounded-lg transition"
+                  className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
                 >
-                  <X className="w-5 h-5 text-slate-400" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 
-              {/* Status & money summary card */}
-              <div className="bg-slate-50 border p-4 rounded-2.5xl space-y-2.5 text-center relative overflow-hidden">
-                <p className="text-[10px] text-slate-400 font-black block">বুকিং পেমেন্ট পরিমাণ</p>
-                <h2 className="text-2xl font-black text-slate-900 font-sans font-mono">
-                  ৳ {formatBengaliMoney(selectedOrder.totalAmount)} BDT
-                </h2>
-                
-                <div className="flex items-center justify-center gap-1 bg-white border py-1.5 px-3 rounded-full self-center inline-block mx-auto text-xs font-black text-slate-700 shadow-4xs">
-                  স্ট্যাটাসঃ 
-                  <span className={`font-black ml-1 uppercase`}>
-                    {selectedOrder.status === 'Payment Held' ? '⏳ অপেক্ষমাণ হোল্ড' : 
-                     selectedOrder.status === 'Payment Released' ? '✓ সম্পন্ন (Paid)' : 
-                     selectedOrder.status === 'Shipped' ? '🚚 পণ্য পাঠানো হয়েছে' : '❌ বাতিল ও ফেরতকৃত'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Deal description metadata details */}
-              <div className="space-y-2.5 text-xs text-slate-650 font-bold">
-                <div className="grid grid-cols-2 gap-2 border-b pb-2 text-[11px]">
-                  <div>
-                    <span className="text-slate-400 block text-[9px] uppercase tracking-wider">টাকা পেয়ার (ক্রেতা)</span>
-                    <p className="text-slate-800 font-extrabold">{selectedOrder.buyerName}</p>
-                    <p className="text-slate-500 font-mono text-[9px]">{selectedOrder.buyerPhone}</p>
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {/* Status & money summary card */}
+                <div className="bg-slate-50 border-2 border-slate-100 p-6 rounded-[32px] space-y-3 text-center relative overflow-hidden shadow-sm">
+                  <div className="absolute top-0 right-0 p-4 opacity-5">
+                    <ShieldCheck className="w-20 h-20" />
                   </div>
-                  <div>
-                    <span className="text-slate-400 block text-[9px] uppercase tracking-wider">টাকা প্রাপক (বিক্রেতা)</span>
-                    <p className="text-slate-800 font-extrabold">{selectedOrder.sellerName}</p>
-                    <p className="text-slate-500 font-mono text-[9px]">{selectedOrder.sellerPhone}</p>
+                  <p className="text-[10px] text-slate-400 font-black uppercase tracking-[0.2em] block">বুকিং পেমেন্ট পরিমাণ</p>
+                  <h2 className="text-3xl font-black text-slate-900 font-mono">
+                    ৳ {formatBengaliMoney(selectedOrder.totalAmount)}
+                  </h2>
+                  
+                  <div className={`inline-flex items-center gap-2 py-2 px-4 rounded-full text-xs font-black shadow-sm border-2 ${
+                    selectedOrder.status === 'Payment Held' ? 'bg-blue-50 border-blue-100 text-blue-700' : 
+                    selectedOrder.status === 'Payment Released' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 
+                    selectedOrder.status === 'Shipped' ? 'bg-amber-50 border-amber-100 text-amber-700' : 
+                    'bg-rose-50 border-rose-100 text-rose-700'
+                  }`}>
+                    <span className="w-2 h-2 rounded-full bg-current animate-pulse" />
+                    <span>
+                      {selectedOrder.status === 'Payment Held' ? '⏳ অপেক্ষমাণ হোল্ড' : 
+                       selectedOrder.status === 'Payment Released' ? '✓ সম্পন্ন (Paid)' : 
+                       selectedOrder.status === 'Shipped' ? '🚚 পণ্য পাঠানো হয়েছে' : '❌ বাতিল ও ফেরতকৃত'}
+                    </span>
                   </div>
                 </div>
 
-                <div className="space-y-1">
-                  <span className="text-slate-400 block text-[9px] uppercase tracking-wider">লেনদেনের উদ্দেশ্য ও বিবরণঃ</span>
-                  <p className="p-2.5 bg-[#F9FAFB] border rounded-xl italic font-medium leading-relaxed font-sans text-slate-705">
+                {/* Deal description metadata details */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-1">
+                    <span className="text-slate-400 block text-[9px] font-black uppercase tracking-wider">টাকা পেয়ার (ক্রেতা)</span>
+                    <p className="text-slate-800 font-black text-xs truncate">{selectedOrder.buyerName}</p>
+                    <p className="text-slate-500 font-mono text-[10px] font-bold">{selectedOrder.buyerPhone}</p>
+                  </div>
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-1">
+                    <span className="text-slate-400 block text-[9px] font-black uppercase tracking-wider">টাকা প্রাপক (বিক্রেতা)</span>
+                    <p className="text-slate-800 font-black text-xs truncate">{selectedOrder.sellerName}</p>
+                    <p className="text-slate-500 font-mono text-[10px] font-bold">{selectedOrder.sellerPhone}</p>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <span className="text-slate-400 block text-[10px] font-black uppercase tracking-widest px-1">লেনদেনের উদ্দেশ্য ও বিবরণঃ</span>
+                  <div className="p-4 bg-emerald-50/50 border-2 border-emerald-100/50 rounded-2xl italic font-bold leading-relaxed text-slate-700 text-xs shadow-inner">
                     "{selectedOrder.dealTitle || 'সুরক্ষিত ক্রয় লেনদেন ডিল'}"
-                  </p>
+                  </div>
                 </div>
 
                 {selectedOrder.courierName && (
-                  <div className="bg-sky-50 border border-sky-100 p-2.5 rounded-xl space-y-1.5 text-[10.5px]">
-                    <p className="font-extrabold text-sky-900 flex items-center gap-1">
-                      <Truck className="w-3.5 h-3.5 text-sky-700" /> শিপিং ট্র্যাকিং তথ্যঃ
-                    </p>
-                    <p className="text-slate-750">কুরিয়ার কোম্পানিঃ <span className="font-extrabold">{selectedOrder.courierName}</span></p>
-                    <p className="text-slate-750">শিপমেন্ট পোস্টিং তারিখঃ <span className="font-mono font-extrabold">{selectedOrder.shipmentDate || 'ম্যাপকৃত'}</span></p>
-                    <p className="text-slate-755 font-semibold">ট্র্যাকিং কোডঃ <span className="font-mono font-black text-rose-800 bg-white border px-2 py-0.5 rounded shadow-4xs">{selectedOrder.trackingNumber}</span></p>
+                  <div className="bg-sky-50 border-2 border-sky-100 p-5 rounded-[28px] space-y-4 shadow-sm">
+                    <div className="flex items-center justify-between border-b border-sky-200/50 pb-3">
+                      <p className="font-black text-sky-900 flex items-center gap-2 uppercase tracking-wider text-xs">
+                        <Truck className="w-4 h-4 text-sky-700" /> শিপিং ট্র্যাকিং তথ্যঃ
+                      </p>
+                      <span className="text-[10px] font-black bg-white text-sky-700 px-3 py-1 rounded-full border border-sky-200">ACTIVE</span>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <span className="text-[9px] font-black text-sky-400 uppercase tracking-widest">কুরিয়ার কোম্পানি</span>
+                        <p className="text-xs font-black text-slate-800">{selectedOrder.courierName}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <span className="text-[9px] font-black text-sky-400 uppercase tracking-widest">পোস্টিং তারিখ</span>
+                        <p className="text-xs font-black text-slate-800 font-mono">{selectedOrder.shipmentDate || 'N/A'}</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <span className="text-[9px] font-black text-sky-400 uppercase tracking-widest">ট্র্যাকিং কোড বা মেমো নম্বর</span>
+                      <div className="bg-white border-2 border-sky-100 p-3 rounded-xl flex items-center justify-between shadow-inner">
+                        <span className="font-mono font-black text-sm text-rose-800 tracking-wider">{selectedOrder.trackingNumber}</span>
+                        <button onClick={() => {
+                          navigator.clipboard.writeText(selectedOrder.trackingNumber);
+                          alert('ট্র্যাকিং কোড কপি করা হয়েছে!');
+                        }} className="text-sky-600 hover:text-sky-800 transition p-1 cursor-pointer">
+                          <Copy className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
                     
                     {selectedOrder.shipmentScreenshot && (
-                      <div className="mt-2 pt-2 border-t border-sky-200/50 space-y-1">
-                        <span className="text-slate-500 block text-[9px] uppercase tracking-wider font-extrabold">সংযুক্ত রসিদ বা স্ক্রিনশটঃ</span>
-                        <div className="relative group overflow-hidden rounded-lg border border-slate-200/60 bg-white max-w-full">
+                      <div className="space-y-2">
+                        <span className="text-[9px] font-black text-sky-400 uppercase tracking-widest">সংযুক্ত রসিদ বা স্ক্রিনশটঃ</span>
+                        <div className="relative group overflow-hidden rounded-2xl border-2 border-white shadow-md bg-white">
                           <img 
                             src={selectedOrder.shipmentScreenshot} 
                             alt="Shipment Memo" 
-                            className="w-full max-h-48 object-contain cursor-zoom-in"
+                            className="w-full max-h-64 object-contain cursor-zoom-in hover:scale-105 transition-transform duration-500"
                             onClick={() => {
                               const imgWindow = window.open();
                               if (imgWindow) {
                                 imgWindow.document.write(`<img src="${selectedOrder.shipmentScreenshot}" style="max-width:100%; max-height:100vh; display:block; margin:auto;"/>`);
-                              } else {
-                                alert("পপ-আপ ব্লক করা হয়েছে। অনুগ্রহ করে পপ-আপ অনুমোদন করুন।");
                               }
                             }}
                           />
-                          <p className="text-center py-1 text-[8px] bg-slate-50 text-slate-500 font-bold">
-                            ছবিতে ক্লিক করে বড় করে দেখুন
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Actions segment */}
-              <div className="space-y-2 pt-2 border-t">
-                {/* 1. Buyer actions */}
-                {selectedOrder.buyerUid === liveUser.uid && (selectedOrder.status === 'Payment Held' || selectedOrder.status === 'Shipped') && (
-                  <div className="space-y-2.5">
-                    <button
-                      type="button"
-                      disabled={submitting}
-                      onClick={() => handleReleaseFunds(selectedOrder)}
-                      className="w-full bg-[#057A55] hover:bg-emerald-800 text-white font-extrabold py-3 px-4 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1 shadow-md shadow-emerald-950/10"
-                    >
-                      <Check className="w-4 h-4" /> পণ্য পেয়েছি (টাকা রিলিজ করুন)
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleOpenDisputeModal(selectedOrder)}
-                      className="w-full border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold py-2 px-3 rounded-xl text-xs transition cursor-pointer text-center flex items-center justify-center gap-1"
-                    >
-                      <AlertTriangle className="w-3.5 h-3.5 text-amber-500" /> বিবাদ বা অভিযোগ (Admin Support)
-                    </button>
-                  </div>
-                )}
-
-                {/* 2. Seller actions */}
-                {selectedOrder.sellerUid === liveUser.uid && selectedOrder.status === 'Payment Held' && (
-                  <div className="space-y-3">
-                    {!showShipForm ? (
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setShowShipForm(true)}
-                          className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-2.5 px-3 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1"
-                        >
-                          <Truck className="w-4 h-4" /> পণ্য কুরিয়ার করুন
-                        </button>
-
-                        <button
-                          type="button"
-                          disabled={submitting}
-                          onClick={() => handleCancelEscrow(selectedOrder)}
-                          className="bg-rose-50 border border-rose-200 hover:bg-rose-100 text-rose-700 font-extrabold py-2.5 px-3 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1"
-                        >
-                          বাতিল ও রিফান্ড ↺
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="p-3 bg-slate-50 border rounded-2xl space-y-3">
-                        <p className="text-[10px] uppercase font-black tracking-widest text-[#0D9488]">📦 কুরিয়ার ট্র্যাকিং জমা দিন</p>
-                        
-                        <div className="space-y-1">
-                          <label className="block text-[10px] font-bold text-slate-500">কুরিয়ার সার্ভিস কোম্পানিঃ</label>
-                          <select
-                            value={courierName}
-                            onChange={(e) => setCourierName(e.target.value)}
-                            className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs"
-                          >
-                            <option value="ক্যাশ টু ক্যাশ নিরাপদ ডেলিভারি">ক্যাশ টু ক্যাশ নিরাপদ ডেলিভারি (Cash to Cash)</option>
-                            <option value="সুন্দরবন কুরিয়ার">সুন্দরবন কুরিয়ার (Sundarban)</option>
-                            <option value="এস এ পরিবহন">এস এ পরিবহন (SA Paribahan)</option>
-                            <option value="পাঠাও কুরিয়ার">পাঠাও কুরিয়ার (Pathao)</option>
-                            <option value="রেডএক্স কুরিয়ার">রেডএক্স কুরিয়ার (REDX)</option>
-                            <option value="নিজেদের হোম ডেলিভারি">হ্যান্ড টু হ্যান্ড হোম ডেলিভারি</option>
-                          </select>
-                        </div>
-
-                        <div className="space-y-1">
-                          <label className="block text-[10px] font-bold text-slate-500">মেমো বা ট্র্যাকিং রসিদ নম্বরঃ</label>
-                          <input 
-                            type="text"
-                            required
-                            placeholder="উদাঃ CN-73491-DN"
-                            value={trackingNumber}
-                            onChange={(e) => setTrackingNumber(e.target.value)}
-                            className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-mono font-bold"
-                          />
-                        </div>
-
-                        {/* Image/screenshot upload component */}
-                        <div className="space-y-1">
-                          <label className="block text-[10px] font-bold text-slate-500">
-                            রসিদ বা স্ক্রিনশট আপলোড (ঐচ্ছিক):
-                          </label>
-                          {!shipmentScreenshot ? (
-                            <div
-                              onClick={() => document.getElementById('shipment-screenshot-input')?.click()}
-                              className="border border-dashed border-slate-250 hover:border-[#0D9488] hover:bg-slate-50 rounded-lg py-2 px-2.5 text-center cursor-pointer flex items-center justify-center gap-1.5 transition duration-200 bg-white"
-                            >
-                              <input 
-                                id="shipment-screenshot-input"
-                                type="file" 
-                                accept="image/*"
-                                className="hidden"
-                                onChange={(e) => {
-                                  const file = e.target.files?.[0];
-                                  if (file) {
-                                    if (file.size > 2 * 1024 * 1024) {
-                                      alert('রসিদ ছবির সাইজ সর্বোচ্চ 2 মেগাবাইট হতে পারে!');
-                                      return;
-                                    }
-                                    setShipmentScreenshotName(file.name);
-                                    const reader = new FileReader();
-                                    reader.onload = () => {
-                                      setShipmentScreenshot(reader.result as string);
-                                    };
-                                    reader.readAsDataURL(file);
-                                  }
-                                }}
-                              />
-                              <UploadCloud className="w-3.5 h-3.5 text-[#0D9488] shrink-0" />
-                              <span className="text-[10px] font-bold text-slate-600">গ্যালারি থেকে ছবি সিলেক্ট করুন</span>
-                            </div>
-                          ) : (
-                            <div className="relative border rounded-lg p-1.5 bg-emerald-50/40 border-emerald-100 flex items-center gap-1.5">
-                              <img 
-                                src={shipmentScreenshot} 
-                                alt="Receipt Preview" 
-                                className="w-8 h-8 rounded-md object-cover border border-emerald-200 bg-white shadow-3xs shrink-0" 
-                              />
-                              <div className="flex-1 min-w-0">
-                                <span className="text-[9.5px] font-bold text-slate-700 block truncate">{shipmentScreenshotName || 'receipt.png'}</span>
-                                <span className="text-[8px] text-emerald-600 font-extrabold block leading-none">সফলভাবে লোড হয়েছে ✔</span>
-                              </div>
-                              <button 
-                                type="button"
-                                onClick={() => {
-                                  setShipmentScreenshot(null);
-                                  setShipmentScreenshotName('');
-                                }}
-                                className="w-5 h-5 bg-rose-100 hover:bg-rose-200 text-rose-600 rounded-full flex items-center justify-center transition cursor-pointer shrink-0 font-bold text-[10px]"
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="flex gap-2.5">
-                          <button
-                            type="button"
-                            onClick={() => setShowShipForm(false)}
-                            className="flex-1 py-1 px-2 border rounded-lg text-slate-400 text-xs font-bold"
-                          >
-                            বন্ধ
-                          </button>
-                          <button
-                            type="button"
-                            disabled={submitting}
-                            onClick={() => handleShipProduct(selectedOrder)}
-                            className="flex-grow bg-[#057A55] hover:bg-emerald-800 disabled:opacity-50 text-white font-extrabold py-1 px-3 rounded-lg text-xs"
-                          >
-                            {submitting ? 'জমা হচ্ছে...' : 'জমা দিন'}
-                          </button>
                         </div>
                       </div>
                     )}
                   </div>
                 )}
 
-                {/* 3. Closed trans message */}
-                {selectedOrder.status === 'Payment Released' && (
-                  <div className="bg-emerald-50 text-emerald-800 border border-emerald-100 p-2.5 rounded-xl text-[11px] text-center font-bold flex items-center justify-center gap-1">
-                    <CheckCircle className="w-4 h-4 text-emerald-700" /> এই লেনদেনের সম্পূর্ণ সমাধান হয়ে ক্লোজ করা হয়েছে।
-                  </div>
-                )}
-
-                {selectedOrder.status === 'Refunded' && (
-                  <div className="bg-rose-50 text-rose-800 border border-rose-100 p-2.5 rounded-xl text-[11px] text-center font-bold flex items-center justify-center gap-1">
-                    <XCircle className="w-4 h-4 text-rose-700" /> এই লেনদেনটি বাতিল ও ক্রেতাকে রিফান্ড সম্পন্নকৃত।
-                  </div>
-                )}
-
-                {/* 4. Admin Arbitrator Actions */}
-                {(liveUser.role === 'admin' || liveUser.role === 'sub_admin') && (selectedOrder.status === 'Payment Held' || selectedOrder.status === 'Shipped') && (
-                  <div className="bg-amber-50 border border-amber-200/80 p-3.5 rounded-2xl space-y-2 mt-2">
-                    <p className="text-[10px] uppercase font-black tracking-widest text-amber-900 flex items-center gap-1">
-                      🛡️ প্রশাসনিক সালিশি প্যানেল (Admin Arbitrator)
-                    </p>
-                    <p className="text-[9.5px] text-amber-700 font-bold leading-normal">
-                      সালিশকারী হিসেবে আপনি ক্রেতা/বিক্রেতার বিবাদ নিষ্পত্তি করতে ফোর্স অ্যাকশন সম্পন্ন করতে পারবেন।
-                    </p>
-                    <div className="grid grid-cols-2 gap-2">
+                {/* Actions segment */}
+                <div className="space-y-4 pt-4">
+                  {/* 1. Buyer actions */}
+                  {selectedOrder.buyerUid === liveUser.uid && (selectedOrder.status === 'Payment Held' || selectedOrder.status === 'Shipped') && (
+                    <div className="space-y-3">
                       <button
                         type="button"
                         disabled={submitting}
                         onClick={() => handleReleaseFunds(selectedOrder)}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-black py-2.5 px-3 rounded-xl text-[10.5px] transition cursor-pointer flex items-center justify-center gap-1"
+                        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-4 px-6 rounded-2xl text-sm transition-all cursor-pointer flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 active:scale-95"
                       >
-                        ফোর্স পেমেন্ট রিলিজ
+                        <CheckCircle className="w-5 h-5" />
+                        <span>পণ্য পেয়েছি (টাকা রিলিজ করুন)</span>
                       </button>
+
                       <button
                         type="button"
-                        disabled={submitting}
-                        onClick={() => handleCancelEscrow(selectedOrder)}
-                        className="bg-rose-600 hover:bg-rose-700 text-white font-black py-2.5 px-3 rounded-xl text-[10.5px] transition cursor-pointer flex items-center justify-center gap-1"
+                        onClick={() => handleOpenDisputeModal(selectedOrder)}
+                        className="w-full border-2 border-slate-100 hover:bg-slate-50 text-slate-700 font-black py-3 px-4 rounded-2xl text-xs transition-all cursor-pointer text-center flex items-center justify-center gap-2 active:scale-95"
                       >
-                        ফোর্স বাতিল ও রিফান্ড
+                        <AlertTriangle className="w-4 h-4 text-amber-500" />
+                        <span>বিবাদ বা অভিযোগ (Admin Support)</span>
                       </button>
                     </div>
-                  </div>
-                )}
+                  )}
 
+                  {/* 2. Seller actions */}
+                  {selectedOrder.sellerUid === liveUser.uid && selectedOrder.status === 'Payment Held' && (
+                    <div className="space-y-4">
+                      {!showShipForm ? (
+                        <div className="grid grid-cols-2 gap-3">
+                          <button
+                            type="button"
+                            onClick={() => setShowShipForm(true)}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-black py-4 px-4 rounded-2xl text-xs transition-all cursor-pointer flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 active:scale-95"
+                          >
+                            <Truck className="w-4 h-4" />
+                            <span>পণ্য কুরিয়ার করুন</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={submitting}
+                            onClick={() => handleCancelEscrow(selectedOrder)}
+                            className="bg-rose-50 border-2 border-rose-100 hover:bg-rose-100 text-rose-700 font-black py-4 px-4 rounded-2xl text-xs transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95"
+                          >
+                            <span>বাতিল ও রিফান্ড</span>
+                            <RefreshCw className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="bg-slate-50 border-2 border-slate-100 rounded-[28px] p-5 space-y-4 shadow-inner animate-in slide-in-from-top duration-300">
+                          <div className="flex items-center gap-2 mb-2">
+                            <div className="w-8 h-8 bg-emerald-600 text-white rounded-lg flex items-center justify-center">
+                              <Truck className="w-5 h-5" />
+                            </div>
+                            <h4 className="text-sm font-black text-slate-800 uppercase tracking-wider">কুরিয়ার ট্র্যাকিং জমা দিন</h4>
+                          </div>
+                          
+                          <div className="space-y-4">
+                            <div className="space-y-1.5">
+                              <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">কুরিয়ার সার্ভিস কোম্পানিঃ</label>
+                              <select
+                                value={courierName}
+                                onChange={(e) => setCourierName(e.target.value)}
+                                className="w-full px-4 py-3 bg-white border-2 border-slate-200 rounded-xl text-xs font-bold focus:border-emerald-500 outline-none transition-all shadow-sm"
+                              >
+                                <option value="ক্যাশ টু ক্যাশ নিরাপদ ডেলিভারি">ক্যাশ টু ক্যাশ নিরাপদ ডেলিভারি (Cash to Cash)</option>
+                                <option value="সুন্দরবন কুরিয়ার">সুন্দরবন কুরিয়ার (Sundarban)</option>
+                                <option value="এস এ পরিবহন">এস এ পরিবহন (SA Paribahan)</option>
+                                <option value="পাঠাও কুরিয়ার">পাঠাও কুরিয়ার (Pathao)</option>
+                                <option value="রেডএক্স কুরিয়ার">রেডএক্স কুরিয়ার (REDX)</option>
+                                <option value="নিজেদের হোম ডেলিভারি">হ্যান্ড টু হ্যান্ড হোম ডেলিভারি</option>
+                              </select>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">মেমো বা ট্র্যাকিং রসিদ নম্বরঃ</label>
+                              <input 
+                                type="text"
+                                required
+                                placeholder="উদাঃ CN-73491-DN"
+                                value={trackingNumber}
+                                onChange={(e) => setTrackingNumber(e.target.value)}
+                                className="w-full px-4 py-3 bg-white border-2 border-slate-200 rounded-xl text-sm font-mono font-black focus:border-emerald-500 outline-none transition-all shadow-sm"
+                              />
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">রসিদ বা স্ক্রিনশট আপলোড (ঐচ্ছিক):</label>
+                              {!shipmentScreenshot ? (
+                                <div
+                                  onClick={() => document.getElementById('shipment-screenshot-input')?.click()}
+                                  className="border-2 border-dashed border-slate-300 hover:border-emerald-500 hover:bg-emerald-50/30 rounded-2xl py-6 px-4 text-center cursor-pointer flex flex-col items-center justify-center gap-2 transition-all duration-300 bg-white"
+                                >
+                                  <input 
+                                    id="shipment-screenshot-input"
+                                    type="file" 
+                                    accept="image/*"
+                                    className="hidden"
+                                    onChange={(e) => {
+                                      const file = e.target.files?.[0];
+                                      if (file) {
+                                        if (file.size > 2 * 1024 * 1024) {
+                                          alert('রসিদ ছবির সাইজ সর্বোচ্চ 2 মেগাবাইট হতে পারে!');
+                                          return;
+                                        }
+                                        setShipmentScreenshotName(file.name);
+                                        const reader = new FileReader();
+                                        reader.onload = () => setShipmentScreenshot(reader.result as string);
+                                        reader.readAsDataURL(file);
+                                      }
+                                    }}
+                                  />
+                                  <div className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center shadow-sm">
+                                    <UploadCloud className="w-6 h-6" />
+                                  </div>
+                                  <span className="text-xs font-black text-slate-500 tracking-wide">গ্যালারি থেকে মেমো বা রসিদ ছবি দিন</span>
+                                </div>
+                              ) : (
+                                <div className="relative border-2 border-emerald-100 rounded-2xl p-3 bg-white flex items-center gap-3 shadow-sm">
+                                  <img 
+                                    src={shipmentScreenshot} 
+                                    alt="Receipt Preview" 
+                                    className="w-12 h-12 rounded-xl object-cover border border-emerald-100 shadow-inner" 
+                                  />
+                                  <div className="flex-1 min-w-0">
+                                    <span className="text-[11px] font-black text-slate-700 block truncate">{shipmentScreenshotName || 'receipt.png'}</span>
+                                    <span className="text-[10px] text-emerald-600 font-black block leading-none mt-1">সফলভাবে লোড হয়েছে ✓</span>
+                                  </div>
+                                  <button 
+                                    type="button"
+                                    onClick={() => {
+                                      setShipmentScreenshot(null);
+                                      setShipmentScreenshotName('');
+                                    }}
+                                    className="w-8 h-8 bg-rose-50 hover:bg-rose-100 text-rose-500 rounded-xl flex items-center justify-center transition-all cursor-pointer shrink-0 font-bold"
+                                  >
+                                    <X className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3 pt-2">
+                              <button
+                                type="button"
+                                onClick={() => setShowShipForm(false)}
+                                className="py-3 px-4 border-2 border-slate-200 rounded-xl text-slate-500 text-xs font-black transition-all hover:bg-slate-100"
+                              >
+                                বাতিল
+                              </button>
+                              <button
+                                type="button"
+                                disabled={submitting}
+                                onClick={() => handleShipProduct(selectedOrder)}
+                                className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black py-3 px-4 rounded-xl text-xs transition-all shadow-md active:scale-95"
+                              >
+                                {submitting ? 'জমা হচ্ছে...' : 'জমা দিন'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 3. Closed trans message */}
+                  {selectedOrder.status === 'Payment Released' && (
+                    <div className="bg-emerald-50 text-emerald-800 border-2 border-emerald-100 p-5 rounded-[28px] text-xs text-center font-black flex flex-col items-center justify-center gap-2 shadow-sm animate-in zoom-in duration-300">
+                      <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-sm">
+                        <CheckCircle className="w-6 h-6 text-emerald-600" />
+                      </div>
+                      এই লেনদেনের সম্পূর্ণ সমাধান হয়ে ক্লোজ করা হয়েছে।
+                    </div>
+                  )}
+
+                  {selectedOrder.status === 'Refunded' && (
+                    <div className="bg-rose-50 text-rose-800 border-2 border-rose-100 p-5 rounded-[28px] text-xs text-center font-black flex flex-col items-center justify-center gap-2 shadow-sm animate-in zoom-in duration-300">
+                      <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-sm">
+                        <XCircle className="w-6 h-6 text-rose-600" />
+                      </div>
+                      এই লেনদেনটি বাতিল ও ক্রেতাকে রিফান্ড সম্পন্নকৃত।
+                    </div>
+                  )}
+
+                  {/* 4. Admin Arbitrator Actions */}
+                  {(liveUser.role === 'admin' || liveUser.role === 'sub_admin') && (selectedOrder.status === 'Payment Held' || selectedOrder.status === 'Shipped') && (
+                    <div className="bg-amber-50 border-2 border-amber-200/50 p-5 rounded-[28px] space-y-4 shadow-sm">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 bg-amber-500 text-white rounded-lg flex items-center justify-center shadow-sm">
+                          <Scale className="w-5 h-5" />
+                        </div>
+                        <p className="text-[11px] uppercase font-black tracking-widest text-amber-900">
+                          প্রশাসনিক সালিশি প্যানেল
+                        </p>
+                      </div>
+                      <p className="text-xs text-amber-800 font-bold leading-relaxed">
+                        সালিশকারী হিসেবে আপনি ক্রেতা/বিক্রেতার বিবাদ নিষ্পত্তি করতে ফোর্স অ্যাকশন সম্পন্ন করতে পারবেন।
+                      </p>
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          type="button"
+                          disabled={submitting}
+                          onClick={() => handleReleaseFunds(selectedOrder)}
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3.5 px-4 rounded-xl text-[10px] transition-all cursor-pointer shadow-md active:scale-95"
+                        >
+                          ফোর্স পেমেন্ট রিলিজ
+                        </button>
+                        <button
+                          type="button"
+                          disabled={submitting}
+                          onClick={() => handleCancelEscrow(selectedOrder)}
+                          className="bg-rose-600 hover:bg-rose-700 text-white font-black py-3.5 px-4 rounded-xl text-[10px] transition-all cursor-pointer shadow-md active:scale-95"
+                        >
+                          ফোর্স বাতিল ও রিফান্ড
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </motion.div>
           </div>
@@ -1762,49 +1868,76 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
       {/* MODAL IV: নীতিমালা ও সাহায্য নির্দেশিকা (Help / Safe Rules manual) */}
       <AnimatePresence>
         {showHelpModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-55 font-sans animate-fade-in">
+          <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            
             <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-3xl p-5 w-full max-w-sm border border-slate-100 shadow-2xl relative overflow-hidden text-left space-y-4 max-h-[85vh] overflow-y-auto"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
             >
-              <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-blue-600 to-emerald-600" />
-
-              <div className="flex justify-between items-center border-b border-slate-100 pb-2">
-                <h3 className="text-sm font-extrabold text-[#0D9488] flex items-center gap-1">
-                  <ShieldCheck className="w-4.5 h-4.5 text-emerald-600" /> নিরাপদ লেনদেন ও এসক্রো নীতিমালাঃ
-                </h3>
+              <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-white/10 rounded-xl">
+                    <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                  </div>
+                  <h3 className="text-lg font-black">নিরাপদ লেনদেন ও এসক্রো নীতিমালা</h3>
+                </div>
                 <button 
                   type="button"
                   onClick={() => setShowHelpModal(false)}
-                  className="p-1 hover:bg-slate-100 rounded-lg transition"
+                  className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
                 >
-                  <X className="w-5 h-5 text-slate-400" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 
-              <div className="space-y-3.5 text-xs text-slate-600 font-bold leading-relaxed font-sans">
-                <div className="space-y-1">
-                  <h4 className="text-slate-800 font-extrabold">1. এসক্রো বা নিরাপদ হোল্ড কি?</h4>
-                  <p className="text-[11px] text-slate-500">নিরাপদ লেনদেন হল সমবায় ইউনিয়নের ডিজিটাল সমাধান। এখানে ক্রেতার টাকা বিক্রেতাকে সাথে সাথে দেওয়া হয় না। পণ্য ক্রেতা ভালোমতো হাতে বুঝে নিয়ে ওয়ালেটে 'পণ্য পেয়েছি' নিশ্চিত করলেই কেবল বিক্রেতা পেমেন্ট লাভ করেন।</p>
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                <div className="space-y-6 text-sm text-slate-600 font-bold leading-relaxed">
+                  <div className="bg-emerald-50 p-5 rounded-[28px] border-2 border-emerald-100 space-y-3">
+                    <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm text-emerald-600">
+                      <Lock className="w-6 h-6" />
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="text-slate-800 font-black uppercase tracking-wider">১. এসক্রো বা নিরাপদ হোল্ড কি?</h4>
+                      <p className="text-xs text-slate-500 leading-relaxed">
+                        নিরাপদ লেনদেন হল সমবায় ইউনিয়নের ডিজিটাল সমাধান। এখানে ক্রেতার টাকা বিক্রেতাকে সাথে সাথে দেওয়া হয় না। পণ্য ক্রেতা ভালোমতো হাতে বুঝে নিয়ে ওয়ালেটে 'পণ্য পেয়েছি' নিশ্চিত করলেই কেবল বিক্রেতা পেমেন্ট লাভ করেন।
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="bg-blue-50 p-5 rounded-[28px] border-2 border-blue-100 space-y-3">
+                    <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm text-blue-600">
+                      <Truck className="w-6 h-6" />
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="text-slate-800 font-black uppercase tracking-wider">২. বিক্রেতা ট্র্যাকিং কিভাবে দিবেন?</h4>
+                      <p className="text-xs text-slate-500 leading-relaxed">
+                        বিক্রেতা যখন পণ্যটি কোনো কুরিয়ারে বুকিং দেন, তখন সাথে সাথে প্রাপ্ত রসিদ বা মোমো নম্বর কুরিয়ার নাম সহ ইনপুট দিবেন। এটি দিলে স্ট্যাটাস পণ্য পাঠানো- তে হালনাগাদ হয়ে যায়।
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="bg-amber-50 p-5 rounded-[28px] border-2 border-amber-100 space-y-3">
+                    <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm text-amber-600">
+                      <Clock className="w-6 h-6" />
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="text-slate-800 font-black uppercase tracking-wider">৩. ৭২ ঘণ্টার অটোমেটিক এডমিন সহায়তা</h4>
+                      <p className="text-xs text-slate-500 leading-relaxed">
+                        বিক্রেতা পণ্য সরবারাহ সম্পন্ন করার পরও যদি ক্রেতা ৭২ ঘণ্টার ভেতর টাকা রিলিজ না করেন বা কোনো অভিযোগ না পাঠান, তবে সমবায় এডমিন তদন্ত সাপেক্ষে লেনদেনটি সুরাহা করে থাকেন।
+                      </p>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="space-y-1">
-                  <h4 className="text-slate-800 font-extrabold">2. বিক্রেতা ট্র্যাকিং কিভাবে দিবেন?</h4>
-                  <p className="text-[11px] text-slate-500">বিক্রেতা যখন পণ্যটি কোনো কুরিয়ারে বুকিং দেন, তখন সাথে সাথে প্রাপ্ত রসিদ বা মোমো নম্বর কুরিয়ার নাম সহ ইনপুট দিবেন। এটি দিলে স্ট্যাটাস পণ্য পাঠানো- তে হালনাগাদ হয়ে যায়।</p>
-                </div>
-
-                <div className="space-y-1">
-                  <h4 className="text-slate-800 font-extrabold">3. 72 ঘণ্টার অটোমেটিক এডমিন সহায়তা</h4>
-                  <p className="text-[11px] text-slate-500">বিক্রেতা পণ্য সরবারাহ সম্পন্ন করার পরও যদি ক্রেতা 72 ঘণ্টার ভেতর টাকা রিলিজ না করেন বা কোনো অভিযোগ না পাঠান, তবে সমবায় এডমিন তদন্ত সাপেক্ষে লেনদেনটি সুরাহা করে থাকেন।</p>
-                </div>
-
-                <div className="space-y-12 block pt-2">
+                <div className="pt-4">
                   <button
                     type="button"
                     onClick={() => setShowHelpModal(false)}
-                    className="w-full bg-[#1A56DB] text-white py-2.5 rounded-xl font-extrabold text-xs text-center cursor-pointer hover:bg-blue-700"
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-4 rounded-2xl font-black text-sm text-center cursor-pointer shadow-lg shadow-emerald-600/20 transition-all active:scale-95"
                   >
                     বুঝেছি, ধন্যবাদ
                   </button>
@@ -1818,91 +1951,95 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
       {/* Centered Success Popup Overlay */}
       <AnimatePresence>
         {successMsg && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-55 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs font-sans"
-          >
-            <motion.div 
-              initial={{ scale: 0.9, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.9, y: 20 }}
-              className="bg-white rounded-3xl p-6 max-w-sm w-full text-center shadow-2xl border border-emerald-100"
+          <div className="fixed inset-0 z-[200] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
             >
-              <div className="w-16 h-16 bg-emerald-50 border border-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4 text-emerald-600 animate-pulse">
-                <CheckCircle className="w-9 h-9 stroke-[2.5]" />
+              <div className="bg-[#004a2c] text-white px-6 py-8 flex flex-col items-center justify-center text-center shrink-0">
+                <div className="w-20 h-20 bg-white/10 rounded-full flex items-center justify-center mb-4 border-2 border-white/20 animate-in zoom-in duration-500">
+                  <CheckCircle className="w-12 h-12 text-emerald-400 stroke-[3]" />
+                </div>
+                <h3 className="text-2xl font-black">লেনদেন সফল হয়েছে!</h3>
+                <p className="text-emerald-100/70 text-xs font-bold mt-1 uppercase tracking-widest">Transaction Completed</p>
               </div>
-              <h3 className="text-base font-black text-slate-800 mb-2">লেনদেন সফল হয়েছে!</h3>
-              <div className="bg-slate-50 border border-slate-100 p-4 rounded-2xl mb-5 text-left">
-                <p className="text-xs font-bold text-slate-700 leading-relaxed text-center">
-                  {successMsg}
-                </p>
+
+              <div className="flex-1 p-6 flex flex-col items-center justify-center space-y-8">
+                <div className="w-full bg-emerald-50 border-2 border-emerald-100 p-8 rounded-[40px] text-center shadow-inner animate-in slide-in-from-bottom-4 duration-500">
+                  <p className="text-lg font-black text-emerald-900 leading-relaxed">
+                    {successMsg}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setSuccessMsg('')}
+                  className="w-full max-w-xs py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-base font-black shadow-xl shadow-emerald-600/30 transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-2"
+                >
+                  <Check className="w-5 h-5" />
+                  <span>ঠিক আছে</span>
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setSuccessMsg('')}
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-black shadow-xs transition duration-200 cursor-pointer active:scale-98"
-              >
-                ঠিক আছে
-              </button>
             </motion.div>
-          </motion.div>
+          </div>
         )}
       </AnimatePresence>
 
       {/* Centered Detailed Success Receipt Voucher Overlay */}
       <AnimatePresence>
         {voucherData && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-55 flex items-center justify-center p-4 bg-slate-900/75 backdrop-blur-xs font-sans overflow-y-auto"
-          >
-            <motion.div 
-              initial={{ scale: 0.9, y: 30 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.9, y: 30 }}
-              className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-emerald-100 overflow-hidden my-8"
+          <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
             >
-              {/* Header with Brand Accent */}
-              <div className="bg-gradient-to-r from-emerald-700 to-teal-800 text-white p-5 text-center relative">
-                <div className="absolute right-4 top-4">
-                  <button 
-                    type="button" 
-                    onClick={() => setVoucherData(null)}
-                    className="p-1.5 hover:bg-white/10 rounded-full transition cursor-pointer"
-                  >
-                    <X className="w-5 h-5 text-white/80" />
-                  </button>
+              <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-white/10 rounded-xl">
+                    <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black leading-tight">লেনদেন রশিদ ভাউচার</h3>
+                    <p className="text-[10px] text-emerald-100/70 font-medium tracking-wide uppercase">{voucherData.title}</p>
+                  </div>
                 </div>
-                <div className="w-12 h-12 bg-white/10 rounded-full flex items-center justify-center mx-auto mb-2 border border-white/20">
-                  <ShieldCheck className="w-7 h-7 text-emerald-300" />
-                </div>
-                <h2 className="text-sm font-extrabold tracking-wide text-emerald-100">BUSINESS NETWORK BANGLADESH</h2>
-                <p className="text-[10px] text-white/70">নিরাপদ বাতায়ন ও সমবায় লেনদেন</p>
-                <div className="inline-block mt-3 bg-white/15 text-emerald-50 text-[11px] font-black px-3 py-1 rounded-full border border-white/10">
-                  {voucherData.title}
-                </div>
+                <button 
+                  type="button" 
+                  onClick={() => setVoucherData(null)}
+                  className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
 
-              {/* Receipt Body */}
-              <div className="p-5 space-y-4">
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 {/* Large Amount Box */}
-                <div className="bg-emerald-50/50 border border-emerald-100/80 rounded-2xl p-4 text-center">
-                  <span className="text-[10px] uppercase font-bold text-emerald-600 tracking-wider">লেনদেনের মোট পরিমাণ</span>
-                  <div className="text-2xl font-black text-emerald-800 mt-1">
-                    ৳ {Number(voucherData.amount).toLocaleString('bn-BD')} <span className="text-sm font-bold">BDT</span>
+                <div className="bg-emerald-50 border-2 border-emerald-100 rounded-[32px] p-6 text-center shadow-sm relative overflow-hidden">
+                  <div className="absolute top-0 right-0 p-4 opacity-5">
+                    <DollarSign className="w-20 h-20" />
+                  </div>
+                  <span className="text-[10px] uppercase font-black text-emerald-600 tracking-[0.2em]">লেনদেনের মোট পরিমাণ</span>
+                  <div className="text-3xl font-black text-emerald-800 mt-2 font-mono">
+                    ৳ {Number(voucherData.amount).toLocaleString('bn-BD')} <span className="text-sm font-bold uppercase tracking-widest ml-1">BDT</span>
                   </div>
                 </div>
 
                 {/* Details List */}
-                <div className="space-y-2.5 bg-slate-50 border border-slate-100 p-4 rounded-2xl text-xs font-bold text-slate-700">
-                  <div className="flex items-start justify-between pb-2 border-b border-slate-200/50">
-                    <span className="text-slate-400 shrink-0">বুকিং আইডি:</span>
-                    <div className="flex items-center gap-1">
-                      <span className="font-mono text-[11px] text-slate-800 break-all select-all">{voucherData.bookingId}</span>
+                <div className="space-y-4 bg-slate-50 border-2 border-slate-100 p-6 rounded-[32px] shadow-inner text-xs">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-200/50">
+                    <span className="text-slate-400 font-black uppercase tracking-wider">বুকিং আইডি:</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-black text-slate-800 text-sm select-all">{voucherData.bookingId}</span>
                       <button 
                         type="button"
                         onClick={() => {
@@ -1910,51 +2047,51 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
                           setCopiedVoucher(true);
                           setTimeout(() => setCopiedVoucher(false), 2000);
                         }}
-                        className="text-emerald-600 hover:text-emerald-700 p-0.5"
+                        className="text-emerald-600 hover:text-emerald-700 p-1.5 bg-white border border-emerald-100 rounded-lg shadow-xs active:scale-95"
                         title="কপি করুন"
                       >
-                        <Copy className="w-3 h-3" />
+                        <Copy className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
 
-                  <div className="flex justify-between pb-2 border-b border-slate-200/50">
-                    <span className="text-slate-400">তারিখ ও সময়:</span>
-                    <span className="text-slate-800">{voucherData.timestamp}</span>
+                  <div className="flex justify-between pb-3 border-b border-slate-200/50">
+                    <span className="text-slate-400 font-black uppercase tracking-wider">তারিখ ও সময়:</span>
+                    <span className="text-slate-800 font-black">{voucherData.timestamp}</span>
                   </div>
 
-                  <div className="flex justify-between pb-2 border-b border-slate-200/50">
-                    <span className="text-slate-400">ক্রেতা (প্রেরক):</span>
-                    <span className="text-slate-800">{voucherData.buyerName} ({voucherData.buyerPhone})</span>
+                  <div className="flex justify-between pb-3 border-b border-slate-200/50">
+                    <span className="text-slate-400 font-black uppercase tracking-wider">ক্রেতা (প্রেরক):</span>
+                    <span className="text-slate-800 font-black">{voucherData.buyerName} ({voucherData.buyerPhone})</span>
                   </div>
 
-                  <div className="flex justify-between pb-2 border-b border-slate-200/50">
-                    <span className="text-slate-400">বিক্রেতা (প্রাপক):</span>
-                    <span className="text-slate-800">{voucherData.sellerName} ({voucherData.sellerPhone})</span>
+                  <div className="flex justify-between pb-3 border-b border-slate-200/50">
+                    <span className="text-slate-400 font-black uppercase tracking-wider">বিক্রেতা (প্রাপক):</span>
+                    <span className="text-slate-800 font-black">{voucherData.sellerName} ({voucherData.sellerPhone})</span>
                   </div>
 
-                  <div className="flex items-start justify-between pb-2 border-b border-slate-200/50">
-                    <span className="text-slate-400 shrink-0">লেনদেনের বিবরণ:</span>
-                    <span className="text-slate-800 text-right">"{voucherData.detail}"</span>
+                  <div className="space-y-1 pb-3 border-b border-slate-200/50">
+                    <span className="text-slate-400 font-black uppercase tracking-wider block">লেনদেনের বিবরণ:</span>
+                    <p className="text-slate-800 font-bold italic leading-relaxed">"{voucherData.detail}"</p>
                   </div>
 
                   {voucherData.courierName && voucherData.courierName !== '-' && (
-                    <div className="flex justify-between pb-2 border-b border-slate-200/50">
-                      <span className="text-slate-400">কুরিয়ার কোম্পানি:</span>
-                      <span className="text-slate-800">{voucherData.courierName}</span>
+                    <div className="flex justify-between pb-3 border-b border-slate-200/50">
+                      <span className="text-slate-400 font-black uppercase tracking-wider">কুরিয়ার কোম্পানি:</span>
+                      <span className="text-slate-800 font-black">{voucherData.courierName}</span>
                     </div>
                   )}
 
                   {voucherData.trackingNumber && voucherData.trackingNumber !== '-' && (
-                    <div className="flex justify-between pb-2 border-b border-slate-200/50">
-                      <span className="text-slate-400">মেমো বা ট্র্যাকিং নং:</span>
-                      <span className="text-slate-800">{voucherData.trackingNumber}</span>
+                    <div className="flex justify-between pb-3 border-b border-slate-200/50">
+                      <span className="text-slate-400 font-black uppercase tracking-wider">মেমো বা ট্র্যাকিং নং:</span>
+                      <span className="text-slate-800 font-black font-mono">{voucherData.trackingNumber}</span>
                     </div>
                   )}
 
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-400">লেনদেনের স্ট্যাটাস:</span>
-                    <span className="bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full text-[10px] font-black">
+                  <div className="flex justify-between items-center pt-1">
+                    <span className="text-slate-400 font-black uppercase tracking-wider">স্ট্যাটাস:</span>
+                    <span className="bg-emerald-100 text-emerald-800 border border-emerald-200 px-4 py-1 rounded-full text-[10px] font-black uppercase tracking-widest shadow-3xs">
                       {voucherData.status}
                     </span>
                   </div>
@@ -1962,13 +2099,13 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
 
                 {/* Copied alert toast indicator */}
                 {copiedVoucher && (
-                  <div className="text-center text-xs font-black text-emerald-600 bg-emerald-50 border border-emerald-100 py-1.5 rounded-xl animate-pulse">
+                  <div className="text-center text-xs font-black text-emerald-600 bg-emerald-50 border-2 border-emerald-100 py-3 rounded-2xl animate-pulse shadow-sm">
                     ✓ তথ্য সফলভাবে ক্লিপবোর্ডে কপি করা হয়েছে!
                   </div>
                 )}
 
                 {/* Main Action Grid */}
-                <div className="grid grid-cols-2 gap-2.5 pt-1">
+                <div className="grid grid-cols-2 gap-4">
                   <button
                     type="button"
                     onClick={() => {
@@ -2172,9 +2309,10 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
                         alert("রসিদটি সরাসরি ডাউনলোড করা যায়নি। অনুগ্রহ করে স্ক্রিনের একটি স্ক্রিনশট নিয়ে রাখুন।");
                       }
                     }}
-                    className="flex items-center justify-center gap-1.5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-[11px] font-black shadow-xs transition cursor-pointer active:scale-98"
+                    className="flex items-center justify-center gap-2 py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-black shadow-lg shadow-emerald-600/20 transition-all cursor-pointer active:scale-95"
                   >
-                    <Printer className="w-4 h-4" /> রসিদ ডাউনলোড
+                    <Printer className="w-4 h-4" /> 
+                    <span>রসিদ ডাউনলোড</span>
                   </button>
 
                   <button
@@ -2189,237 +2327,256 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
                         alert("কপি করা যায়নিঃ " + err);
                       });
                     }}
-                    className="flex items-center justify-center gap-1.5 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-2xl text-[11px] font-black shadow-xs transition cursor-pointer active:scale-98"
+                    className="flex items-center justify-center gap-2 py-4 bg-[#004a2c] hover:bg-[#003820] text-white rounded-2xl text-xs font-black shadow-lg shadow-emerald-900/20 transition-all cursor-pointer active:scale-95"
                   >
-                    <Share2 className="w-4 h-4" /> ফরোয়ার্ড করুন
+                    <Share2 className="w-4 h-4" /> 
+                    <span>ফরোয়ার্ড করুন</span>
                   </button>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setVoucherData(null)}
-                  className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl text-xs font-black transition duration-200 cursor-pointer text-center"
-                >
-                  বন্ধ করুন
-                </button>
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setVoucherData(null)}
+                    className="w-full py-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl text-sm font-black transition-all cursor-pointer text-center active:scale-95"
+                  >
+                    বন্ধ করুন
+                  </button>
+                </div>
               </div>
             </motion.div>
-          </motion.div>
+          </div>
         )}
       </AnimatePresence>
 
       {/* Centered Error Popup Overlay */}
       <AnimatePresence>
         {errorMsg && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-55 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs font-sans"
-          >
-            <motion.div 
-              initial={{ scale: 0.9, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.9, y: 20 }}
-              className="bg-white rounded-3xl p-6 max-w-sm w-full text-center shadow-2xl border border-rose-100"
+          <div className="fixed inset-0 z-[200] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
             >
-              <div className="w-16 h-16 bg-rose-50 border border-rose-100 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-600">
-                <AlertCircle className="w-9 h-9 stroke-[2.5]" />
+              <div className="bg-[#004a2c] text-white px-6 py-8 flex flex-col items-center justify-center text-center shrink-0">
+                <div className="w-20 h-20 bg-white/10 rounded-full flex items-center justify-center mb-4 border-2 border-white/20">
+                  <AlertCircle className="w-12 h-12 text-rose-400 stroke-[3]" />
+                </div>
+                <h3 className="text-2xl font-black">লেনদেন ব্যর্থ হয়েছে</h3>
+                <p className="text-rose-100/70 text-xs font-bold mt-1 uppercase tracking-widest">Transaction Failed</p>
               </div>
-              <h3 className="text-base font-black text-rose-700 mb-2">লেনদেন ব্যর্থ হয়েছে</h3>
-              <div className="bg-slate-50 border border-slate-100 p-4 rounded-2xl mb-5 text-left">
-                <p className="text-xs font-bold text-slate-700 leading-relaxed text-center">
-                  {errorMsg}
-                </p>
+
+              <div className="flex-1 p-6 flex flex-col items-center justify-center space-y-8">
+                <div className="w-full bg-rose-50 border-2 border-rose-100 p-8 rounded-[40px] text-center shadow-inner animate-in slide-in-from-bottom-4 duration-500">
+                  <p className="text-lg font-black text-rose-900 leading-relaxed">
+                    {errorMsg}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setErrorMsg('')}
+                  className="w-full max-w-xs py-4 bg-[#004a2c] hover:bg-[#003820] text-white rounded-2xl text-base font-black shadow-xl shadow-emerald-900/30 transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-2"
+                >
+                  <ArrowLeft className="w-5 h-5" />
+                  <span>আবার চেষ্টা করুন</span>
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setErrorMsg('')}
-                className="w-full py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl text-xs font-black shadow-xs transition duration-200 cursor-pointer active:scale-98"
-              >
-                আবার চেষ্টা করুন
-              </button>
             </motion.div>
-          </motion.div>
+          </div>
         )}
       </AnimatePresence>
 
       {/* Professional Brand Confirmation Modal Overlay */}
       <AnimatePresence>
         {confirmModalData && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-55 flex items-center justify-center p-4 bg-slate-900/75 backdrop-blur-xs font-sans"
-          >
-            <motion.div 
-              initial={{ scale: 0.9, y: 25 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.9, y: 25 }}
-              className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-100 overflow-hidden"
+          <div className="fixed inset-0 z-[200] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
             >
-              {/* Header section with brand info */}
-              <div className="bg-gradient-to-r from-slate-800 to-indigo-900 text-white p-5 text-center relative">
-                <button 
-                  type="button" 
-                  onClick={() => setConfirmModalData(null)}
-                  className="absolute right-4 top-4 p-1.5 hover:bg-white/10 rounded-full transition cursor-pointer"
-                >
-                  <X className="w-5 h-5 text-white/80" />
-                </button>
-                <div className="w-12 h-12 bg-amber-500/10 rounded-full flex items-center justify-center mx-auto mb-2 border border-amber-500/20">
-                  <AlertTriangle className="w-6 h-6 text-amber-400 stroke-[2]" />
+              <div className="bg-[#004a2c] text-white px-6 py-8 flex flex-col items-center justify-center text-center shrink-0">
+                <div className="w-20 h-20 bg-white/10 rounded-full flex items-center justify-center mb-4 border-2 border-white/20 animate-in zoom-in duration-500">
+                  <AlertTriangle className="w-12 h-12 text-amber-400 stroke-[2.5]" />
                 </div>
-                <h2 className="text-[11px] font-extrabold tracking-widest text-slate-300 uppercase">BUSINESS NETWORK BANGLADESH</h2>
-                <p className="text-[9px] text-white/65 mt-0.5 font-medium">নিরাপদ বাতায়ন ও সমবায় লেনদেন এসক্রো সিস্টেম</p>
-                <div className="mt-2.5 inline-block bg-slate-700/60 text-slate-100 text-[11px] font-black px-3.5 py-1 rounded-full border border-slate-600/50">
-                  {confirmModalData.title}
-                </div>
+                <h3 className="text-2xl font-black">{confirmModalData.title}</h3>
+                <p className="text-emerald-100/70 text-xs font-bold mt-1 uppercase tracking-widest">Confirmation Required</p>
               </div>
 
-              {/* Main content area */}
-              <div className="p-5 space-y-4">
-                <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 text-center">
-                  <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">ডিলের বুকিংকৃত পরিমাণ</span>
-                  <div className="text-2xl font-black text-slate-850 mt-1">
-                    ৳ {confirmModalData.amount.toLocaleString('bn-BD')} <span className="text-sm font-bold">BDT</span>
+              <div className="flex-1 p-6 flex flex-col space-y-6">
+                <div className="bg-slate-50 border-2 border-slate-100 rounded-[32px] p-6 text-center shadow-sm relative overflow-hidden">
+                  <p className="text-[10px] uppercase font-black text-slate-400 tracking-[0.2em] block mb-2">বুকিংকৃত ডিলের পরিমাণ</p>
+                  <div className="text-3xl font-black text-slate-800 font-mono">
+                    ৳ {confirmModalData.amount.toLocaleString('bn-BD')} <span className="text-sm font-bold uppercase tracking-widest ml-1">BDT</span>
                   </div>
                   {confirmModalData.bookingId && (
-                    <div className="mt-1.5 inline-block text-[10px] font-mono font-bold bg-slate-200/50 text-slate-600 px-2.5 py-0.5 rounded-md">
+                    <div className="mt-3 inline-block text-[10px] font-mono font-black bg-white border border-slate-200 text-slate-500 px-3 py-1 rounded-full shadow-xs">
                       বুকিং আইডিঃ {confirmModalData.bookingId.toUpperCase()}
                     </div>
                   )}
                 </div>
 
-                <div className="bg-amber-50/50 border border-amber-100 p-4 rounded-2xl space-y-2">
-                  <h4 className="text-xs font-black text-amber-800 flex items-center gap-1.5">
-                    <ShieldCheck className="w-4 h-4 text-amber-600" /> গুরুত্বপূর্ণ সতর্কতাঃ
+                <div className="bg-amber-50 border-2 border-amber-100 p-6 rounded-[32px] space-y-3 shadow-inner">
+                  <h4 className="text-sm font-black text-amber-900 flex items-center gap-2 uppercase tracking-wider">
+                    <ShieldCheck className="w-5 h-5 text-amber-600" /> গুরুত্বপূর্ণ সতর্কতা
                   </h4>
-                  <p className="text-xs font-bold text-slate-600 leading-relaxed text-center">
+                  <p className="text-sm font-bold text-slate-600 leading-relaxed">
                     {confirmModalData.description}
                   </p>
                 </div>
 
-                {/* Confirm & Cancel Buttons */}
-                <div className="grid grid-cols-2 gap-2.5 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setConfirmModalData(null)}
-                    className="py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl text-xs font-black transition duration-200 cursor-pointer text-center"
-                  >
-                    ফিরে যান
-                  </button>
-
+                <div className="flex-1 flex flex-col justify-end space-y-4 pt-4">
                   <button
                     type="button"
                     disabled={submitting}
                     onClick={confirmModalData.onConfirm}
-                    className={`py-3 text-white rounded-2xl text-xs font-black shadow-xs transition duration-200 cursor-pointer text-center active:scale-98 ${
+                    className={`w-full py-4 rounded-2xl text-base font-black shadow-xl transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-2 ${
                       confirmModalData.type === 'cancel'
-                        ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-200/50'
-                        : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-200/50'
-                    }`}
+                        ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-200'
+                        : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-200'
+                    } text-white`}
                   >
-                    {submitting ? 'প্রক্রিয়াধীন...' : confirmModalData.actionLabel}
+                    {submitting ? (
+                      <>
+                        <div className="w-5 h-5 border-3 border-white border-t-transparent rounded-full animate-spin" />
+                        <span>প্রক্রিয়াধীন...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-5 h-5" />
+                        <span>{confirmModalData.actionLabel}</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setConfirmModalData(null)}
+                    className="w-full py-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl text-base font-black transition-all cursor-pointer text-center active:scale-95"
+                  >
+                    ফিরে যান
                   </button>
                 </div>
               </div>
             </motion.div>
-          </motion.div>
+          </div>
         )}
       </AnimatePresence>
 
       {/* ==================== DISPUTE / COMPLAINT SUBMISSION MODAL ==================== */}
       <AnimatePresence>
         {showDisputeModal && disputeOrder && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-55 font-sans">
+          <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            
             <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-3xl p-6 w-full max-w-md border border-slate-200 shadow-2xl relative overflow-hidden text-left space-y-4"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
             >
-              {/* Header */}
-              <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-                <h3 className="text-sm font-black text-slate-800 flex items-center gap-1.5">
-                  <AlertTriangle className="w-5 h-5 text-amber-500 animate-bounce" /> বিবাদ বা অভিযোগ সাবমিট করুন
-                </h3>
+              <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-white/10 rounded-xl">
+                    <AlertTriangle className="w-5 h-5 text-amber-400" />
+                  </div>
+                  <h3 className="text-lg font-black">বিবাদ বা অভিযোগ সাবমিট করুন</h3>
+                </div>
                 <button 
                   type="button"
                   onClick={() => setShowDisputeModal(false)}
-                  className="p-1 hover:bg-slate-100 rounded-lg transition"
+                  className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
                 >
-                  <X className="w-5 h-5 text-slate-400" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 
-              {/* Order Info Summary */}
-              <div className="bg-amber-50/50 border border-amber-100 p-3 rounded-2xl space-y-1">
-                <span className="text-[10px] text-amber-800 font-bold uppercase tracking-wider block">অভিযোগের বুকিং তথ্যঃ</span>
-                <p className="text-xs font-bold text-slate-800">{disputeOrder.dealTitle}</p>
-                <div className="flex justify-between text-[11px] text-slate-500 font-mono">
-                  <span>বুকিং আইডিঃ #{disputeOrder.id.substring(0, 8).toUpperCase()}</span>
-                  <span className="font-sans font-bold">পরিমাণঃ ৳{disputeOrder.totalAmount?.toLocaleString('bn-BD')}</span>
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {/* Order Info Summary */}
+                <div className="bg-amber-50 border-2 border-amber-100 p-5 rounded-[28px] space-y-3 shadow-sm relative overflow-hidden">
+                  <div className="absolute top-0 right-0 p-4 opacity-5">
+                    <AlertCircle className="w-16 h-16" />
+                  </div>
+                  <span className="text-[10px] text-amber-800 font-black uppercase tracking-widest block">অভিযোগের বুকিং তথ্যঃ</span>
+                  <p className="text-sm font-black text-slate-800">{disputeOrder.dealTitle}</p>
+                  <div className="flex flex-col gap-1 text-[11px] text-slate-500 font-mono">
+                    <span className="font-black">ID: #{disputeOrder.id.substring(0, 8).toUpperCase()}</span>
+                    <span className="font-sans font-black text-amber-700">পরিমাণঃ ৳{disputeOrder.totalAmount?.toLocaleString('bn-BD')} BDT</span>
+                  </div>
                 </div>
+
+                <form onSubmit={handleSubmitDispute} className="space-y-6">
+                  {/* Contact Phone */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-black text-slate-700 uppercase tracking-wider px-1">যোগাযোগের মোবাইল নাম্বার (WhatsApp সচল থাকতে হবে) *</label>
+                    <div className="relative">
+                      <input
+                        type="tel"
+                        required
+                        placeholder="01xxxxxxxxx"
+                        value={disputeContactPhone}
+                        onChange={(e) => setDisputeContactPhone(e.target.value)}
+                        className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-200 text-slate-900 rounded-2xl text-sm font-black focus:border-emerald-500 transition shadow-inner"
+                      />
+                      <Phone className="w-4 h-4 text-slate-400 absolute right-4 top-3.5" />
+                    </div>
+                  </div>
+
+                  {/* Dispute Reason/Description */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-black text-slate-700 uppercase tracking-wider px-1">অভিযোগের বিবরণ (বিস্তারিত লিখুন) *</label>
+                    <textarea
+                      required
+                      rows={5}
+                      placeholder="পণ্য বা কুরিয়ার সংক্রান্ত বিস্তারিত সমস্যা এখানে লিখুন যেন এডমিন দ্রুত সমাধান করতে পারেন..."
+                      value={disputeReason}
+                      onChange={(e) => setDisputeReason(e.target.value)}
+                      className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-200 text-slate-900 rounded-2xl text-sm font-bold focus:border-emerald-500 transition shadow-inner"
+                    />
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                      <p className="text-[10px] text-slate-500 leading-relaxed font-bold">
+                        * আপনার কুরিয়ার ডকিং ডাটা ও মেম্বার ট্র্যাকিং ইনফো স্বয়ংক্রিয়ভাবে প্রশাসনের কাছে রিপোর্টের সাথে যুক্ত হয়ে যাবে। আমাদের প্রতিনিধি হোয়াটসঅ্যাপে যোগাযোগ করবেন।
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Form Buttons */}
+                  <div className="grid grid-cols-2 gap-4 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowDisputeModal(false)}
+                      className="py-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl text-xs font-black transition cursor-pointer active:scale-95"
+                    >
+                      বাতিল করুন
+                    </button>
+
+                    <button
+                      type="submit"
+                      disabled={submittingDispute}
+                      className="py-4 bg-[#004a2c] hover:bg-[#003820] disabled:opacity-50 text-white rounded-2xl text-xs font-black shadow-lg shadow-emerald-900/20 transition cursor-pointer flex items-center justify-center gap-2 active:scale-95"
+                    >
+                      {submittingDispute ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          <span>সাবমিট হচ্ছে...</span>
+                        </>
+                      ) : (
+                        <>✓ অভিযোগ জমা দিন</>
+                      )}
+                    </button>
+                  </div>
+                </form>
               </div>
-
-              <form onSubmit={handleSubmitDispute} className="space-y-4">
-                {/* Contact Phone */}
-                <div className="space-y-1">
-                  <label className="block text-xs font-bold text-slate-700">যোগাযোগের মোবাইল নাম্বার (WhatsApp সচল থাকতে হবে) *</label>
-                  <input
-                    type="tel"
-                    required
-                    placeholder="01xxxxxxxxx"
-                    value={disputeContactPhone}
-                    onChange={(e) => setDisputeContactPhone(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 text-slate-900 rounded-xl text-xs font-semibold focus:border-amber-500 focus:bg-white transition"
-                  />
-                </div>
-
-                {/* Dispute Reason/Description */}
-                <div className="space-y-1">
-                  <label className="block text-xs font-bold text-slate-700">অভিযোগের বিবরণ (বিস্তারিত লিখুন) *</label>
-                  <textarea
-                    required
-                    rows={4}
-                    placeholder="পণ্য বা কুরিয়ার সংক্রান্ত বিস্তারিত সমস্যা এখানে লিখুন যেন এডমিন দ্রুত সমাধান করতে পারেন..."
-                    value={disputeReason}
-                    onChange={(e) => setDisputeReason(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 text-slate-900 rounded-xl text-xs focus:border-amber-500 focus:bg-white transition animate-none"
-                  />
-                  <span className="text-[9.5px] text-slate-450 leading-relaxed block font-semibold">
-                    * আপনার কুরিয়ার ডকিং ডাটা ও মেম্বার ট্র্যাকিং ইনফো স্বয়ংক্রিয়ভাবে প্রশাসনের কাছে রিপোর্টের সাথে যুক্ত হয়ে যাবে।
-                  </span>
-                </div>
-
-                {/* Form Buttons */}
-                <div className="grid grid-cols-2 gap-2.5 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setShowDisputeModal(false)}
-                    className="py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition cursor-pointer text-center"
-                  >
-                    বাতিল করুন
-                  </button>
-
-                  <button
-                    type="submit"
-                    disabled={submittingDispute}
-                    className="py-3 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-xl text-xs font-black shadow-xs transition cursor-pointer text-center flex items-center justify-center gap-1"
-                  >
-                    {submittingDispute ? (
-                      <>
-                        <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        সাবমিট হচ্ছে...
-                      </>
-                    ) : (
-                      <>✓ অভিযোগ জমা দিন</>
-                    )}
-                  </button>
-                </div>
-              </form>
             </motion.div>
           </div>
         )}
@@ -2428,23 +2585,25 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
       {/* ==================== SUPPORT TICKETS & COMPLAINT TRACKER MODAL ==================== */}
       <AnimatePresence>
         {showSupportHistoryModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-55 font-sans">
+          <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            
             <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-3xl p-5 w-full max-w-lg border border-slate-200 shadow-2xl relative overflow-hidden text-left space-y-4 max-h-[90vh] overflow-y-auto"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
             >
-              {/* Top Accent line */}
-              <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-amber-500 to-orange-600" />
-
-              {/* Close Button & Header */}
-              <div className="flex justify-between items-center border-b border-slate-100 pb-3 mt-1">
-                <div>
-                  <h3 className="text-sm font-black text-slate-800 flex items-center gap-1.5">
-                    <ShieldCheck className="w-5 h-5 text-emerald-600" /> অ্যাডমিন সাপোর্ট ও ট্র্যাকিং সেন্টার
-                  </h3>
-                  <p className="text-[10px] text-slate-450 font-bold">BNB Business Network Bangladesh</p>
+              <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-white/10 rounded-xl">
+                    <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black leading-tight">অ্যাডমিন সাপোর্ট ও ট্র্যাকিং সেন্টার</h3>
+                    <p className="text-[10px] text-emerald-100/70 font-medium tracking-wide uppercase">Support & Dispute Center</p>
+                  </div>
                 </div>
                 <button 
                   type="button"
@@ -2454,160 +2613,196 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
                     setSearchTicketResult(null);
                     setSearchTicketError('');
                   }}
-                  className="p-1 hover:bg-slate-100 rounded-lg transition"
+                  className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
                 >
-                  <X className="w-5 h-5 text-slate-400" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 
-              {/* WhatsApp Quick Support Section */}
-              <div className="bg-emerald-50 border border-emerald-100/70 p-4 rounded-2xl flex flex-col xs:flex-row xs:items-center justify-between gap-3 shadow-3xs">
-                <div className="space-y-1">
-                  <span className="text-[10px] font-extrabold text-emerald-800 uppercase tracking-wider block">সরাসরি হোয়াটসঅ্যাপে যোগাযোগঃ</span>
-                  <p className="text-xs font-black text-slate-800">এডমিন সাপোর্ট সেন্টারের সাথে সরাসরি কথা বলুন</p>
-                  <p className="text-[11px] text-emerald-700 font-mono font-bold">WhatsApp: 01865911728</p>
-                </div>
-                <a
-                  href="https://wa.me/8801865911728"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="py-2.5 px-4 bg-[#25D366] hover:bg-emerald-600 text-white font-extrabold text-xs rounded-xl transition shadow-3xs flex items-center justify-center gap-1.5 shrink-0"
-                >
-                  <Phone className="w-3.5 h-3.5 text-white" />
-                  হোয়াটসঅ্যাপ সাপোর্ট
-                </a>
-              </div>
-
-              {/* Live Status Tracker Search Input */}
-              <div className="bg-slate-50 border border-slate-200/80 p-4 rounded-2xl space-y-3">
-                <div className="space-y-1">
-                  <label className="block text-xs font-extrabold text-slate-700">অভিযোগের রসিদ নম্বর (Ticket ID) দিয়ে স্ট্যাটাস চেক করুনঃ</label>
-                  <div className="flex gap-1.5">
-                    <input
-                      type="text"
-                      placeholder="যেমন: SUP-123456"
-                      value={searchTicketNo}
-                      onChange={(e) => setSearchTicketNo(e.target.value)}
-                      className="flex-1 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-900 font-mono uppercase tracking-wider rounded-xl text-xs placeholder:font-sans placeholder:tracking-normal focus:border-blue-500 transition font-bold"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleSearchTicket}
-                      disabled={searchingTicket}
-                      className="px-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl transition flex items-center justify-center gap-1 shadow-3xs cursor-pointer"
-                    >
-                      {searchingTicket ? 'খোঁজা হচ্ছে...' : 'সার্চ'}
-                    </button>
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {/* WhatsApp Quick Support Section */}
+                <div className="bg-emerald-50 border-2 border-emerald-100 p-5 rounded-[28px] flex flex-col gap-4 shadow-sm relative overflow-hidden">
+                  <div className="absolute top-0 right-0 p-4 opacity-5">
+                    <Phone className="w-16 h-16" />
                   </div>
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-black text-emerald-800 uppercase tracking-widest block">সরাসরি হোয়াটসঅ্যাপে যোগাযোগঃ</span>
+                    <p className="text-sm font-black text-slate-800 leading-tight">এডমিন সাপোর্ট সেন্টারের সাথে সরাসরি কথা বলুন</p>
+                    <p className="text-xs text-emerald-700 font-mono font-black mt-1">WhatsApp: 01865911728</p>
+                  </div>
+                  <a
+                    href="https://wa.me/8801865911728"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="w-full py-4 bg-[#25D366] hover:bg-emerald-600 text-white font-black text-sm rounded-2xl transition shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 active:scale-95"
+                  >
+                    <Phone className="w-4 h-4 text-white" />
+                    <span>হোয়াটসঅ্যাপ সাপোর্ট</span>
+                  </a>
                 </div>
 
-                {/* Ticket Search Result Display */}
-                {searchTicketError && (
-                  <p className="text-[11px] text-rose-600 font-semibold">{searchTicketError}</p>
-                )}
-
-                {searchTicketResult && (
-                  <div className="bg-white border border-blue-100 p-3.5 rounded-xl space-y-2 text-xs shadow-3xs">
-                    <div className="flex justify-between items-center border-b border-slate-100 pb-1.5">
-                      <span className="font-mono font-bold text-blue-700">আইডিঃ {searchTicketResult.ticketId}</span>
-                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold border ${
-                        searchTicketResult.status === 'Resolved' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
-                        searchTicketResult.status === 'Processing' ? 'bg-blue-50 text-blue-700 border-blue-100' :
-                        'bg-amber-50 text-amber-700 border-amber-100 animate-pulse'
-                      }`}>
-                        {searchTicketResult.status === 'Resolved' ? 'সমাধান হয়েছে' :
-                         searchTicketResult.status === 'Processing' ? 'তদন্তাধীন/প্রসেসিং' : 'পেন্ডিং (অপেক্ষমাণ)'}
-                      </span>
-                    </div>
-                    <div className="space-y-1 text-slate-600">
-                      <p className="font-semibold text-slate-800">অভিযোগকারীঃ <strong className="font-extrabold">{searchTicketResult.userName}</strong></p>
-                      <p className="font-semibold">ডিল শিরোনামঃ <span className="text-slate-800 font-bold">{searchTicketResult.orderTitle}</span></p>
-                      <p className="font-semibold font-mono text-[11px]">পরিমাণঃ ৳{searchTicketResult.amount?.toLocaleString('bn-BD')}</p>
-                      <p className="font-semibold font-mono text-[11px]">অভিযোগের সিরিয়াল নংঃ {englishToBengaliNumber(searchTicketResult.serialNo)}</p>
-                      <p className="font-semibold bg-slate-50 border p-2 rounded-lg mt-1 text-slate-700 italic">" {searchTicketResult.description} "</p>
+                {/* Live Status Tracker Search Input */}
+                <div className="bg-slate-50 border-2 border-slate-100 p-5 rounded-[28px] space-y-4 shadow-inner">
+                  <div className="space-y-2">
+                    <label className="block text-xs font-black text-slate-700 uppercase tracking-wider px-1">রসিদ নম্বর (Ticket ID) দিয়ে স্ট্যাটাস চেক করুনঃ</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="যেমন: SUP-123456"
+                        value={searchTicketNo}
+                        onChange={(e) => setSearchTicketNo(e.target.value)}
+                        className="flex-1 px-4 py-3 bg-white border-2 border-slate-200 text-slate-900 font-mono uppercase tracking-widest rounded-xl text-sm font-black focus:border-emerald-500 outline-none transition-all shadow-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleSearchTicket}
+                        disabled={searchingTicket}
+                        className="px-6 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black text-sm rounded-xl transition shadow-md cursor-pointer active:scale-95"
+                      >
+                        {searchingTicket ? (
+                          <div className="w-5 h-5 border-3 border-white border-t-transparent rounded-full animate-spin" />
+                        ) : 'সার্চ'}
+                      </button>
                     </div>
                   </div>
-                )}
-              </div>
 
-              {/* Your Ticket History List */}
-              <div className="space-y-2.5">
-                <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5">
-                  <Clock className="w-3.5 h-3.5 text-slate-500" /> আপনার করা বিগত অভিযোগের তালিকা ({englishToBengaliNumber(supportTickets.length)} টি)
-                </h4>
+                  {/* Ticket Search Result Display */}
+                  {searchTicketError && (
+                    <div className="bg-rose-50 border border-rose-100 p-3 rounded-xl">
+                      <p className="text-[11px] text-rose-600 font-black text-center">{searchTicketError}</p>
+                    </div>
+                  )}
 
-                {supportTickets.length === 0 ? (
-                  <div className="p-8 text-center bg-slate-50 border border-slate-150 rounded-2xl text-slate-400 text-xs font-bold">
-                    আপনার কোনো পূর্ববর্তী অভিযোগের রেকর্ড পাওয়া যায়নি।
-                  </div>
-                ) : (
-                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                    {supportTickets.map((ticket, idx) => (
-                      <div key={ticket.id || idx} className="p-3 bg-slate-50 hover:bg-slate-100/80 border rounded-xl flex items-center justify-between gap-3 transition">
-                        <div className="space-y-1 text-left">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono font-bold text-slate-700 text-xs">{ticket.ticketId}</span>
-                            <span className="text-[10px] text-slate-400 font-mono">{new Date(ticket.createdAt).toLocaleDateString('bn-BD')}</span>
+                  {searchTicketResult && (
+                    <div className="bg-white border-2 border-emerald-100 p-4 rounded-2xl space-y-3 text-xs shadow-sm animate-in zoom-in duration-300">
+                      <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+                        <span className="font-mono font-black text-emerald-700 text-sm">ID: {searchTicketResult.ticketId}</span>
+                        <span className={`px-3 py-1 rounded-full text-[10px] font-black border-2 ${
+                          searchTicketResult.status === 'Resolved' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
+                          searchTicketResult.status === 'Processing' ? 'bg-blue-50 text-blue-700 border-blue-100' :
+                          'bg-amber-50 text-amber-700 border-amber-100 animate-pulse'
+                        }`}>
+                          {searchTicketResult.status === 'Resolved' ? '✓ সমাধান হয়েছে' :
+                           searchTicketResult.status === 'Processing' ? '⌚ তদন্তাধীন' : '⏳ পেন্ডিং'}
+                        </span>
+                      </div>
+                      <div className="space-y-2 text-slate-600">
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">অভিযোগকারী</span>
+                            <p className="font-black text-slate-800 text-xs">{searchTicketResult.userName}</p>
                           </div>
-                          <p className="text-[11px] text-slate-600 font-bold truncate max-w-[200px]">{ticket.orderTitle || 'সাধারণ অভিযোগ'}</p>
-                          <div className="flex items-center gap-2 text-[10px] text-slate-500">
-                            <span>সিরিয়াল নংঃ {englishToBengaliNumber(ticket.serialNo)}</span>
-                            {ticket.status === 'Pending' && (
-                              <span className="text-amber-600 font-bold">• প্রসেসিং লাইনে আছে</span>
-                            )}
+                          <div>
+                            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">সিরিয়াল নম্বর</span>
+                            <p className="font-black text-slate-800 text-xs font-mono">{englishToBengaliNumber(searchTicketResult.serialNo)}</p>
                           </div>
                         </div>
-
-                        <div className="text-right shrink-0">
-                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-black border block text-center ${
-                            ticket.status === 'Resolved' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
-                            ticket.status === 'Processing' ? 'bg-blue-50 text-blue-700 border-blue-100' :
-                            'bg-amber-50 text-amber-700 border-amber-100'
-                          }`}>
-                            {ticket.status === 'Resolved' ? 'সম্পন্ন' :
-                             ticket.status === 'Processing' ? 'প্রসেসিং' : 'পেন্ডিং'}
-                          </span>
+                        <div>
+                          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">ডিল শিরোনাম</span>
+                          <p className="text-slate-800 font-black text-xs">{searchTicketResult.orderTitle}</p>
+                        </div>
+                        <div className="bg-slate-50 border border-slate-100 p-3 rounded-xl">
+                          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-1">অভিযোগের বিবরণ</span>
+                          <p className="font-bold text-slate-700 italic leading-relaxed">" {searchTicketResult.description} "</p>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+                    </div>
+                  )}
+                </div>
 
-              {/* Close Button */}
-              <button
-                type="button"
-                onClick={() => {
-                  setShowSupportHistoryModal(false);
-                  setSearchTicketNo('');
-                  setSearchTicketResult(null);
-                  setSearchTicketError('');
-                }}
-                className="w-full py-3 bg-slate-800 hover:bg-slate-900 text-white font-black text-xs rounded-2xl transition"
-              >
-                বন্ধ করুন
-              </button>
+                {/* Your Ticket History List */}
+                <div className="space-y-4 pt-2">
+                  <div className="flex items-center justify-between px-1">
+                    <h4 className="text-xs font-black text-slate-800 flex items-center gap-2 uppercase tracking-widest">
+                      <Clock className="w-4 h-4 text-slate-400" /> অভিযোগের ইতিহাস
+                    </h4>
+                    <span className="text-[10px] font-black bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">{englishToBengaliNumber(supportTickets.length)} টি</span>
+                  </div>
+
+                  {supportTickets.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-12 px-6 text-center border-2 border-dashed border-slate-200 rounded-[32px] bg-slate-50/50 space-y-3">
+                      <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-sm text-slate-300">
+                        <ClipboardList className="w-6 h-6" />
+                      </div>
+                      <p className="text-xs text-slate-400 font-black leading-relaxed">
+                        আপনার কোনো পূর্ববর্তী অভিযোগের রেকর্ড পাওয়া যায়নি।
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 max-h-[40vh] overflow-y-auto pr-1">
+                      {supportTickets.map((ticket, idx) => (
+                        <div key={ticket.id || idx} className="p-4 bg-white border-2 border-slate-100 hover:border-emerald-200 rounded-[24px] flex items-center justify-between gap-4 transition-all shadow-sm">
+                          <div className="space-y-1.5 flex-1 min-w-0 text-left">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono font-black text-slate-700 text-xs tracking-wider">{ticket.ticketId}</span>
+                              <span className="text-[10px] text-slate-400 font-bold bg-slate-50 px-2 py-0.5 rounded-full">{new Date(ticket.createdAt).toLocaleDateString('bn-BD')}</span>
+                            </div>
+                            <p className="text-xs font-black text-slate-800 truncate">{ticket.orderTitle || 'সাধারণ অভিযোগ'}</p>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Serial No: {englishToBengaliNumber(ticket.serialNo)}</span>
+                              {ticket.status === 'Pending' && (
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="shrink-0 text-right">
+                            <span className={`px-3 py-1 rounded-full text-[9px] font-black border-2 block text-center uppercase tracking-wider ${
+                              ticket.status === 'Resolved' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
+                              ticket.status === 'Processing' ? 'bg-blue-50 text-blue-700 border-blue-100' :
+                              'bg-amber-50 text-amber-700 border-amber-100'
+                            }`}>
+                              {ticket.status === 'Resolved' ? 'সম্পন্ন' :
+                               ticket.status === 'Processing' ? 'তদন্তাধীন' : 'পেন্ডিং'}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-4 pb-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSupportHistoryModal(false);
+                      setSearchTicketNo('');
+                      setSearchTicketResult(null);
+                      setSearchTicketError('');
+                    }}
+                    className="w-full py-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl text-sm font-black transition-all cursor-pointer active:scale-95"
+                  >
+                    বন্ধ করুন
+                  </button>
+                </div>
+              </div>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
 
         {/* ================= LOCALIZED ESCROW TRANSACTION HISTORY MODAL ================= */}
+        {/* ================= LOCALIZED ESCROW TRANSACTION HISTORY MODAL ================= */}
         {showSectionTxHistory && (
-          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
             <motion.div 
-              initial={{ opacity: 0, y: 50 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 50 }}
-              className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col max-h-[85vh] sm:max-h-[80vh] overflow-hidden text-slate-800 font-sans"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden"
             >
               {/* Header */}
-              <div className="bg-gradient-to-r from-indigo-750 via-indigo-800 to-indigo-900 text-white px-5 py-4 flex items-center justify-between shadow-sm">
-                <div className="flex items-center gap-2">
-                  <ClipboardList className="w-5 h-5 text-indigo-200" />
+              <div className="bg-[#004a2c] text-white px-6 py-5 flex items-center justify-between shadow-lg">
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 bg-white/10 rounded-2xl flex items-center justify-center backdrop-blur-md">
+                    <ClipboardList className="w-6 h-6 text-white" />
+                  </div>
                   <div>
-                    <h3 className="text-sm font-black text-white">নিরাপদ লেনদেন এসক্রো খতিয়ান</h3>
-                    <p className="text-[10px] text-indigo-200 font-medium">নিরাপদ ডিল, ফান্ড হোল্ড ও রিলিজ সংক্রান্ত ইতিহাস</p>
+                    <h3 className="text-base font-black text-white leading-tight">নিরাপদ লেনদেন এসক্রো খতিয়ান</h3>
+                    <p className="text-[11px] text-emerald-100/80 font-bold uppercase tracking-wider">নিরাপদ ডিল, ফান্ড হোল্ড ও রিলিজ সংক্রান্ত ইতিহাস</p>
                   </div>
                 </div>
                 <button 
@@ -2615,27 +2810,27 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
                     setShowSectionTxHistory(false);
                     setTxModalSearch('');
                   }}
-                  className="p-1.5 hover:bg-white/10 rounded-xl transition text-white/90 active:scale-90"
+                  className="w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/20 rounded-2xl transition-all active:scale-90"
                 >
-                  <X className="w-5 h-5" />
+                  <X className="w-6 h-6 text-white" />
                 </button>
               </div>
 
               {/* Search Bar */}
               <div className="p-4 border-b border-slate-100 bg-slate-50/50">
                 <div className="relative">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                  <Search className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
                   <input 
                     type="text"
                     value={txModalSearch}
                     onChange={(e) => setTxModalSearch(e.target.value)}
                     placeholder="অ্যামাউন্ট, আইডি বা বিবরণ দিয়ে খুঁজুন..."
-                    className="w-full bg-white border border-slate-200 pl-10 pr-4 py-2 rounded-2xl text-xs font-medium focus:outline-none focus:border-indigo-650 focus:ring-1 focus:ring-indigo-650"
+                    className="w-full bg-white border-2 border-slate-100 pl-11 pr-4 py-3 rounded-2xl text-xs font-bold focus:outline-none focus:border-[#004a2c] focus:ring-4 focus:ring-[#004a2c]/5 transition-all"
                   />
                   {txModalSearch && (
                     <button 
                       onClick={() => setTxModalSearch('')}
-                      className="text-[10px] font-black text-slate-400 hover:text-slate-600 absolute right-3.5 top-2.5"
+                      className="text-[10px] font-black bg-slate-100 text-slate-500 px-3 py-1.5 rounded-xl hover:bg-slate-200 absolute right-3 top-1/2 -translate-y-1/2 transition-all"
                     >
                       মুছুন
                     </button>
@@ -2644,10 +2839,11 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
               </div>
 
               {/* Content */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 {loadingTx ? (
-                  <div className="text-center py-10 text-slate-400 text-xs font-bold">
-                    খতিয়ান লোড হচ্ছে...
+                  <div className="flex flex-col items-center justify-center py-20 gap-4">
+                    <div className="w-12 h-12 border-4 border-slate-100 border-t-[#004a2c] rounded-full animate-spin"></div>
+                    <p className="text-xs font-black text-slate-400 uppercase tracking-widest">খতিয়ান লোড হচ্ছে...</p>
                   </div>
                 ) : (() => {
                   const filteredTxs = txHistory.filter(tx => {
@@ -2662,53 +2858,81 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
                     return (
                       tx.description?.toLowerCase().includes(searchLower) ||
                       tx.typeLabel?.toLowerCase().includes(searchLower) ||
-                      tx.amount.toString().includes(searchLower) ||
-                      tx.id.toLowerCase().includes(searchLower) ||
-                      tx.receiptNo?.toLowerCase().includes(searchLower)
+                      tx.amount?.toString().includes(searchLower) ||
+                      tx.id?.toLowerCase().includes(searchLower)
                     );
                   });
 
                   if (filteredTxs.length === 0) {
                     return (
-                      <div className="text-center py-10 text-slate-400 text-xs font-bold">
-                        কোনো নিরাপদ লেনদেন রেকর্ড পাওয়া যায়নি।
+                      <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
+                        <div className="w-16 h-16 bg-slate-50 rounded-[24px] flex items-center justify-center text-slate-300 mb-4">
+                          <Search className="w-8 h-8" />
+                        </div>
+                        <h4 className="text-sm font-black text-slate-800 mb-1">কোনো তথ্য পাওয়া যায়নি</h4>
+                        <p className="text-[11px] text-slate-400 font-bold max-w-[200px] leading-relaxed">
+                          আপনার এসক্রো লেনদেনের কোনো রেকর্ড এই মুহূর্তে নেই।
+                        </p>
                       </div>
                     );
                   }
 
-                  return filteredTxs.map((tx, idx) => {
-                    const isCredit = tx.typeLabel?.includes('প্রাপ্তি') || tx.description?.includes('প্রাপ্তি') || tx.description?.includes('রিলিজ করেছেন');
-                    return (
-                      <div key={`${tx.id}-${idx}`} className="p-3 bg-white border border-slate-150 rounded-2xl shadow-3xs flex justify-between items-start gap-3">
-                        <div className="space-y-1">
-                          <span className="text-xs font-black text-slate-850 block">{tx.typeLabel || 'নিরাপদ লেনদেন'}</span>
-                          <span className="text-[10px] text-slate-400 block font-medium">
-                            {new Date(tx.createdAt).toLocaleDateString('bn-BD')} {new Date(tx.createdAt).toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                          <p className="text-[10.5px] text-slate-650 font-bold leading-normal">{tx.description}</p>
-                          {tx.id && (
-                            <span className="inline-block text-[9px] bg-slate-100 text-slate-500 font-mono px-2 py-0.5 rounded-md">
-                              TXN ID: {tx.id.replace('tx-esc-', '').toUpperCase()}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-right shrink-0">
-                          <span className={`text-xs font-black font-mono block ${isCredit ? 'text-emerald-600' : 'text-indigo-600'}`}>
-                            {isCredit ? '+' : '-'} ৳{tx.amount.toLocaleString('bn-BD')}
-                          </span>
-                          <span className="inline-block text-[8.5px] font-extrabold px-1.5 py-0.2 mt-1 rounded-md uppercase bg-emerald-50 text-emerald-700 border border-emerald-100">
-                            সফল
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  });
+                  return (
+                    <div className="space-y-3">
+                      {filteredTxs.map((tx, idx) => {
+                        const isCredit = tx.typeLabel?.includes('প্রাপ্তি') || tx.description?.includes('প্রাপ্তি') || tx.description?.includes('রিলিজ করেছেন');
+                        return (
+                          <div key={`${tx.id}-${idx}`} className="p-4 bg-white border-2 border-slate-100 rounded-[28px] shadow-sm hover:border-emerald-100 transition-all">
+                            <div className="flex justify-between items-start mb-3">
+                              <div className="flex items-center gap-3">
+                                <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${
+                                  isCredit ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'
+                                }`}>
+                                  {isCredit ? <ArrowUpRight className="w-5 h-5" /> : <ArrowDownRight className="w-5 h-5" />}
+                                </div>
+                                <div>
+                                  <h4 className="text-xs font-black text-slate-800 leading-tight">{tx.typeLabel || 'নিরাপদ লেনদেন'}</h4>
+                                  <p className="text-[10px] text-slate-400 font-bold">
+                                    {new Date(tx.createdAt).toLocaleDateString('bn-BD')} {new Date(tx.createdAt).toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit' })}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <span className={`text-sm font-black ${
+                                  isCredit ? 'text-emerald-600' : 'text-rose-600'
+                                }`}>
+                                  {isCredit ? '+' : '-'} ৳{tx.amount.toLocaleString('bn-BD')}
+                                </span>
+                                {tx.id && (
+                                  <div className="text-[9px] font-black text-slate-400 uppercase tracking-tighter">ID: {tx.id.replace('tx-esc-', '').toUpperCase()}</div>
+                                )}
+                              </div>
+                            </div>
+                            <div className="pl-13">
+                              <p className="text-[11px] font-bold text-slate-600 leading-relaxed bg-slate-50 p-2.5 rounded-xl italic border-l-4 border-slate-200">
+                                {tx.description}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
                 })()}
               </div>
 
               {/* Footer */}
-              <div className="p-4 bg-slate-50 border-t border-slate-100 text-center">
-                <span className="text-[10px] text-slate-400 font-bold">© BUSINESS NETWORK BANGLADESH (BNB)</span>
+              <div className="p-4 bg-slate-50 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSectionTxHistory(false);
+                    setTxModalSearch('');
+                  }}
+                  className="w-full py-4 bg-white border-2 border-slate-200 hover:border-rose-100 hover:text-rose-600 text-slate-600 rounded-[24px] text-sm font-black transition-all shadow-sm active:scale-95"
+                >
+                  বন্ধ করুন
+                </button>
               </div>
             </motion.div>
           </div>

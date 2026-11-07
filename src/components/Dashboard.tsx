@@ -6,6 +6,7 @@ import { sortTransactionsNewestFirst } from '../lib/transactionUtils';
 import UserTransactionsStatement, { getTxTimestamp, formatTxDate, getNormalizedStatus } from './UserTransactionsStatement';
 import { BNBPaymentReceiptModal } from './BNBPaymentReceiptModal';
 import { NotificationInboxModal } from './NotificationInboxModal';
+import { BNBVirtualAssistant } from './BNBVirtualAssistant';
 import TransactionExchangeIcon from './TransactionExchangeIcon';
 import { filterTransactionsLast60Days, cleanupExpiredTransactions } from '../lib/transactionCleanup';
 import { db } from '../lib/firebase';
@@ -624,11 +625,18 @@ export const Dashboard = React.memo(function Dashboard({
         // App Core Labels & Tabs
         'হোম': 'Home',
         'সেন্ড মানি': 'Send Money',
+        'অটো এড মানি': 'Auto Add Money',
+        'অটো অ্যাড মানি': 'Auto Add Money',
         'BNB এড মানি': 'BNB Add Money',
         'অ্যাড মানি': 'Add Money',
         'লেনদেন': 'Transactions',
         'ইতিহাস': 'Transactions',
         'প্রোফাইল': 'Profile',
+        'navHome': 'Home',
+        'navSendMoney': 'Send Money',
+        'navAutoAddMoney': 'Auto Add Money',
+        'navTransactions': 'Transactions',
+        'navProfile': 'Profile',
         'সক্রিয়': 'ACTIVE',
         'পেন্ডিং': 'PENDING',
         'নিরাপদ ও সুদমুক্ত সামাজিক প্ল্যাটফর্ম': 'Interest-free Social Platform',
@@ -2412,26 +2420,44 @@ const getTxt = (key: string, fallback: string) => {
         q6 ? getDocs(q6).catch(() => ({ empty: true, docs: [] } as any)) : Promise.resolve({ empty: true, docs: [] } as any)
       ]);
 
+      const pickRichestDoc = (docs: any[]) => {
+        const activeDocs = docs
+          .map(d => ({ uid: d.id, ...d.data() }))
+          .filter(u => u.status !== 'archived_duplicate' && u.status !== 'deleted' && !u.isArchivedDuplicate);
+        if (activeDocs.length === 0) return null;
+        activeDocs.sort((a, b) => {
+          const balDiff = (getEffectiveBalance(b) + (Number(b.savings) || 0)) - (getEffectiveBalance(a) + (Number(a.savings) || 0));
+          if (balDiff !== 0) return balDiff;
+          return (b.memberId ? 1 : 0) - (a.memberId ? 1 : 0);
+        });
+        return activeDocs[0];
+      };
+
       let foundUser: any = null;
       let isVirtual = false;
 
       if (!snap1.empty && snap1.docs.length > 0) {
-        foundUser = { uid: snap1.docs[0].id, ...snap1.docs[0].data() };
+        foundUser = pickRichestDoc(snap1.docs);
         if (input.endsWith('0')) isVirtual = true;
-      } else if (!snap2.empty && snap2.docs.length > 0) {
-        foundUser = { uid: snap2.docs[0].id, ...snap2.docs[0].data() };
+      }
+      if (!foundUser && !snap2.empty && snap2.docs.length > 0) {
+        foundUser = pickRichestDoc(snap2.docs);
         if (input.endsWith('0')) isVirtual = true;
-      } else if (snap3 && !snap3.empty && snap3.docs.length > 0) {
-        foundUser = { uid: snap3.docs[0].id, ...snap3.docs[0].data() };
+      }
+      if (!foundUser && snap3 && !snap3.empty && snap3.docs.length > 0) {
+        foundUser = pickRichestDoc(snap3.docs);
         isVirtual = true;
-      } else if (snap4 && !snap4.empty && snap4.docs.length > 0) {
-        foundUser = { uid: snap4.docs[0].id, ...snap4.docs[0].data() };
+      }
+      if (!foundUser && snap4 && !snap4.empty && snap4.docs.length > 0) {
+        foundUser = pickRichestDoc(snap4.docs);
         isVirtual = true;
-      } else if (snap5 && !snap5.empty && snap5.docs.length > 0) {
-        foundUser = { uid: snap5.docs[0].id, ...snap5.docs[0].data() };
+      }
+      if (!foundUser && snap5 && !snap5.empty && snap5.docs.length > 0) {
+        foundUser = pickRichestDoc(snap5.docs);
         isVirtual = true;
-      } else if (snap6 && !snap6.empty && snap6.docs.length > 0) {
-        foundUser = { uid: snap6.docs[0].id, ...snap6.docs[0].data() };
+      }
+      if (!foundUser && snap6 && !snap6.empty && snap6.docs.length > 0) {
+        foundUser = pickRichestDoc(snap6.docs);
         isVirtual = true;
       }
 
@@ -2462,7 +2488,7 @@ const getTxt = (key: string, fallback: string) => {
     setFormError('');
     setFormSuccess('');
     try {
-      const currentBalance = liveUser.balance || 0;
+      const currentBalance = getEffectiveBalance(liveUser);
       if (currentBalance < due) {
         setFormError(`পর্যাপ্ত ওয়ালেট ব্যালেন্স নেই! আপনার বর্তমান ওয়ালেট ব্যালেন্স ৳ ${currentBalance.toLocaleString('en-US')} BDT।`);
         setLoading(false);
@@ -2470,16 +2496,25 @@ const getTxt = (key: string, fallback: string) => {
       }
 
       const userRef = doc(db, 'users', liveUser.uid);
-      const newDue = Math.max(0, (liveUser.dueLoan || 0) - due);
       const nowIso = new Date().toISOString();
-      const updatePayload: any = {
-        balance: currentBalance - due,
-        dueLoan: newDue
-      };
-      if (newDue === 0) {
-        updatePayload.lastCoopInstantLoanRepaidAt = nowIso;
-      }
-      await updateDoc(userRef, updatePayload);
+      await runTransaction(db, async (t) => {
+        const uSnap = await t.get(userRef);
+        if (!uSnap.exists()) throw new Error('User not found');
+        const uData = uSnap.data();
+        const liveBal = getEffectiveBalance(uData);
+        if (liveBal < due) throw new Error('অপর্যাপ্ত ব্যালেন্স');
+        const nextBal = liveBal - due;
+        const newDue = Math.max(0, (Number(uData.dueLoan) || 0) - due);
+        const updatePayload: any = {
+          balance: nextBal,
+          mainBalance: nextBal,
+          dueLoan: newDue
+        };
+        if (newDue === 0) {
+          updatePayload.lastCoopInstantLoanRepaidAt = nowIso;
+        }
+        t.update(userRef, updatePayload);
+      });
 
       const txId = `tx-qard-repay-${Date.now()}`;
       const newTx: Transaction = {
@@ -2609,7 +2644,7 @@ const getTxt = (key: string, fallback: string) => {
         if (searchedMember.uid === liveUser.uid) {
           // Self/Own Transfer
           if (transferSector === 'samity') {
-            const currentBalance = liveUser.balance || 0;
+            const currentBalance = getEffectiveBalance(liveUser);
             if (currentBalance < amt) {
               setFormError(`পর্যাপ্ত মেইন ব্যালেন্স নেই! আপনার বর্তমান ওয়ালেট ব্যালেন্স ৳ ${currentBalance.toLocaleString('en-US')} BDT।`);
               setLoading(false);
@@ -2617,11 +2652,19 @@ const getTxt = (key: string, fallback: string) => {
             }
 
             if (selfTransferTarget === 'telecom') {
-              const currentTelecom = liveUser.telecomBalance || 0;
-              await updateDoc(senderRef, {
-                balance: currentBalance - amt,
-                mainBalance: currentBalance - amt,
-                telecomBalance: currentTelecom + amt
+              await runTransaction(db, async (t) => {
+                const uSnap = await t.get(senderRef);
+                if (!uSnap.exists()) throw new Error('User not found');
+                const uData = uSnap.data();
+                const liveBal = getEffectiveBalance(uData);
+                if (liveBal < amt) throw new Error('অপর্যাপ্ত ব্যালেন্স');
+                const nextBal = liveBal - amt;
+                const currentTelecom = Number(uData.telecomBalance) || 0;
+                t.update(senderRef, {
+                  balance: nextBal,
+                  mainBalance: nextBal,
+                  telecomBalance: currentTelecom + amt
+                });
               });
 
               const txId = `tx-self-main-to-telecom-${Date.now()}`;
@@ -2644,11 +2687,19 @@ const getTxt = (key: string, fallback: string) => {
               setFormSuccess(`অভিনন্দন! সফলভাবে নিজের মেইন ওয়ালেট হতে ৳ ${amt.toLocaleString('en-US')} টাকা টেলিকম ওয়ালেটে স্থানান্তর করা হয়েছে।`);
 
             } else if (selfTransferTarget === 'shop') {
-              const currentShop = liveUser.superShopBalance || 0;
-              await updateDoc(senderRef, {
-                balance: currentBalance - amt,
-                mainBalance: currentBalance - amt,
-                superShopBalance: currentShop + amt
+              await runTransaction(db, async (t) => {
+                const uSnap = await t.get(senderRef);
+                if (!uSnap.exists()) throw new Error('User not found');
+                const uData = uSnap.data();
+                const liveBal = getEffectiveBalance(uData);
+                if (liveBal < amt) throw new Error('অপর্যাপ্ত ব্যালেন্স');
+                const nextBal = liveBal - amt;
+                const currentShop = Number(uData.superShopBalance) || 0;
+                t.update(senderRef, {
+                  balance: nextBal,
+                  mainBalance: nextBal,
+                  superShopBalance: currentShop + amt
+                });
               });
 
               const txId = `tx-self-main-to-shop-${Date.now()}`;
@@ -2671,11 +2722,19 @@ const getTxt = (key: string, fallback: string) => {
               setFormSuccess(`অভিনন্দন! সফলভাবে নিজের মেইন ওয়ালেট হতে ৳ ${amt.toLocaleString('en-US')} টাকা সুপার শপ ওয়ালেটে স্থানান্তর করা হয়েছে।`);
 
             } else if (selfTransferTarget === 'savings') {
-              const currentSavings = liveUser.savings || 0;
-              await updateDoc(senderRef, {
-                balance: currentBalance - amt,
-                mainBalance: currentBalance - amt,
-                savings: currentSavings + amt
+              await runTransaction(db, async (t) => {
+                const uSnap = await t.get(senderRef);
+                if (!uSnap.exists()) throw new Error('User not found');
+                const uData = uSnap.data();
+                const liveBal = getEffectiveBalance(uData);
+                if (liveBal < amt) throw new Error('অপর্যাপ্ত ব্যালেন্স');
+                const nextBal = liveBal - amt;
+                const currentSavings = Number(uData.savings) || 0;
+                t.update(senderRef, {
+                  balance: nextBal,
+                  mainBalance: nextBal,
+                  savings: currentSavings + amt
+                });
               });
 
               const txIdSel = `tx-self-main-to-savings-${Date.now()}`;
@@ -2699,16 +2758,23 @@ const getTxt = (key: string, fallback: string) => {
             }
           } else if (transferSector === 'telecom') {
             const currentTelecom = liveUser.telecomBalance || 0;
-            const currentBalance = liveUser.balance || 0;
             if (currentTelecom < amt) {
               setFormError(`পর্যাপ্ত টেলিকম ব্যালেন্স নেই! আপনার বর্তমান টেলিকম ব্যালেন্স ৳ ${currentTelecom.toLocaleString('en-US')} BDT।`);
               setLoading(false);
               return;
             }
-            await updateDoc(senderRef, {
-              telecomBalance: currentTelecom - amt,
-              balance: currentBalance + amt,
-              mainBalance: currentBalance + amt
+            await runTransaction(db, async (t) => {
+              const uSnap = await t.get(senderRef);
+              if (!uSnap.exists()) throw new Error('User not found');
+              const uData = uSnap.data();
+              const liveTel = Number(uData.telecomBalance) || 0;
+              if (liveTel < amt) throw new Error('অপর্যাপ্ত টেলিকম ব্যালেন্স');
+              const nextBal = getEffectiveBalance(uData) + amt;
+              t.update(senderRef, {
+                telecomBalance: liveTel - amt,
+                balance: nextBal,
+                mainBalance: nextBal
+              });
             });
 
             const txIdT = `tx-self-telecom-deposit-${Date.now()}`;
@@ -2733,16 +2799,23 @@ const getTxt = (key: string, fallback: string) => {
 
           } else if (transferSector === 'shop') {
             const currentShop = liveUser.superShopBalance || 0;
-            const currentBalance = liveUser.balance || 0;
             if (currentShop < amt) {
               setFormError(`পর্যাপ্ত সুপার শপ ব্যালেন্স নেই! আপনার বর্তমান সুপার শপ ব্যালেন্স ৳ ${currentShop.toLocaleString('en-US')} BDT।`);
               setLoading(false);
               return;
             }
-            await updateDoc(senderRef, {
-              superShopBalance: currentShop - amt,
-              balance: currentBalance + amt,
-              mainBalance: currentBalance + amt
+            await runTransaction(db, async (t) => {
+              const uSnap = await t.get(senderRef);
+              if (!uSnap.exists()) throw new Error('User not found');
+              const uData = uSnap.data();
+              const liveShop = Number(uData.superShopBalance) || 0;
+              if (liveShop < amt) throw new Error('অপর্যাপ্ত সুপার শপ ব্যালেন্স');
+              const nextBal = getEffectiveBalance(uData) + amt;
+              t.update(senderRef, {
+                superShopBalance: liveShop - amt,
+                balance: nextBal,
+                mainBalance: nextBal
+              });
             });
 
             const txIdS = `tx-self-shop-deposit-${Date.now()}`;
@@ -5454,28 +5527,68 @@ const getTxt = (key: string, fallback: string) => {
               )}
 
         {/* Maintenance / Service Update Dialog */}
-        {showMaintenanceModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
-            <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-slate-100 text-center relative">
-              <div className="w-14 h-14 bg-amber-100 text-amber-600 rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-inner">
-                <Sparkles className="w-7 h-7" />
-              </div>
-              <h3 className="text-base font-black text-slate-800 mb-1.5 font-sans">
-                {maintenanceServiceName}
-              </h3>
-              <p className="text-xs text-slate-600 mb-5 leading-relaxed font-sans">
-                এই সেকশনটির আধুনিকায়ন ও সিস্টেম আপডেটের কাজ চলছে। খুব শীঘ্রই সেবাটি পুনরায় চালু করা হবে। সাময়িক অসুবিধার জন্য আমরা আন্তরিকভাবে দুঃখিত।
-              </p>
-              <button
-                type="button"
-                onClick={() => setShowMaintenanceModal(false)}
-                className="w-full py-2.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-700 text-white font-black text-xs rounded-xl shadow-md hover:brightness-105 active:scale-95 transition-all cursor-pointer font-sans"
+        <AnimatePresence>
+          {showMaintenanceModal && (
+            <div className="fixed inset-0 z-[100000] flex flex-col bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+              <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+              
+              <motion.div 
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", damping: 25, stiffness: 200 }}
+                className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
               >
-                ঠিক আছে, বুঝেছি
-              </button>
+                <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-white/10 rounded-xl">
+                      <Sparkles className="w-5 h-5 text-amber-400" />
+                    </div>
+                    <h3 className="text-lg font-black">সিস্টেম আপডেট</h3>
+                  </div>
+                  <button 
+                    onClick={() => setShowMaintenanceModal(false)} 
+                    className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-6">
+                  <div className="w-24 h-24 bg-amber-50 rounded-full flex items-center justify-center shadow-inner">
+                    <RefreshCw className="w-12 h-12 text-amber-600 animate-spin" style={{ animationDuration: '3s' }} />
+                  </div>
+                  
+                  <div className="space-y-2 max-w-sm">
+                    <h4 className="text-xl font-black text-slate-900 leading-tight">
+                      {maintenanceServiceName}
+                    </h4>
+                    <p className="text-sm text-slate-600 font-medium leading-relaxed">
+                      এই সেকশনটির আধুনিকায়ন ও সিস্টেম আপডেটের কাজ চলছে। খুব শীঘ্রই সেবাটি পুনরায় চালু করা হবে। সাময়িক অসুবিধার জন্য আমরা আন্তরিকভাবে দুঃখিত।
+                    </p>
+                  </div>
+
+                  <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 w-full max-w-sm">
+                    <p className="text-[11px] text-emerald-800 font-bold leading-relaxed">
+                      <span className="mr-1">💡</span>
+                      সদস্যদের উন্নত অভিজ্ঞতা প্রদানের জন্য আমাদের প্রকৌশলী দল কাজ করে যাচ্ছে। আমাদের সাথেই থাকুন।
+                    </p>
+                  </div>
+                </div>
+
+                <div className="p-6 bg-slate-50 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setShowMaintenanceModal(false)}
+                    className="w-full py-4.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-2xl shadow-lg shadow-emerald-600/20 transition-all active:scale-95 cursor-pointer text-base"
+                  >
+                    ঠিক আছে, বুঝেছি
+                  </button>
+                </div>
+              </motion.div>
             </div>
-          </div>
-        )}
+          )}
+        </AnimatePresence>
 
         {/* All Service Sub Views and Full Screen Modals */}
         <DashboardSubViews
@@ -5579,65 +5692,111 @@ const getTxt = (key: string, fallback: string) => {
       </div>
 
       {/* Bottom Fixed Navigation bar matching uploaded reference image */}
-      <nav className="fixed bottom-0 inset-x-0 bg-[#0b6623] text-white z-30 shadow-2xl h-[60px] border-t border-emerald-800/80 flex items-center">
-        <div className="max-w-md w-full mx-auto flex justify-around items-center px-3">
+      <nav className="fixed bottom-0 inset-x-0 bg-[#006837] text-white z-30 shadow-2xl min-h-[66px] pb-safe border-t border-emerald-800/80 flex items-center py-1">
+        <div className="max-w-md w-full mx-auto grid grid-cols-5 items-center px-0.5">
           
           {/* Tab Home */}
           <button 
+            type="button"
             onClick={() => { setActiveTab('home'); setSelectedAction(null); }}
-            className="flex items-center justify-center cursor-pointer transition-transform active:scale-90"
+            className="flex flex-col items-center justify-center cursor-pointer transition-transform active:scale-95 gap-0.5 min-w-0"
           >
             {activeTab === 'home' ? (
-              <div className="w-10 h-10 rounded-full bg-white text-[#0b6623] flex items-center justify-center shadow-md">
-                <Home className="w-5.5 h-5.5 stroke-[2.5]" />
+              <div className="w-9 h-9 rounded-full bg-white text-[#006837] flex items-center justify-center shadow-md shrink-0">
+                <Home className="w-5 h-5 stroke-[2.5]" />
               </div>
             ) : (
-              <Home className="w-6 h-6 text-white stroke-[2]" />
+              <div className="w-9 h-9 flex items-center justify-center shrink-0">
+                <Home className="w-6 h-6 text-white stroke-[2]" />
+              </div>
             )}
+            <span className={`text-[10px] sm:text-[11px] leading-tight font-bold text-center truncate max-w-full px-0.5 ${activeTab === 'home' ? 'text-white font-extrabold' : 'text-emerald-100/90'}`}>
+              {t('হোম')}
+            </span>
           </button>
 
           {/* Tab Send Money */}
           <button 
+            type="button"
             onClick={() => { setActiveTab('deposit'); setSelectedAction(null); }}
-            className="flex items-center justify-center cursor-pointer transition-transform active:scale-90"
+            className="flex flex-col items-center justify-center cursor-pointer transition-transform active:scale-95 gap-0.5 min-w-0"
           >
-            <Send className="w-6 h-6 text-white stroke-[2]" />
+            {activeTab === 'deposit' ? (
+              <div className="w-9 h-9 rounded-full bg-white text-[#006837] flex items-center justify-center shadow-md shrink-0">
+                <Send className="w-5 h-5 stroke-[2.5] -rotate-12" />
+              </div>
+            ) : (
+              <div className="w-9 h-9 flex items-center justify-center shrink-0">
+                <Send className="w-6 h-6 text-white stroke-[2] -rotate-12" />
+              </div>
+            )}
+            <span className={`text-[10px] sm:text-[11px] leading-tight font-bold text-center truncate max-w-full px-0.5 ${activeTab === 'deposit' ? 'text-white font-extrabold' : 'text-emerald-100/90'}`}>
+              {t('সেন্ড মানি')}
+            </span>
           </button>
 
-          {/* Tab Add Money / Plus (Instant Online Add Money) */}
+          {/* Tab Auto Add Money */}
           <button 
+            type="button"
             onClick={() => { 
               setActiveTab('add_money'); 
               setSelectedAction(null); 
             }}
-            title="এড মানি (Add Money)"
-            className="flex items-center justify-center cursor-pointer transition-transform active:scale-90"
+            title={t('অটো এড মানি')}
+            className="flex flex-col items-center justify-center cursor-pointer transition-transform active:scale-95 gap-0.5 min-w-0"
           >
             {activeTab === 'add_money' ? (
-              <div className="w-10 h-10 rounded-full bg-white text-[#0b6623] flex items-center justify-center shadow-lg ring-2 ring-emerald-300">
-                <Plus className="w-6 h-6 stroke-[3]" />
+              <div className="w-9 h-9 rounded-full bg-white text-[#006837] flex items-center justify-center shadow-lg ring-2 ring-emerald-300 shrink-0">
+                <Plus className="w-5.5 h-5.5 stroke-[3]" />
               </div>
             ) : (
-              <div className="w-9 h-9 rounded-full border-2 border-white flex items-center justify-center text-white hover:bg-white/10 transition-colors">
+              <div className="w-9 h-9 rounded-full border-2 border-white flex items-center justify-center text-white hover:bg-white/10 transition-colors shrink-0">
                 <Plus className="w-5 h-5 stroke-[2.5]" />
               </div>
             )}
+            <span className={`text-[10px] sm:text-[11px] leading-tight font-bold text-center truncate max-w-full px-0.5 ${activeTab === 'add_money' ? 'text-white font-extrabold' : 'text-emerald-100/90'}`}>
+              {t('অটো এড মানি')}
+            </span>
           </button>
 
-          {/* Tab Transactions / Exchange */}
+          {/* Tab Transactions */}
           <button 
+            type="button"
             onClick={() => { setActiveTab('history'); setSelectedAction(null); }}
-            className="flex items-center justify-center cursor-pointer transition-transform active:scale-90"
+            className="flex flex-col items-center justify-center cursor-pointer transition-transform active:scale-95 gap-0.5 min-w-0"
           >
-            <TransactionExchangeIcon className="w-6 h-6 text-white" strokeWidth={4} />
+            {activeTab === 'history' ? (
+              <div className="w-9 h-9 rounded-full bg-white text-[#006837] flex items-center justify-center shadow-md shrink-0">
+                <TransactionExchangeIcon className="w-5 h-5 text-[#006837]" strokeWidth={4} />
+              </div>
+            ) : (
+              <div className="w-9 h-9 flex items-center justify-center shrink-0">
+                <TransactionExchangeIcon className="w-6 h-6 text-white" strokeWidth={4} />
+              </div>
+            )}
+            <span className={`text-[10px] sm:text-[11px] leading-tight font-bold text-center truncate max-w-full px-0.5 ${activeTab === 'history' ? 'text-white font-extrabold' : 'text-emerald-100/90'}`}>
+              {t('লেনদেন')}
+            </span>
           </button>
 
           {/* Tab Profile */}
           <button 
+            type="button"
             onClick={() => { setActiveTab('profile'); setSelectedAction(null); }}
-            className="flex items-center justify-center cursor-pointer transition-transform active:scale-90"
+            className="flex flex-col items-center justify-center cursor-pointer transition-transform active:scale-95 gap-0.5 min-w-0"
           >
-            <UserCircle className="w-6 h-6 text-white stroke-[2]" />
+            {activeTab === 'profile' ? (
+              <div className="w-9 h-9 rounded-full bg-white text-[#006837] flex items-center justify-center shadow-md shrink-0">
+                <UserCircle className="w-5.5 h-5.5 stroke-[2.5]" />
+              </div>
+            ) : (
+              <div className="w-9 h-9 flex items-center justify-center shrink-0">
+                <UserCircle className="w-6 h-6 text-white stroke-[2]" />
+              </div>
+            )}
+            <span className={`text-[10px] sm:text-[11px] leading-tight font-bold text-center truncate max-w-full px-0.5 ${activeTab === 'profile' ? 'text-white font-extrabold' : 'text-emerald-100/90'}`}>
+              {t('প্রোফাইল')}
+            </span>
           </button>
 
         </div>
@@ -5723,6 +5882,21 @@ const getTxt = (key: string, fallback: string) => {
         onMarkAllAsRead={handleMarkAllAsRead}
         onDeleteNotification={handleDeleteNotification}
         onClearAllNotifications={handleClearAllNotifications}
+      />
+
+      {/* Official BNB Virtual Assistant - Strictly visible ONLY on the main Dashboard home view */}
+      <BNBVirtualAssistant
+        isVisible={
+          activeTab === 'home' &&
+          modalType === null &&
+          !showNotificationsModal &&
+          !selectedReceiptTx &&
+          !showMaintenanceModal &&
+          !showDemoAuthPrompt &&
+          !showSecretPinPrompt &&
+          !isSecretAdminOpen
+        }
+        language={appLanguage === 'en' ? 'en' : 'bn'}
       />
     </div>
   );

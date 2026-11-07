@@ -201,13 +201,46 @@ export const SamityScreen = React.memo(function SamityScreen({
     user.samityAutoSavingsActive !== undefined ? user.samityAutoSavingsActive : true
   );
 
-  // Top Section Modal Control: 'none' | 'owner' | 'shareholder' | 'exit_switch' | 'investor' | 'quarterly_pay'
-  const [activeTopModal, setActiveTopModal] = useState<'none' | 'owner' | 'shareholder' | 'exit_switch' | 'investor' | 'quarterly_pay'>('none');
+  // Top Section Modal Control: 'none' | 'owner' | 'shareholder' | 'exit_switch' | 'investor' | 'supporter' | 'quarterly_pay'
+  const [activeTopModal, setActiveTopModal] = useState<'none' | 'owner' | 'shareholder' | 'exit_switch' | 'investor' | 'supporter' | 'quarterly_pay'>('none');
   const [switchActionType, setSwitchActionType] = useState<'turn_off' | 'turn_on'>('turn_off');
   const [switchOffReason, setSwitchOffReason] = useState('');
   const [switchOnReason, setSwitchOnReason] = useState('');
   const [switchSecurityPin, setSwitchSecurityPin] = useState('');
   const [switchSubmitting, setSwitchSubmitting] = useState(false);
+
+  // Extra Investment Modal States
+  const [showExtraInvestModal, setShowExtraInvestModal] = useState(false);
+  const [extraInvestQuarter, setExtraInvestQuarter] = useState<{ id: string; name: string; quarter: string }>({ id: 'jan', name: 'জানুয়ারি', quarter: 'Q1' });
+  const [extraInvestAmount, setExtraInvestAmount] = useState<string>('10000');
+  const [extraInvestDate, setExtraInvestDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [extraInvestPin, setExtraInvestPin] = useState('');
+
+  const getYearTotalExtraInvestment = (u?: User | null, yr?: number) => {
+    if (!u || !yr) return 0;
+    const qMonths = Array.isArray(u.samityQuarterlyPaidMonths) ? u.samityQuarterlyPaidMonths : [];
+    const qAmounts = u.samityQuarterlyPaidAmounts || {};
+    const prefix = `${yr}-`;
+    let total = 0;
+    qMonths.forEach((qKey) => {
+      if (qKey.startsWith(prefix)) {
+        const amt = qAmounts[qKey];
+        total += (typeof amt === 'number' && amt > 0) ? amt : 10000;
+      }
+    });
+    return total;
+  };
+
+  const getQuarterPaidAmount = (u?: User | null, yr?: number, qId?: string) => {
+    if (!u || !yr || !qId) return 0;
+    const qKey = `${yr}-${qId.toLowerCase().trim()}`;
+    const qAmounts = u.samityQuarterlyPaidAmounts || {};
+    if (typeof qAmounts[qKey] === 'number' && qAmounts[qKey] > 0) {
+      return qAmounts[qKey];
+    }
+    const qMonths = Array.isArray(u.samityQuarterlyPaidMonths) ? u.samityQuarterlyPaidMonths : [];
+    return qMonths.includes(qKey) ? 10000 : 0;
+  };
 
   // Owner Upgrade Modal States
   const [ownerAgree, setOwnerAgree] = useState(false);
@@ -1262,7 +1295,7 @@ export const SamityScreen = React.memo(function SamityScreen({
     if (!ownerAgree) {
       setCustomAlert({
         title: "⚠️ শর্তাবলীতে সম্মতি প্রয়োজন",
-        message: "ওনার সদস্য হতে হলে মাসিক কিস্তি ৳৪,০০০, ৩ মাস পর পর অতিরিক্ত কিস্তি ৳১০,০০০ এবং নীতিমালায় টিক দিয়ে সম্মতি দিতে হবে।"
+        message: "ওনার সদস্য হতে হলে মাসিক কিস্তি ৳৫,০০০, ৩ মাস পর পর অতিরিক্ত কিস্তি ৳১০,০০০ এবং নীতিমালায় টিক দিয়ে সম্মতি দিতে হবে।"
       });
       return;
     }
@@ -1278,7 +1311,7 @@ export const SamityScreen = React.memo(function SamityScreen({
 
       await updateDoc(userRef, {
         memberCategory: 'owner',
-        monthlySavingsTarget: 4000,
+        monthlySavingsTarget: 5000,
         categoryUpgradeDate: nowIso,
         updatedAt: serverTimestamp()
       });
@@ -1286,7 +1319,7 @@ export const SamityScreen = React.memo(function SamityScreen({
       // Dispatch Admin Notification
       await addDoc(collection(db, 'admin_notifications'), {
         title: '🔴 নতুন ওনার সদস্য আপগ্রেড',
-        message: `${user.name || 'সদস্য'} (আইডি: ${user.memberId || 'N/A'}, ফোন: ${user.phone || 'N/A'}) ওনার সদস্য হিসেবে একাউন্ট যুক্ত করেছেন (মাসিক ৳৪,০০০ ও ৩ মাস পর পর ৳১০,০০০ কিস্তি)।`,
+        message: `${user.name || 'সদস্য'} (আইডি: ${user.memberId || 'N/A'}, ফোন: ${user.phone || 'N/A'}) ওনার সদস্য হিসেবে একাউন্ট যুক্ত করেছেন (মাসিক ৳৫,০০০ ও ৩ মাস পর পর ৳১০,০০০ কিস্তি)।`,
         userId: user.uid,
         memberId: user.memberId || '',
         userName: user.name || '',
@@ -1300,8 +1333,8 @@ export const SamityScreen = React.memo(function SamityScreen({
         userId: user.uid,
         memberId: user.memberId || '',
         title: '🔴 অভিনন্দন! আপনি এখন ওনার সদস্য',
-        body: 'আপনি সফলভাবে সমবায় সমিতির ওনার পদে যুক্ত হয়েছেন। আপনার মাসিক কিস্তি ৳৪,০০০ এবং ৩ মাস পর পর কিস্তি ৳১০,০০০ নির্ধারিত হয়েছে। সর্বোচ্চ ৩ জন নমিনি দিতে পারবেন।',
-        message: 'আপনি সফলভাবে সমবায় সমিতির ওনার পদে যুক্ত হয়েছেন। আপনার মাসিক কিস্তি ৳৪,০০০ এবং ৩ মাস পর পর কিস্তি ৳১০,০০০ নির্ধারিত হয়েছে। সর্বোচ্চ ৩ জন নমিনি দিতে পারবেন।',
+        body: 'আপনি সফলভাবে সমবায় সমিতির ওনার পদে যুক্ত হয়েছেন। আপনার মাসিক কিস্তি ৳৫,০০০ এবং ৩ মাস পর পর কিস্তি ৳১০,০০০ নির্ধারিত হয়েছে। সর্বোচ্চ ৩ জন নমিনি দিতে পারবেন।',
+        message: 'আপনি সফলভাবে সমবায় সমিতির ওনার পদে যুক্ত হয়েছেন। আপনার মাসিক কিস্তি ৳৫,০০০ এবং ৩ মাস পর পর কিস্তি ৳১০,০০০ নির্ধারিত হয়েছে। সর্বোচ্চ ৩ জন নমিনি দিতে পারবেন।',
         isPersonal: true,
         read: false,
         type: 'owner',
@@ -1317,7 +1350,7 @@ export const SamityScreen = React.memo(function SamityScreen({
 
       setCustomAlert({
         title: "🔴 অভিনন্দন ওনার সদস্য!",
-        message: "আপনি সফলভাবে ওনার সদস্য হিসেবে নিবন্ধিত হয়েছেন। মাসিক কিস্তি ৳৪,০০০ এবং ৩ মাস পর পর কিস্তি ৳১০,০০০ কার্যকর হবে।"
+        message: "আপনি সফলভাবে ওনার সদস্য হিসেবে নিবন্ধিত হয়েছেন। মাসিক কিস্তি ৳৫,০০০ এবং ৩ মাস পর পর কিস্তি ৳১০,০০০ কার্যকর হবে।"
       });
     } catch (err: any) {
       console.error("Error upgrading to owner:", err);
@@ -1391,18 +1424,9 @@ export const SamityScreen = React.memo(function SamityScreen({
     }
   };
 
-  const handlePayQuarterly = async (qId: string, yr: number) => {
+  const handlePayQuarterly = async (qId: string, yr: number, customAmount?: number) => {
     const activeTarget = quarterTargetMember || effectiveUser;
-    const isOwner = activeTarget.memberCategory === 'owner';
-    const isShareholder = activeTarget.memberCategory === 'shareholder';
-    if (!isOwner && !isShareholder) {
-      setCustomAlert({
-        title: "⚠️ প্রযোজ্য নয়",
-        message: "৩ মাস পর পর কিস্তি শুধুমাত্র ওনার (৳১০,০০০) ও শেয়ার হোল্ডার (৳৫,০০০) সদস্যদের জন্য প্রযোজ্য।"
-      });
-      return;
-    }
-    const qRate = isOwner ? 10000 : 5000;
+    const qRate = (typeof customAmount === 'number' && customAmount > 0) ? customAmount : 10000;
     const balanceToCheck = (quarterTargetMember && quarterPaymentSource === 'target')
       ? getEffectiveBalance(quarterTargetMember)
       : getEffectiveBalance(effectiveUser);
@@ -1410,7 +1434,7 @@ export const SamityScreen = React.memo(function SamityScreen({
     if (balanceToCheck < qRate) {
       setCustomAlert({
         title: "⚠️ পর্যাপ্ত ব্যালেন্স নেই",
-        message: `${(quarterTargetMember && quarterPaymentSource === 'target') ? 'সদস্যের' : 'আপনার'} মেইন ব্যালেন্স ৳${balanceToCheck.toLocaleString('bn-BD')} টাকা। ত্রৈমাসিক কিস্তি ৳${qRate.toLocaleString('bn-BD')} টাকা পরিশোধ করার জন্য পর্যাপ্ত টাকা নেই।`
+        message: `${(quarterTargetMember && quarterPaymentSource === 'target') ? 'সদস্যের' : 'আপনার'} মেইন ব্যালেন্স ৳${balanceToCheck.toLocaleString('bn-BD')} টাকা। প্রজেক্ট এক্সট্রা ইনভেস্টমেন্ট ৳${qRate.toLocaleString('bn-BD')} টাকা জমা করার জন্য পর্যাপ্ত ব্যালেন্স নেই।`
       });
       return;
     }
@@ -1423,9 +1447,12 @@ export const SamityScreen = React.memo(function SamityScreen({
         qId,
         true,
         effectiveUser,
-        quarterPaymentSource
+        quarterPaymentSource,
+        qRate
       );
       if (res.success) {
+        setShowExtraInvestModal(false);
+        setExtraInvestPin('');
         await syncLiveProfile();
         if (quarterTargetMember) {
           const freshTargetSnap = await getDoc(doc(db, 'users', quarterTargetMember.uid));
@@ -1434,19 +1461,19 @@ export const SamityScreen = React.memo(function SamityScreen({
           }
         }
         setCustomAlert({
-          title: "🎉 ত্রৈমাসিক কিস্তি জমা সফল!",
+          title: "🎉 প্রজেক্ট এক্সট্রা ইনভেস্টমেন্ট জমা সফল!",
           message: res.message
         });
       } else {
         setCustomAlert({
-          title: "❌ কিস্তি জমা ব্যর্থ",
+          title: "❌ ইনভেস্টমেন্ট জমা ব্যর্থ",
           message: res.message
         });
       }
     } catch (e: any) {
       setCustomAlert({
         title: "❌ ত্রুটি",
-        message: e?.message || "ত্রৈমাসিক কিস্তি জমা ব্যর্থ হয়েছে।"
+        message: e?.message || "প্রজেক্ট এক্সট্রা ইনভেস্টমেন্ট জমা ব্যর্থ হয়েছে।"
       });
     } finally {
       setQuarterlyPaying(false);
@@ -2831,11 +2858,29 @@ export const SamityScreen = React.memo(function SamityScreen({
     }
   };
 
-  const getPenaltyAmount = (day: number, checkDate?: Date): number => {
+  const getPenaltyAmount = (day: number, checkDate?: Date, targetUserObj?: User): number => {
+    // 1) Global Fine Switch check
+    if (appConfig && (appConfig.autoFineEnabled === false || appConfig.lateFineEnabled === false)) {
+      return 0;
+    }
+
+    // 2) Individual Member Fine Switch check
+    const memberObj = targetUserObj || effectiveUser;
+    if (memberObj && memberObj.fineEnabled === false) {
+      return 0;
+    }
+
+    // 3) Running Current Month Rule check
+    const realNow = new Date();
+    const evalDate = checkDate || realNow;
+    const isCurrentRunningMonth = evalDate.getFullYear() === realNow.getFullYear() && evalDate.getMonth() === realNow.getMonth();
+    if (!isCurrentRunningMonth) {
+      return 0;
+    }
+
     const policy = appConfig?.samityPolicyConfig;
-    const now = checkDate || new Date();
-    const currentYear = now.getFullYear();
-    const currentMonthNum = String(now.getMonth() + 1).padStart(2, '0');
+    const currentYear = evalDate.getFullYear();
+    const currentMonthNum = String(evalDate.getMonth() + 1).padStart(2, '0');
     const currentMonthKey = `${currentYear}-${currentMonthNum}`;
 
     const monthCfg = policy?.exemptedMonthsConfig?.[currentMonthKey];
@@ -2862,10 +2907,7 @@ export const SamityScreen = React.memo(function SamityScreen({
         }
       }
     }
-    // Default system policy:
-    // 1-10: 0 penalty
-    // 11th for 30 days (up to 39th day): 1 tk/day
-    // 40th day onwards: 10 tk/day
+
     return calculateSamityFine(day).fineAmount;
   };
 
@@ -3854,10 +3896,10 @@ export const SamityScreen = React.memo(function SamityScreen({
           <div 
             className="space-y-2"
           >
-            {/* সদস্য ক্যাটাগরি — ৪টি সেকশন এক লাইনে (UI-তে এক লাইনের মূল প্রদর্শন) */}
+            {/* সদস্য ক্যাটাগরি — ৫টি সেকশন এক লাইনে (মাঝখানে ON/OFF সুইচ) */}
             <div className="bg-white border border-slate-200/90 rounded-xl p-1 shadow-2xs w-full text-left">
-              {/* 4-Column Responsive Single-Line Grid */}
-              <div className="grid grid-cols-4 gap-1 p-0.5 bg-slate-100/90 rounded-lg border border-slate-200/80">
+              {/* 5-Column Responsive Single-Line Grid */}
+              <div className="grid grid-cols-5 gap-1 p-0.5 bg-slate-100/90 rounded-lg border border-slate-200/80">
                 {/* 1. 🔴 ওনার — Red */}
                 <button
                   type="button"
@@ -3867,17 +3909,17 @@ export const SamityScreen = React.memo(function SamityScreen({
                       ? 'bg-gradient-to-b from-rose-600 via-red-600 to-red-700 text-white ring-2 ring-red-400 shadow-md scale-[1.01]'
                       : 'bg-rose-50/80 hover:bg-rose-100/90 text-slate-800 border border-rose-300/80'
                   }`}
-                  title="🔴 ওনার: মাসিক ৳৪,০০০ | ৩ মাসে ৳১০,০০০ | নমিনি ৩ জন"
+                  title="🔴 ওনার: মাসিক ৳৫,০০০ | ৩ মাসে ৳১০,০০০ | নমিনি ৩ জন"
                 >
-                  <span className="text-[10px] sm:text-[11px] font-black leading-tight flex items-center gap-0.5 text-rose-950">
+                  <span className="text-[9px] sm:text-[10.5px] font-black leading-tight flex items-center gap-0.5 text-rose-950">
                     🔴 ওনার
                   </span>
-                  <span className={`text-[8.5px] sm:text-[9.5px] font-black mt-0.5 block font-mono ${
+                  <span className={`text-[8px] sm:text-[9px] font-black mt-0.5 block font-mono ${
                     getMembershipCategory(effectiveUser).key === 'owner' ? 'text-white' : 'text-rose-700'
                   }`}>
-                    ৳৪,০০০/মাস
+                    ৳৫,০০০/মাস
                   </span>
-                  <span className={`text-[7px] font-extrabold px-1 py-0.2 rounded mt-0.5 leading-tight ${
+                  <span className={`text-[6.5px] sm:text-[7.5px] font-extrabold px-0.5 py-0.2 rounded mt-0.5 leading-tight ${
                     getMembershipCategory(effectiveUser).key === 'owner' ? 'bg-white/20 text-rose-100 font-black' : 'bg-rose-200/80 text-rose-900 font-bold'
                   }`}>
                     ৩ মাসে ৳১০হাজার
@@ -3893,24 +3935,53 @@ export const SamityScreen = React.memo(function SamityScreen({
                       ? 'bg-gradient-to-b from-blue-600 via-indigo-600 to-blue-700 text-white ring-2 ring-blue-400 shadow-md scale-[1.01]'
                       : 'bg-blue-50/80 hover:bg-blue-100/90 text-slate-800 border border-blue-300/80'
                   }`}
-                  title="🔵 শেয়ার হোল্ডার: মাসিক ৳২,০০০ | ৩ মাসে ৳৫,০০০ | নমিনি ২ জন"
+                  title="🔵 শেয়ার হোল্ডার: মাসিক ৳৩,০০০ | ৩ মাসে ৳৫,০০০ | নমিনি ৩ জন"
                 >
-                  <span className="text-[10px] sm:text-[11px] font-black leading-tight flex items-center gap-0.5 text-blue-950">
+                  <span className="text-[9px] sm:text-[10.5px] font-black leading-tight flex items-center gap-0.5 text-blue-950">
                     🔵 শেয়ার হোল্ডার
                   </span>
-                  <span className={`text-[8.5px] sm:text-[9.5px] font-black mt-0.5 block font-mono ${
+                  <span className={`text-[8px] sm:text-[9px] font-black mt-0.5 block font-mono ${
                     getMembershipCategory(effectiveUser).key === 'shareholder' ? 'text-white' : 'text-blue-700'
                   }`}>
-                    ৳২,০০০/মাস
+                    ৳৩,০০০/মাস
                   </span>
-                  <span className={`text-[7px] font-extrabold px-1 py-0.2 rounded mt-0.5 leading-tight ${
+                  <span className={`text-[6.5px] sm:text-[7.5px] font-extrabold px-0.5 py-0.2 rounded mt-0.5 leading-tight ${
                     getMembershipCategory(effectiveUser).key === 'shareholder' ? 'bg-white/20 text-blue-100 font-black' : 'bg-blue-200/80 text-blue-900 font-bold'
                   }`}>
                     ৩ মাসে ৳৫হাজার
                   </span>
                 </button>
 
-                {/* 3. 🟢 ইনভেস্টার — Green */}
+                {/* 3. 🔘 ON/OFF সুইচ — Middle / Center Switch */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSwitchActionType(samityAutoSavingsActive ? 'turn_off' : 'turn_on');
+                    setActiveTopModal('exit_switch');
+                  }}
+                  className={`py-1.5 px-0.5 rounded-xl transition-all flex flex-col items-center justify-center text-center cursor-pointer relative shadow-3xs active:scale-95 min-h-[58px] ${
+                    samityAutoSavingsActive
+                      ? 'bg-white hover:bg-emerald-50/50 text-slate-800 border border-emerald-300 ring-1 ring-emerald-200'
+                      : 'bg-gradient-to-b from-rose-700 to-red-800 text-white ring-2 ring-rose-400 shadow-md scale-[1.01]'
+                  }`}
+                  title="🔘 Switch ON/OFF: PIN দিয়ে নিয়ন্ত্রণ | অফ করলে অটো টাকা কাটবে না"
+                >
+                  <span className="text-[9px] sm:text-[10.5px] font-black leading-tight flex items-center gap-0.5">
+                    🔘 ON/OFF
+                  </span>
+                  <span className={`text-[7.5px] sm:text-[8.5px] font-black mt-0.5 block ${
+                    samityAutoSavingsActive ? 'text-emerald-700' : 'text-rose-100'
+                  }`}>
+                    {samityAutoSavingsActive ? '🟢 সচল (ON)' : '🔴 বন্ধ (OFF)'}
+                  </span>
+                  <span className={`text-[6.5px] sm:text-[7.5px] font-extrabold px-0.5 py-0.2 rounded mt-0.5 leading-tight ${
+                    samityAutoSavingsActive ? 'bg-slate-100 text-slate-700' : 'bg-white/20 text-white'
+                  }`}>
+                    PIN নিয়ন্ত্রণ
+                  </span>
+                </button>
+
+                {/* 4. 🟢 ইনভেস্টার — Green */}
                 <button
                   type="button"
                   onClick={() => setActiveTopModal('investor')}
@@ -3919,49 +3990,46 @@ export const SamityScreen = React.memo(function SamityScreen({
                       ? 'bg-gradient-to-b from-emerald-600 via-green-600 to-emerald-700 text-white ring-2 ring-emerald-400 shadow-md scale-[1.01]'
                       : 'bg-emerald-50/80 hover:bg-emerald-100/90 text-slate-800 border border-emerald-300/80'
                   }`}
-                  title="🟢 ইনভেস্টার: মাসিক ৳১,০০০ | ৩ মাসে কিস্তি নেই | নমিনি ১ জন"
+                  title="🟢 ইনভেস্টার: মাসিক ৳২,০০০ | অতিরিক্ত কিস্তি নেই | নমিনি ২ জন"
                 >
-                  <span className="text-[10px] sm:text-[11px] font-black leading-tight flex items-center gap-0.5 text-emerald-950">
+                  <span className="text-[9px] sm:text-[10.5px] font-black leading-tight flex items-center gap-0.5 text-emerald-950">
                     🟢 ইনভেস্টার
                   </span>
-                  <span className={`text-[8.5px] sm:text-[9.5px] font-black mt-0.5 block font-mono ${
+                  <span className={`text-[8px] sm:text-[9px] font-black mt-0.5 block font-mono ${
                     getMembershipCategory(effectiveUser).key === 'investor' ? 'text-white' : 'text-emerald-700'
                   }`}>
-                    ৳১,০০০/মাস
+                    ৳২,০০০/মাস
                   </span>
-                  <span className={`text-[7px] font-extrabold px-1 py-0.2 rounded mt-0.5 leading-tight ${
+                  <span className={`text-[6.5px] sm:text-[7.5px] font-extrabold px-0.5 py-0.2 rounded mt-0.5 leading-tight ${
                     getMembershipCategory(effectiveUser).key === 'investor' ? 'bg-white/20 text-emerald-100 font-black' : 'bg-emerald-200/80 text-emerald-900 font-bold'
                   }`}>
                     বাধ্যতামূলক
                   </span>
                 </button>
 
-                {/* 4. 🔘 Switch ON/OFF — Neutral */}
+                {/* 5. 🟡 সাপোর্টার — Yellow */}
                 <button
                   type="button"
-                  onClick={() => {
-                    setSwitchActionType(samityAutoSavingsActive ? 'turn_off' : 'turn_on');
-                    setActiveTopModal('exit_switch');
-                  }}
-                  className={`py-1.5 px-0.5 rounded-lg transition-all flex flex-col items-center justify-center text-center cursor-pointer relative shadow-3xs active:scale-95 min-h-[58px] ${
-                    samityAutoSavingsActive
-                      ? 'bg-white hover:bg-emerald-50/50 text-slate-800 border border-emerald-300'
-                      : 'bg-gradient-to-b from-rose-700 to-red-800 text-white ring-2 ring-rose-400 shadow-md scale-[1.01]'
+                  onClick={() => setActiveTopModal('supporter')}
+                  className={`py-1.5 px-0.5 rounded-xl transition-all flex flex-col items-center justify-center text-center cursor-pointer relative shadow-xs active:scale-95 min-h-[58px] ${
+                    getMembershipCategory(effectiveUser).key === 'supporter'
+                      ? 'bg-gradient-to-b from-amber-500 via-yellow-500 to-amber-600 text-white ring-2 ring-amber-400 shadow-md scale-[1.01]'
+                      : 'bg-amber-50/80 hover:bg-amber-100/90 text-slate-800 border border-amber-300/80'
                   }`}
-                  title="🔘 Switch ON/OFF: PIN দিয়ে নিয়ন্ত্রণ | ২৫শে ডিসেম্বর স্বয়ংক্রিয় অর্থ ফেরত"
+                  title="🟡 সাপোর্টার: মাসিক ৳১,০০০ | অতিরিক্ত কিস্তি নেই | নমিনি ১ জন"
                 >
-                  <span className="text-[10px] sm:text-[11px] font-black leading-tight flex items-center gap-0.5">
-                    🔘 ON/OFF
+                  <span className="text-[9px] sm:text-[10.5px] font-black leading-tight flex items-center gap-0.5 text-amber-950">
+                    🟡 সাপোর্টার
                   </span>
-                  <span className={`text-[8px] font-black mt-0.5 block ${
-                    samityAutoSavingsActive ? 'text-emerald-700' : 'text-rose-100'
+                  <span className={`text-[8px] sm:text-[9px] font-black mt-0.5 block font-mono ${
+                    getMembershipCategory(effectiveUser).key === 'supporter' ? 'text-white' : 'text-amber-700'
                   }`}>
-                    {samityAutoSavingsActive ? '🟢 সচল (ON)' : '🔴 বন্ধ (OFF)'}
+                    ৳১,০০০/মাস
                   </span>
-                  <span className={`text-[7px] font-extrabold px-1 py-0.2 rounded mt-0.5 leading-tight ${
-                    samityAutoSavingsActive ? 'bg-slate-100 text-slate-700' : 'bg-white/20 text-white'
+                  <span className={`text-[6.5px] sm:text-[7.5px] font-extrabold px-0.5 py-0.2 rounded mt-0.5 leading-tight ${
+                    getMembershipCategory(effectiveUser).key === 'supporter' ? 'bg-white/20 text-amber-100 font-black' : 'bg-amber-200/80 text-amber-900 font-bold'
                   }`}>
-                    PIN নিয়ন্ত্রণ
+                    বাধ্যতামূলক
                   </span>
                 </button>
               </div>
@@ -4116,102 +4184,81 @@ export const SamityScreen = React.memo(function SamityScreen({
                   })}
                 </div>
 
-                {/* 📅 ১২ মাসের কিস্তির নিচে: ৩ মাস পর পর ৪টি কিস্তি (ওপরে ১২ মাসের কিস্তির মতো হুবহু ৪টি কিস্তি এক লাইনে: জানুয়ারি, এপ্রিল, জুলাই, অক্টোবর) */}
-                    <div className="bg-amber-50/70 border border-amber-300 rounded-lg p-2 space-y-2 shadow-2xs">
-                      {/* Selected Year Title Banner - Exactly matching 12-Month style above */}
-                      <div className="flex items-center justify-between text-[9px] font-bold text-slate-700 px-0.5">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span>
-                            📅 <strong>{trackerSelectedYear} সালের</strong> ৩ মাস পর পর কিস্তি (বছরে ৪ কিস্তি: জানুয়ারি • এপ্রিল • জুলাই • অক্টোবর)
-                          </span>
-                          <span className="text-[7.5px] bg-rose-600 text-white px-1.5 py-0.2 rounded-full font-bold">
-                            যেকোনো সময় / অগ্রিম প্রদেয়
-                          </span>
-                          {quarterTargetMember && (
-                            <span className="text-[7.5px] bg-emerald-700 text-white px-1.5 py-0.2 rounded font-black shadow-3xs">
-                              🎯 প্রাপক: {quarterTargetMember.name} ({quarterTargetMember.memberId || 'N/A'})
+                {/* 🚀 প্রজেক্ট ভিত্তিক এক্সট্রা ইনভেস্টমেন্ট (বছরে সর্বোচ্চ ৪ বার: Q1 জানুয়ারি • Q2 এপ্রিল • Q3 জুলাই • Q4 অক্টোবর) */}
+                <div className="bg-amber-50/70 border border-amber-300 rounded-lg p-2 space-y-2 shadow-2xs">
+                  {/* Selected Year Title Banner - Voluntary Extra Investment & Total Year Deposit */}
+                  <div className="flex items-center justify-between text-[9px] font-bold text-slate-700 px-0.5 flex-wrap gap-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span>
+                        🚀 <strong>{trackerSelectedYear} সালের</strong> প্রজেক্ট ভিত্তিক এক্সট্রা ইনভেস্টমেন্ট (বছরে সর্বোচ্চ ৪ বার)
+                      </span>
+                      <span className="text-[7.5px] bg-amber-600 text-white px-1.5 py-0.2 rounded-full font-bold">
+                        স্বচ্ছিক / পছন্দমতো পরিমাণ
+                      </span>
+                      {quarterTargetMember && (
+                        <span className="text-[7.5px] bg-emerald-700 text-white px-1.5 py-0.2 rounded font-black shadow-3xs">
+                          🎯 প্রাপক: {quarterTargetMember.name} ({quarterTargetMember.memberId || 'N/A'})
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Total Extra Deposit Badge for Selected Year */}
+                    <div className="flex items-center gap-1 bg-gradient-to-r from-rose-600 via-red-600 to-amber-600 text-white px-2 py-0.5 rounded-md font-black text-[9px] shadow-2xs">
+                      <span>মোট {trackerSelectedYear} এক্সট্রা জমা:</span>
+                      <span className="font-mono text-amber-100 text-[10.5px]">
+                        ৳{getYearTotalExtraInvestment(activeTarget, trackerSelectedYear).toLocaleString('bn-BD')}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 4-Month Payment Matrix Grid (1 Line, 4 Columns) */}
+                  <div className="grid grid-cols-4 gap-1">
+                    {SAMITY_QUARTERLY_MONTHS.map((q) => {
+                      const isPaid = isUserQuarterlyPaid(activeTarget, trackerSelectedYear, q.id);
+                      const paidAmt = getQuarterPaidAmount(activeTarget, trackerSelectedYear, q.id);
+
+                      return (
+                        <button
+                          key={q.id}
+                          type="button"
+                          onClick={() => {
+                            setExtraInvestQuarter({ id: q.id, name: q.name, quarter: q.quarter });
+                            setExtraInvestAmount('10000');
+                            setExtraInvestPin('');
+                            setShowExtraInvestModal(true);
+                          }}
+                          className={`p-1 rounded-lg border text-center transition cursor-pointer flex flex-col items-center justify-between min-h-[48px] ${
+                            isPaid
+                              ? 'bg-emerald-500/10 border-emerald-300 text-emerald-950 font-black shadow-3xs'
+                              : 'bg-amber-50/90 border-amber-300 hover:border-amber-500 text-slate-900 font-bold hover:shadow-2xs'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between w-full px-0.5">
+                            <span className="text-[9px] font-extrabold truncate leading-tight">{q.name}</span>
+                            <span className="text-[7px] font-bold text-amber-800 font-mono">({q.quarter})</span>
+                          </div>
+
+                          <div className="my-0.5 text-[8.5px] font-black">
+                            {isPaid ? (
+                              <span className="text-rose-700 font-mono font-black">৳{paidAmt.toLocaleString('bn-BD')}</span>
+                            ) : (
+                              <span className="text-amber-800 text-[7.5px] font-bold">পছন্দমতো পরিমাণ</span>
+                            )}
+                          </div>
+
+                          {isPaid ? (
+                            <span className="inline-flex items-center gap-0.5 text-[7.5px] bg-emerald-600 text-white px-1 py-0.2 rounded font-mono font-bold mt-0.5 shadow-3xs w-full justify-center">
+                              <CheckCircle2 className="w-2 h-2" /> জমার রেকর্ড
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-0.5 text-[7.5px] bg-amber-600 hover:bg-amber-700 text-white px-1 py-0.2 rounded font-mono font-bold mt-0.5 shadow-3xs w-full justify-center">
+                              <PlusCircle className="w-2 h-2" /> এক্সট্রা ইনভেস্ট ⚡
                             </span>
                           )}
-                        </div>
-                        <span className="text-[8.5px] text-amber-900 font-mono font-black bg-amber-100/90 px-1.5 py-0.2 rounded border border-amber-300 shrink-0">
-                          {isTargetOwner
-                            ? 'ওনার: ৳১০,০০০'
-                            : isTargetShareholder
-                            ? 'শেয়ার হোল্ডার: ৳৫,০০০'
-                            : 'ওনার: ৳১০,০০০ | শেয়ার: ৳৫,০০০'}
-                        </span>
-                      </div>
-
-                      {/* 4-Month Payment Matrix Grid - Exactly matching 12-Month grid above (1 Line, 4 Columns) */}
-                      <div className="grid grid-cols-4 gap-1">
-                        {SAMITY_QUARTERLY_MONTHS.map((q) => {
-                          const isPaid = isUserQuarterlyPaid(activeTarget, trackerSelectedYear, q.id);
-                          const qAmount = isTargetOwner ? 10000 : isTargetShareholder ? 5000 : 10000;
-                          const isSelected = selectedQuarterIds.includes(q.id);
-
-                          return (
-                            <button
-                              key={q.id}
-                              type="button"
-                              onClick={() => {
-                                if (isPaid) {
-                                  setCustomAlert({
-                                    title: `✅ ${q.name} ${trackerSelectedYear} কিস্তি পরিশোধিত`,
-                                    message: `${quarterTargetMember ? quarterTargetMember.name : 'আপনার'} ${q.name} ${trackerSelectedYear} সালের ৩ মাস পর পর কিস্তি ৳${qAmount.toLocaleString('bn-BD')} টাকা ইতিমধ্যে সফলভাবে জমা সম্পন্ন হয়েছে।`
-                                  });
-                                  return;
-                                }
-
-                                if (!isTargetEligible) {
-                                  setCustomAlert({
-                                    title: 'ℹ️ ওনার ও শেয়ার হোল্ডার কিস্তি',
-                                    message: `৩ মাস পর পর ৪টি কিস্তি (জানুয়ারি, এপ্রিল, জুলাই, অক্টোবর) শুধুমাত্র ওনার (৳১০,০০০) ও শেয়ার হোল্ডার (৳৫,০০০) সদস্যদের জন্য প্রযোজ্য। আপনি অন্য কোনো ওনার বা শেয়ার হোল্ডার সদস্যের কিস্তি দিতে নিচের সার্চ বক্স দিয়ে সদস্যকে সিলেক্ট করুন।`
-                                  });
-                                  return;
-                                }
-
-                                if (selectedQuarterIds.length > 0) {
-                                  setSelectedQuarterIds(prev =>
-                                    prev.includes(q.id) ? prev.filter(id => id !== q.id) : [...prev, q.id]
-                                  );
-                                } else {
-                                  handlePayQuarterly(q.id, trackerSelectedYear);
-                                }
-                              }}
-                              className={`p-1 rounded-lg border text-center transition cursor-pointer flex flex-col items-center justify-between min-h-[46px] ${
-                                isPaid
-                                  ? 'bg-emerald-500/10 border-emerald-300 text-emerald-950 font-black shadow-3xs'
-                                  : isSelected
-                                  ? 'bg-amber-100 border-amber-500 ring-1 ring-amber-400 text-slate-900 shadow-2xs'
-                                  : 'bg-rose-50/60 border-rose-200 hover:border-rose-400 text-slate-800 font-bold hover:shadow-2xs'
-                              }`}
-                            >
-                              <div className="flex items-center justify-between w-full px-0.5">
-                                <span className="text-[9px] font-extrabold truncate leading-tight">{q.name}</span>
-                                <span className="text-[7px] font-bold text-amber-800 font-mono">({q.quarter})</span>
-                              </div>
-
-                              <span className="text-[7.5px] font-mono font-black text-amber-950 my-0.5">
-                                ৳{qAmount.toLocaleString('bn-BD')}
-                              </span>
-
-                              {isPaid ? (
-                                <span className="inline-flex items-center gap-0.5 text-[7.5px] bg-emerald-600 text-white px-1 py-0.2 rounded font-mono font-bold mt-0.5 shadow-3xs w-full justify-center">
-                                  <CheckCircle2 className="w-2 h-2" /> পরিশোধিত
-                                </span>
-                              ) : isSelected ? (
-                                <span className="inline-flex items-center gap-0.5 text-[7.5px] bg-amber-600 text-white px-1 py-0.2 rounded font-mono font-black mt-0.5 shadow-3xs w-full justify-center">
-                                  ✓ নির্বাচিত
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-0.5 text-[7.5px] bg-rose-600 hover:bg-rose-700 text-white px-1 py-0.2 rounded font-mono font-bold mt-0.5 shadow-3xs w-full justify-center">
-                                  <PlusCircle className="w-2 h-2" /> জমা ⚡
-                                </span>
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
+                        </button>
+                      );
+                    })}
+                  </div>
 
 
 
@@ -6885,7 +6932,7 @@ export const SamityScreen = React.memo(function SamityScreen({
                       <div className="grid grid-cols-2 gap-2 text-center pt-1">
                         <div className="bg-white p-2 rounded-xl border border-rose-200/80 shadow-3xs">
                           <span className="text-[9px] font-bold text-slate-500 block">মাসিক কিস্তি</span>
-                          <span className="text-xs font-black text-rose-700">৳৪,০০০/মাস</span>
+                          <span className="text-xs font-black text-rose-700">৳৫,০০০/মাস</span>
                         </div>
                         <div className="bg-white p-2 rounded-xl border border-rose-200/80 shadow-3xs">
                           <span className="text-[9px] font-bold text-slate-500 block">ত্রৈমাসিক কিস্তি (৪ বার)</span>
@@ -6912,7 +6959,7 @@ export const SamityScreen = React.memo(function SamityScreen({
                         className="mt-0.5 w-4 h-4 rounded text-rose-600 focus:ring-rose-500 border-slate-300 shrink-0 cursor-pointer"
                       />
                       <span className="text-[10px] font-black text-rose-950 leading-tight">
-                        আমি ওনার হিসেবে মাসিক ৳৪,০০০ সঞ্চয় এবং ৩ মাস পর পর ৳১০,০০০ কিস্তি (জানুয়ারি, এপ্রিল, জুলাই, অক্টোবর) প্রদানে সম্পূর্ণ একমত এবং সম্মতি জ্ঞাপন করছি।
+                        আমি ওনার হিসেবে মাসিক ৳৫,০০০ সঞ্চয় এবং ৩ মাস পর পর ৳১০,০০০ কিস্তি (জানুয়ারি, এপ্রিল, জুলাই, অক্টোবর) প্রদানে সম্পূর্ণ একমত এবং সম্মতি জ্ঞাপন করছি।
                       </span>
                     </label>
 
@@ -6989,7 +7036,7 @@ export const SamityScreen = React.memo(function SamityScreen({
                           ? 'আপনার শেয়ার হোল্ডার একাউন্ট'
                           : '🔵 শেয়ার হোল্ডার পদবী ও শর্তাবলী'}
                       </h3>
-                      <p className="text-[10px] text-blue-700 font-bold">মাসিক ৳২,০০০ | ৩ মাসে ৳৫,০০০ | নমিনি ২ জন</p>
+                      <p className="text-[10px] text-blue-700 font-bold">মাসিক ৳৩,০০০ | ৩ মাসে ৳৫,০০০ | নমিনি ৩ জন</p>
                     </div>
                   </div>
                   <button
@@ -7008,10 +7055,10 @@ export const SamityScreen = React.memo(function SamityScreen({
                     <span className="bg-blue-600 text-white text-[9px] px-1.5 py-0.2 rounded font-mono">Blue ক্যাটাগরি</span>
                   </div>
                   <ul className="space-y-1 text-[10.5px] font-semibold text-blue-900 leading-tight">
-                    <li>• <strong>মাসিক কিস্তি:</strong> ৳২,০০০ (১-১০ তারিখ নিজস্ব পেমেন্ট সময়, ১১ তারিখ অটো পেমেন্ট, ১৫ তারিখ শেষ সময়)</li>
+                    <li>• <strong>মাসিক কিস্তি:</strong> ৳৩,০০০ (১-১০ তারিখ নিজস্ব পেমেন্ট সময়, ১১ তারিখ অটো পেমেন্ট, ১৫ তারিখ শেষ সময়)</li>
                     <li>• <strong>৩ মাস পর পর কিস্তি:</strong> ৳৫,০০০ (বছরে ৪ কিস্তি: জানুয়ারি, এপ্রিল, জুলাই, অক্টোবর)</li>
                     <li>• <strong>কিস্তির মাস:</strong> জানুয়ারি • এপ্রিল • জুলাই • অক্টোবর</li>
-                    <li>• <strong>নমিনি:</strong> ফর্মে সর্বোচ্চ ২ জনের নাম দিতে পারবেন।</li>
+                    <li>• <strong>নমিনি:</strong> ফর্মে সর্বোচ্চ ৩ জনের নাম দিতে পারবেন।</li>
                   </ul>
                 </div>
 
@@ -7115,7 +7162,7 @@ export const SamityScreen = React.memo(function SamityScreen({
                       <div className="grid grid-cols-2 gap-2 text-center pt-1">
                         <div className="bg-white p-2 rounded-xl border border-amber-200/80 shadow-3xs">
                           <span className="text-[9px] font-bold text-slate-500 block">মাসিক কিস্তি</span>
-                          <span className="text-xs font-black text-amber-800">৳২,০০০/মাস</span>
+                          <span className="text-xs font-black text-amber-800">৳৩,০০০/মাস</span>
                         </div>
                         <div className="bg-white p-2 rounded-xl border border-amber-200/80 shadow-3xs">
                           <span className="text-[9px] font-bold text-slate-500 block">ত্রৈমাসিক কিস্তি (৪ বার)</span>
@@ -7142,7 +7189,7 @@ export const SamityScreen = React.memo(function SamityScreen({
                         className="mt-0.5 w-4 h-4 rounded text-amber-600 focus:ring-amber-500 border-slate-300 shrink-0 cursor-pointer"
                       />
                       <span className="text-[10px] font-black text-amber-950 leading-tight">
-                        আমি শেয়ার হোল্ডার হিসেবে মাসিক ৳২,০০০ সঞ্চয় এবং ৩ মাস পর পর ৳৫,০০০ কিস্তি (জানুয়ারি, এপ্রিল, জুলাই, অক্টোবর) প্রদানে সম্পূর্ণ একমত এবং সম্মতি জ্ঞাপন করছি।
+                        আমি শেয়ার হোল্ডার হিসেবে মাসিক ৳৩,০০০ সঞ্চয় এবং ৩ মাস পর পর ৳৫,০০০ কিস্তি (জানুয়ারি, এপ্রিল, জুলাই, অক্টোবর) প্রদানে সম্পূর্ণ একমত এবং সম্মতি জ্ঞাপন করছি।
                       </span>
                     </label>
 
@@ -7219,7 +7266,7 @@ export const SamityScreen = React.memo(function SamityScreen({
                           ? 'আপনার ইনভেস্টার একাউন্ট'
                           : '🟢 ইনভেস্টার সদস্য পদবী ও শর্তাবলী'}
                       </h3>
-                      <p className="text-[10px] text-emerald-700 font-bold">মাসিক ৳১,০০০ | ৩ মাসে কিস্তি নেই | নমিনি ১ জন</p>
+                      <p className="text-[10px] text-emerald-700 font-bold">মাসিক ৳২,০০০ | ৩ মাসে কিস্তি নেই | নমিনি ২ জন</p>
                     </div>
                   </div>
                   <button
@@ -7238,9 +7285,9 @@ export const SamityScreen = React.memo(function SamityScreen({
                     <span className="bg-emerald-600 text-white text-[9px] px-1.5 py-0.2 rounded font-mono">Green ক্যাটাগরি</span>
                   </div>
                   <ul className="space-y-1 text-[10.5px] font-semibold text-emerald-900 leading-tight">
-                    <li>• <strong>মাসিক কিস্তি:</strong> ৳১,০০০ (১-১০ তারিখ নিজস্ব পেমেন্ট সময়, ১১ তারিখ অটো পেমেন্ট, ১৫ তারিখ শেষ সময়)</li>
+                    <li>• <strong>মাসিক কিস্তি:</strong> ৳২,০০০ (১-১০ তারিখ নিজস্ব পেমেন্ট সময়, ১১ তারিখ অটো পেমেন্ট, ১৫ তারিখ শেষ সময়)</li>
                     <li>• <strong>৩ মাস পর পর কিস্তি:</strong> কোনো অতিরিক্ত কিস্তি নেই।</li>
-                    <li>• <strong>নমিনি:</strong> ফর্মে সর্বোচ্চ ১ জনের নাম দিতে পারবেন।</li>
+                    <li>• <strong>নমিনি:</strong> ফর্মে সর্বোচ্চ ২ জনের নাম দিতে পারবেন।</li>
                   </ul>
                 </div>
 
@@ -7337,7 +7384,7 @@ export const SamityScreen = React.memo(function SamityScreen({
                       <div className="grid grid-cols-2 gap-2 text-center pt-1">
                         <div className="bg-white p-2 rounded-xl border border-slate-200/80 shadow-3xs">
                           <span className="text-[9px] font-bold text-slate-500 block">মাসিক কিস্তি</span>
-                          <span className="text-xs font-black text-slate-800">৳১,০০০/মাস</span>
+                          <span className="text-xs font-black text-slate-800">৳২,০০০/মাস</span>
                         </div>
                         <div className="bg-white p-2 rounded-xl border border-slate-200/80 shadow-3xs">
                           <span className="text-[9px] font-bold text-slate-500 block">ত্রৈমাসিক অতিরিক্ত</span>
@@ -7364,7 +7411,7 @@ export const SamityScreen = React.memo(function SamityScreen({
                         className="mt-0.5 w-4 h-4 rounded text-slate-700 focus:ring-slate-500 border-slate-300 shrink-0 cursor-pointer"
                       />
                       <span className="text-[10px] font-black text-slate-900 leading-tight">
-                        আমি ইনভেস্টার হিসেবে মাসিক ৳১,০০০ নিয়মিত সঞ্চয় কিস্তি প্রদানে সম্পূর্ণ একমত এবং সম্মতি জ্ঞাপন করছি।
+                        আমি ইনভেস্টার হিসেবে মাসিক ৳২,০০০ নিয়মিত সঞ্চয় কিস্তি প্রদানে সম্পূর্ণ একমত এবং সম্মতি জ্ঞাপন করছি।
                       </span>
                     </label>
 
@@ -7406,6 +7453,75 @@ export const SamityScreen = React.memo(function SamityScreen({
                     </div>
                   </form>
                 )}
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* ================= MODAL 2.5: SUPPORTER MODAL (🟡 সাপোর্টার — Yellow) ================= */}
+        <AnimatePresence>
+          {activeTopModal === 'supporter' && (
+            <div className="fixed inset-0 z-[10005] flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setActiveTopModal('none')}
+                className="absolute inset-0 bg-slate-950/70 backdrop-blur-xs"
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.92, y: 15 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 1, y: 0 }}
+                className="relative bg-white border border-amber-300 w-full max-w-sm rounded-3xl p-5 shadow-2xl space-y-3.5 text-left z-10 overflow-hidden max-h-[90vh] overflow-y-auto"
+              >
+                <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-amber-500 via-yellow-500 to-amber-600" />
+
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <div className="w-9 h-9 rounded-2xl bg-amber-50 text-amber-700 flex items-center justify-center text-lg font-black border border-amber-200">
+                      🟡
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-black text-slate-900">
+                        {getMembershipCategory(effectiveUser).key === 'supporter'
+                          ? 'আপনার সাপোর্টার একাউন্ট'
+                          : '🟡 সাপোর্টার সদস্য পদবী ও শর্তাবলী'}
+                      </h3>
+                      <p className="text-[10px] text-amber-700 font-bold">মাসিক ৳১,০০০ | ৩ মাসে কিস্তি নেই | নমিনি ১ জন</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTopModal('none')}
+                    className="w-7 h-7 rounded-full bg-slate-100 text-slate-400 hover:text-slate-600 flex items-center justify-center text-xs font-bold cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Rules Banner */}
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between font-black text-amber-950 text-[11px]">
+                    <span>📌 সাপোর্টার সদস্য নিয়মাবলীঃ</span>
+                    <span className="bg-amber-600 text-white text-[9px] px-1.5 py-0.2 rounded font-mono">Yellow ক্যাটাগরি</span>
+                  </div>
+                  <ul className="space-y-1 text-[10.5px] font-semibold text-amber-900 leading-tight">
+                    <li>• <strong>মাসিক কিস্তি:</strong> ৳১,০০০ (১-১০ তারিখ নিজস্ব পেমেন্ট সময়, ১১ তারিখ অটো পেমেন্ট, ১৫ তারিখ শেষ সময়)</li>
+                    <li>• <strong>৩ মাস পর পর কিস্তি:</strong> কোনো অতিরিক্ত কিস্তি নেই।</li>
+                    <li>• <strong>নমিনি:</strong> ফর্মে ১ জনের নাম দিতে পারবেন।</li>
+                  </ul>
+                </div>
+
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTopModal('none')}
+                    className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs rounded-xl transition cursor-pointer shadow-xs"
+                  >
+                    ঠিক আছে
+                  </button>
+                </div>
               </motion.div>
             </div>
           )}
@@ -7590,6 +7706,202 @@ export const SamityScreen = React.memo(function SamityScreen({
                     </div>
                   </form>
                 )}
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* ================= MODAL 4: VOLUNTARY PROJECT EXTRA INVESTMENT MODAL ================= */}
+        <AnimatePresence>
+          {showExtraInvestModal && extraInvestQuarter && (
+            <div className="fixed inset-0 z-[10005] flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setShowExtraInvestModal(false)}
+                className="absolute inset-0 bg-slate-950/70 backdrop-blur-xs"
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.92, y: 15 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.92, y: 15 }}
+                className="relative bg-white border border-amber-200 w-full max-w-sm rounded-3xl p-5 shadow-2xl space-y-4 text-left z-10 overflow-hidden max-h-[90vh] overflow-y-auto"
+              >
+                <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-amber-500 via-emerald-500 to-indigo-500" />
+
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <div className="w-9 h-9 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center text-lg font-black">
+                      🚀
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-black text-slate-900">প্রজেক্ট এক্সট্রা ইনভেস্টমেন্ট</h3>
+                      <p className="text-[10px] text-emerald-700 font-bold">{extraInvestQuarter.quarter} ({extraInvestQuarter.name}) - {trackerSelectedYear}</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowExtraInvestModal(false)}
+                    className="w-7 h-7 rounded-full bg-slate-100 text-slate-400 hover:text-slate-600 flex items-center justify-center text-xs font-bold cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Info Notice */}
+                <div className="bg-gradient-to-r from-amber-50 to-emerald-50 border border-amber-200/80 p-3 rounded-2xl text-[10.5px] text-slate-800 leading-relaxed space-y-1 font-medium">
+                  <div className="flex items-center gap-1.5 font-black text-amber-900 text-xs">
+                    <span>💡</span>
+                    <span>স্বচ্ছিক প্রজেক্ট বিনিয়োগ নির্দেশিকা</span>
+                  </div>
+                  <p>
+                    নতুন নিয়মানুযায়ী এটি <strong>সম্পূর্ণ ঐচ্ছিক (Voluntary)</strong> প্রজেক্ট আমানত। নির্দিষ্ট প্রজেক্টে আপনার সামর্থ্য অনুযায়ী যেকোনো পরিমাণ (যেমন: ৳১,০০০, ৳১০,০০০, ৳৫০,০০০ বা ৳১,০০,০০০+) বছর সর্বোচ্চ ৪ বার জমা দিতে পারবেন।
+                  </p>
+                </div>
+
+                <form onSubmit={(e) => {
+                  e.preventDefault();
+                  const amt = parseFloat(extraInvestAmount) || 0;
+                  if (amt <= 0) {
+                    setCustomAlert({ title: '⚠️ পরিমাণ সঠিক নয়', message: 'অনুগ্রহ করে একটি বৈধ ইনভেস্টমেন্ট পরিমাণ প্রদান করুন।' });
+                    return;
+                  }
+                  const userPin = String(user?.pin || (user as any)?.pinCode || (user as any)?.securityPin || '').trim();
+                  if (userPin && extraInvestPin.trim() !== userPin) {
+                    setCustomAlert({ title: '❌ ভুল পিন কোড', message: 'আপনার ৪ ডিজিটের সিকিউরিটি পিন কোডটি সঠিক নয়!' });
+                    return;
+                  }
+                  if (!userPin && extraInvestPin.trim().length !== 4) {
+                    setCustomAlert({ title: '❌ ৪ ডিজিটের পিন আবশ্যক', message: 'অনুগ্রহ করে আপনার ৪ ডিজিটের পিন কোড প্রদান করুন।' });
+                    return;
+                  }
+                  if (extraInvestQuarter) {
+                    handlePayQuarterly(extraInvestQuarter.id, trackerSelectedYear, amt);
+                  }
+                }} className="space-y-3.5">
+                  {/* Manual 12-Month Selection Field */}
+                  <div>
+                    <label className="block text-[10.5px] font-black text-slate-700 mb-1 flex items-center justify-between">
+                      <span>📅 প্রজেক্ট / ইনভেস্টমেন্ট মাস সিলেক্ট করুন *</span>
+                      <span className="text-[9.5px] font-bold text-amber-700 font-mono">{trackerSelectedYear} সাল</span>
+                    </label>
+                    <select
+                      value={extraInvestQuarter.id}
+                      onChange={(e) => {
+                        const selectedId = e.target.value;
+                        const foundM = SAMITY_MONTHS.find(m => m.id === selectedId) || {
+                          id: selectedId,
+                          name: selectedId
+                        };
+                        setExtraInvestQuarter({ id: foundM.id, name: foundM.name, quarter: foundM.name });
+                      }}
+                      className="w-full text-xs font-black p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-900 cursor-pointer"
+                    >
+                      {SAMITY_MONTHS.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name} ({trackerSelectedYear})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Manual Date Selection Field */}
+                  <div>
+                    <label className="block text-[10.5px] font-black text-slate-700 mb-1">
+                      📆 ইনভেস্টমেন্ট ও জমার তারিখ *
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={extraInvestDate}
+                      onChange={(e) => setExtraInvestDate(e.target.value)}
+                      className="w-full text-xs font-black p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-900 cursor-pointer font-mono"
+                    />
+                  </div>
+                  {/* Preset Amount Chips */}
+                  <div>
+                    <label className="block text-[10.5px] font-black text-slate-700 mb-1.5">
+                      দ্রুত পরিমাণ নির্বাচন করুন বা নিচে টাইপ করুন:
+                    </label>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {[1000, 5000, 10000, 25000, 50000, 100000].map((presetAmt) => (
+                        <button
+                          key={presetAmt}
+                          type="button"
+                          onClick={() => setExtraInvestAmount(String(presetAmt))}
+                          className={`py-1.5 px-2 rounded-xl text-xs font-black border transition ${
+                            extraInvestAmount === String(presetAmt)
+                              ? 'bg-amber-500 text-white border-amber-600 shadow-xs'
+                              : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-amber-50'
+                          }`}
+                        >
+                          ৳{presetAmt.toLocaleString('bn-BD')}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Manual Amount Input */}
+                  <div>
+                    <label className="block text-[10.5px] font-black text-slate-700 mb-1">
+                      ইনভেস্টমেন্ট পরিমাণ (টাকা) *
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">৳</span>
+                      <input
+                        type="number"
+                        min={100}
+                        required
+                        value={extraInvestAmount}
+                        onChange={(e) => setExtraInvestAmount(e.target.value)}
+                        placeholder="যেমন: 10000"
+                        className="w-full pl-8 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 font-bold text-slate-900 text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Security PIN */}
+                  <div>
+                    <label className="block text-[10.5px] font-black text-slate-700 mb-1">
+                      আপনার ৪ ডিজিটের সিকিউরিটি পিন *
+                    </label>
+                    <input
+                      type="password"
+                      maxLength={4}
+                      pattern="\d*"
+                      required
+                      value={extraInvestPin}
+                      onChange={(e) => setExtraInvestPin(e.target.value.replace(/\D/g, ''))}
+                      placeholder="••••"
+                      className="w-full text-center tracking-[0.5em] font-mono py-2.5 px-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 text-base font-black text-slate-900"
+                    />
+                  </div>
+
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowExtraInvestModal(false)}
+                      className="w-1/3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs rounded-xl transition cursor-pointer"
+                    >
+                      বাতিল
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={quarterlyPaying || extraInvestPin.length < 4 || !extraInvestAmount}
+                      className="w-2/3 py-2.5 bg-gradient-to-r from-amber-600 to-emerald-600 hover:from-amber-700 hover:to-emerald-700 text-white font-black text-xs rounded-xl transition shadow-md shadow-amber-600/20 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      {quarterlyPaying ? (
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <>
+                          <span>⚡</span>
+                          <span>প্রজেক্ট ইনভেস্ট জমা দিন</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
               </motion.div>
             </div>
           )}

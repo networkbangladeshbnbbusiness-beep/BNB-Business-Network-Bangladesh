@@ -258,6 +258,8 @@ function AdminUserEditModalContent(props: any) {
     editSubAdminPermissions,
     editSamityStatus,
     setEditSamityStatus,
+    editFineEnabled,
+    setEditFineEnabled,
     editMemberGroup,
     setEditMemberGroup,
     editCustomTelecomPercent,
@@ -873,73 +875,53 @@ function AdminUserEditModalContent(props: any) {
               <span>সদস্য পদবী ক্যাটাগরি ও কিস্তি কন্ট্রোল (৪টি সেকশন)</span>
             </h4>
             <span className="text-[9.5px] font-mono font-bold bg-slate-800 px-2 py-0.5 rounded text-amber-300 border border-slate-700">
-              বর্তমান: {editMemberCategory === 'owner' ? '🔴 ওনার' : editMemberCategory === 'shareholder' ? '🟡 শেয়ার হোল্ডার' : editMemberCategory === 'investor' ? '⚪ ইনভেস্টার' : '👤 সাধারণ'}
+              বর্তমান: {editMemberCategory === 'owner' ? '🔴 ওনার' : editMemberCategory === 'shareholder' ? '🔵 শেয়ার হোল্ডার' : editMemberCategory === 'investor' ? '🟢 ইনভেস্টার' : editMemberCategory === 'supporter' ? '🟡 সাপোর্টার' : '👤 সাধারণ'}
             </span>
           </div>
 
-          {/* 4 Category Selection Buttons (Single Line Grid) */}
-          <div className="grid grid-cols-4 gap-1 text-center">
+          {/* 5 Category & Switch Selection Buttons (Single Line Grid) */}
+          <div className="grid grid-cols-5 gap-1 text-center">
             {/* 1. 🔴 ওনার — Red */}
             <button
               type="button"
               onClick={() => {
                 if (typeof setEditMemberCategory === 'function') setEditMemberCategory('owner');
-                if (typeof setEditMonthlySavingsTarget === 'function') setEditMonthlySavingsTarget(4000);
+                if (typeof setEditMonthlySavingsTarget === 'function') setEditMonthlySavingsTarget(5000);
               }}
-              className={`p-1 sm:p-1.5 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between min-h-[58px] ${
+              className={`p-1 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between min-h-[58px] ${
                 editMemberCategory === 'owner'
                   ? 'bg-gradient-to-b from-rose-600 to-red-800 border-rose-400 text-white ring-2 ring-rose-400 shadow-md'
                   : 'bg-slate-800/80 border-slate-700 hover:border-rose-500 text-slate-200'
               }`}
             >
-              <span className="text-[10px] sm:text-[11px] font-black leading-tight">🔴 ওনার</span>
-              <span className="text-[9px] sm:text-[10px] font-mono font-black text-rose-200 mt-0.5">৳৪,০০০/মাস</span>
-              <span className="text-[7.5px] bg-black/30 text-rose-100 px-1 py-0.2 rounded mt-0.5 font-bold">
-                ৩ মাসে ১০হাজার • নমিনি ৩
+              <span className="text-[9px] sm:text-[10px] font-black leading-tight">🔴 ওনার</span>
+              <span className="text-[8px] sm:text-[9px] font-mono font-black text-rose-200 mt-0.5">৳৫,০০০/মাস</span>
+              <span className="text-[6.5px] bg-black/30 text-rose-100 px-0.5 py-0.2 rounded mt-0.5 font-bold">
+                এক্সট্রা ইনভেস্ট
               </span>
             </button>
 
-            {/* 2. 🟡 শেয়ার হোল্ডার — Golden */}
+            {/* 2. 🔵 শেয়ার হোল্ডার — Blue */}
             <button
               type="button"
               onClick={() => {
                 if (typeof setEditMemberCategory === 'function') setEditMemberCategory('shareholder');
-                if (typeof setEditMonthlySavingsTarget === 'function') setEditMonthlySavingsTarget(2000);
+                if (typeof setEditMonthlySavingsTarget === 'function') setEditMonthlySavingsTarget(3000);
               }}
-              className={`p-1 sm:p-1.5 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between min-h-[58px] ${
+              className={`p-1 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between min-h-[58px] ${
                 editMemberCategory === 'shareholder'
-                  ? 'bg-gradient-to-b from-amber-600 to-yellow-700 border-amber-400 text-white ring-2 ring-amber-400 shadow-md'
-                  : 'bg-slate-800/80 border-slate-700 hover:border-amber-500 text-slate-200'
+                  ? 'bg-gradient-to-b from-blue-600 to-indigo-800 border-blue-400 text-white ring-2 ring-blue-400 shadow-md'
+                  : 'bg-slate-800/80 border-slate-700 hover:border-blue-500 text-slate-200'
               }`}
             >
-              <span className="text-[10px] sm:text-[11px] font-black leading-tight">🟡 শেয়ার</span>
-              <span className="text-[9px] sm:text-[10px] font-mono font-black text-amber-200 mt-0.5">৳২,০০০/মাস</span>
-              <span className="text-[7.5px] bg-black/30 text-amber-100 px-1 py-0.2 rounded mt-0.5 font-bold">
-                ৩ মাসে ৫হাজার • নমিনি ২
+              <span className="text-[9px] sm:text-[10px] font-black leading-tight">🔵 শেয়ার</span>
+              <span className="text-[8px] sm:text-[9px] font-mono font-black text-blue-200 mt-0.5">৳৩,০০০/মাস</span>
+              <span className="text-[6.5px] bg-black/30 text-blue-100 px-0.5 py-0.2 rounded mt-0.5 font-bold">
+                এক্সট্রা ইনভেস্ট
               </span>
             </button>
 
-            {/* 3. ⚪ ইনভেস্টার — Silver */}
-            <button
-              type="button"
-              onClick={() => {
-                if (typeof setEditMemberCategory === 'function') setEditMemberCategory('investor');
-                if (typeof setEditMonthlySavingsTarget === 'function') setEditMonthlySavingsTarget(1000);
-              }}
-              className={`p-1 sm:p-1.5 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between min-h-[58px] ${
-                editMemberCategory === 'investor'
-                  ? 'bg-gradient-to-b from-slate-600 to-slate-800 border-slate-400 text-white ring-2 ring-slate-400 shadow-md'
-                  : 'bg-slate-800/80 border-slate-700 hover:border-slate-500 text-slate-200'
-              }`}
-            >
-              <span className="text-[10px] sm:text-[11px] font-black leading-tight">⚪ ইনভেস্টার</span>
-              <span className="text-[9px] sm:text-[10px] font-mono font-black text-slate-200 mt-0.5">৳১,০০০/মাস</span>
-              <span className="text-[7.5px] bg-black/30 text-slate-200 px-1 py-0.2 rounded mt-0.5 font-bold">
-                অতিরিক্ত নেই • নমিনি ১
-              </span>
-            </button>
-
-            {/* 4. 🔘 Switch ON/OFF — Neutral */}
+            {/* 3. 🔘 Switch ON/OFF — Middle */}
             <button
               type="button"
               onClick={() => {
@@ -947,18 +929,58 @@ function AdminUserEditModalContent(props: any) {
                 if (typeof setEditSamityAutoSavingsActive === 'function') setEditSamityAutoSavingsActive(nextActive);
                 if (typeof setEditSamitySwitchStatus === 'function') setEditSamitySwitchStatus(nextActive ? 'ON' : 'OFF');
               }}
-              className={`p-1 sm:p-1.5 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between min-h-[58px] ${
+              className={`p-1 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between min-h-[58px] ${
                 editSamityAutoSavingsActive
                   ? 'bg-emerald-950/80 border-emerald-500 text-emerald-200 hover:bg-emerald-900/80'
                   : 'bg-rose-950/90 border-rose-500 text-rose-200 ring-2 ring-rose-400 shadow-md'
               }`}
             >
-              <span className="text-[10px] sm:text-[11px] font-black leading-tight">🔘 সুইচ</span>
-              <span className={`text-[9px] sm:text-[10px] font-black mt-0.5 ${editSamityAutoSavingsActive ? 'text-emerald-300' : 'text-rose-300'}`}>
+              <span className="text-[9px] sm:text-[10px] font-black leading-tight">🔘 সুইচ</span>
+              <span className={`text-[8px] sm:text-[9px] font-black mt-0.5 ${editSamityAutoSavingsActive ? 'text-emerald-300' : 'text-rose-300'}`}>
                 {editSamityAutoSavingsActive ? '🟢 ON' : '🔴 OFF'}
               </span>
-              <span className="text-[7.5px] bg-black/30 text-slate-200 px-1 py-0.2 rounded mt-0.5 font-bold">
-                {editSamityAutoSavingsActive ? 'অটো চালু' : '২৫ ডিসে ফেরত'}
+              <span className="text-[6.5px] bg-black/30 text-slate-200 px-0.5 py-0.2 rounded mt-0.5 font-bold">
+                {editSamityAutoSavingsActive ? 'অটো চালু' : 'অফ'}
+              </span>
+            </button>
+
+            {/* 4. 🟢 ইনভেস্টার — Green */}
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof setEditMemberCategory === 'function') setEditMemberCategory('investor');
+                if (typeof setEditMonthlySavingsTarget === 'function') setEditMonthlySavingsTarget(2000);
+              }}
+              className={`p-1 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between min-h-[58px] ${
+                editMemberCategory === 'investor'
+                  ? 'bg-gradient-to-b from-emerald-600 to-green-800 border-emerald-400 text-white ring-2 ring-emerald-400 shadow-md'
+                  : 'bg-slate-800/80 border-slate-700 hover:border-emerald-500 text-slate-200'
+              }`}
+            >
+              <span className="text-[9px] sm:text-[10px] font-black leading-tight">🟢 ইনভেস্টার</span>
+              <span className="text-[8px] sm:text-[9px] font-mono font-black text-emerald-200 mt-0.5">৳২,০০০/মাস</span>
+              <span className="text-[6.5px] bg-black/30 text-emerald-100 px-0.5 py-0.2 rounded mt-0.5 font-bold">
+                এক্সট্রা ইনভেস্ট
+              </span>
+            </button>
+
+            {/* 5. 🟡 সাপোর্টার — Yellow */}
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof setEditMemberCategory === 'function') setEditMemberCategory('supporter');
+                if (typeof setEditMonthlySavingsTarget === 'function') setEditMonthlySavingsTarget(1000);
+              }}
+              className={`p-1 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between min-h-[58px] ${
+                editMemberCategory === 'supporter'
+                  ? 'bg-gradient-to-b from-amber-500 to-yellow-600 border-amber-400 text-white ring-2 ring-amber-400 shadow-md'
+                  : 'bg-slate-800/80 border-slate-700 hover:border-amber-500 text-slate-200'
+              }`}
+            >
+              <span className="text-[9px] sm:text-[10px] font-black leading-tight">🟡 সাপোর্টার</span>
+              <span className="text-[8px] sm:text-[9px] font-mono font-black text-amber-200 mt-0.5">৳১,০০০/মাস</span>
+              <span className="text-[6.5px] bg-black/30 text-amber-100 px-0.5 py-0.2 rounded mt-0.5 font-bold">
+                এক্সট্রা ইনভেস্ট
               </span>
             </button>
           </div>
@@ -969,6 +991,39 @@ function AdminUserEditModalContent(props: any) {
               ⚠️ <strong>সুইচ বন্ধ (OFF) অবস্থা:</strong> এই সদস্যের পরবর্তী কার্যক্রম ও কিস্তি কর্তন বন্ধ রয়েছে। প্রতি বছর ২৫শে ডিসেম্বর জমাকৃত সঞ্চয় (৳{safePrimitiveNumber(editSavings, 0).toLocaleString('bn-BD')}) কোনো কর্তন ছাড়াই ফেরত প্রদান করা হবে।
             </div>
           )}
+
+          {/* Individual Member Fine Control Switch */}
+          <div className="bg-slate-900/90 border border-amber-500/40 p-3 rounded-xl text-left space-y-2 my-1 shadow-xs">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <span className="text-xs font-black text-amber-300 flex items-center gap-1.5">
+                  <span>⏰</span>
+                  <span>জরিমানা ধার্য সুইচ (Individual Fine Switch)</span>
+                </span>
+                <p className="text-[10.5px] text-slate-300 mt-0.5 leading-snug">
+                  চালু (ON) থাকলে এই সদস্যের রানিং চলতি মাসে কিস্তি বিলম্ব হলে জরিমানা ধরা হবে। সদস্য বিপদে থাকলে বন্ধ (OFF) করে দিলে কোনো জরিমানা কাটা হবে না।
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof setEditFineEnabled === 'function') setEditFineEnabled(!editFineEnabled);
+                }}
+                className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer shrink-0 shadow-sm ${
+                  editFineEnabled
+                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white ring-2 ring-emerald-400'
+                    : 'bg-rose-600 hover:bg-rose-500 text-white ring-2 ring-rose-400'
+                }`}
+              >
+                {editFineEnabled ? '🟢 চালু (ON)' : '🔴 বন্ধ (OFF)'}
+              </button>
+            </div>
+            {!editFineEnabled && (
+              <p className="text-[10px] bg-rose-950/80 text-rose-200 border border-rose-500/50 p-1.5 rounded-lg font-bold">
+                🚫 জরিমানা মওকুফ সক্রিয়: এই সদস্যের জন্য জরিমানা সিস্টেম বন্ধ (OFF) রাখা হয়েছে। ১৬ তারিখের পর কিস্তি জমা দিলেও কোনো বিলম্ব ফি/জরিমানা কাটা হবে না।
+              </p>
+            )}
+          </div>
 
           {/* Nominee Management Section */}
           {(() => {

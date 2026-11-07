@@ -135,6 +135,17 @@ export interface DashboardSubViewsProps {
 }
 
 export const DashboardSubViews = React.memo(function DashboardSubViews(props: DashboardSubViewsProps) {
+  // 100% Guaranteed return to dashboard: Close sub-view modal on force return event
+  useEffect(() => {
+    const handleForceReturn = () => {
+      if (props.setModalType) props.setModalType(null);
+    };
+    window.addEventListener('bnb_force_return_to_dashboard', handleForceReturn);
+    return () => {
+      window.removeEventListener('bnb_force_return_to_dashboard', handleForceReturn);
+    };
+  }, [props.setModalType]);
+
   if (!props.modalType) return null;
 
   
@@ -284,245 +295,25 @@ const {
     ...rest
   } = props;
 
-  // 100% Guaranteed return to dashboard: Close sub-view modal on force return event
-  useEffect(() => {
-    const handleForceReturn = () => {
-      setModalType(null);
-    };
-    window.addEventListener('bnb_force_return_to_dashboard', handleForceReturn);
-    return () => {
-      window.removeEventListener('bnb_force_return_to_dashboard', handleForceReturn);
-    };
-  }, [setModalType]);
+
 
 
   return (
     <>
               
                 {modalType === 'samity' && (
-                  <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b6623] w-full h-full min-h-screen font-sans pt-0">
-                    {liveUser.memberCategory === 'regular' ? (
-                      <div className="p-6 text-center mt-20">
-                        <p className="text-sm font-bold text-slate-600">দুঃখিত, সাধারণ সদস্যরা এই সেকশনে প্রবেশের অনুমতি নেই।</p>
-                        <button onClick={() => setModalType(null)} className="mt-4 px-4 py-2 bg-slate-200 rounded-lg">ফিরে যান</button>
-                      </div>
-                    ) : (
-                      (
-                        (liveUser.role === 'admin' || liveUser.role === 'sub_admin') ||
-                        liveUser.samityStatus === 'approved' ||
-                        liveUser.samityApproved === true ||
-                        liveUser.isSamityMember === true ||
-                        hasCompletedSamityProfile(liveUser)
-                      )
-                    ) ? (
-                      <SamityScreen
-                        user={liveUser}
-                        allUsers={allUsers}
-                        onBack={() => setModalType(null)}
-                        syncLiveProfile={syncLiveProfile}
-                        setActiveTab={setActiveTab}
-                        setModalType={setModalType}
-                        appConfig={appConfig}
-                        allNotices={allNotices}
-                        transactions={allTransactions || transactions || []}
-                      />
-                    ) : ((liveUser.samityStatus === 'pending' || Boolean(liveUser.samityAppliedAt)) && !isReapplyingSamity) ? (
-                      <div className="p-4 sm:p-6 max-w-2xl mx-auto">
-                        <div className="bg-white rounded-3xl border border-slate-150 overflow-hidden shadow-xl mt-6 text-left">
-                          <div className="bg-gradient-to-r from-amber-500 to-amber-600 p-6 text-white relative overflow-hidden">
-                            <div className="absolute right-0 top-0 translate-x-12 -translate-y-6 w-32 h-32 bg-white/5 rounded-full blur-xl pointer-events-none" />
-                            <button 
-                              onClick={() => {
-                                setModalType(null);
-                                setIsReapplyingSamity(false);
-                              }}
-                              className="mb-4 flex items-center gap-1.5 text-xs text-amber-50 hover:text-white transition bg-amber-700/40 p-2 py-1 rounded-lg cursor-pointer"
-                            >
-                              <ChevronLeft className="w-3.5 h-3.5" />
-                              বাহির হোন
-                            </button>
-                            <div className="flex items-center gap-3">
-                              <div className="w-12 h-12 bg-white/10 rounded-2xl flex items-center justify-center text-white shrink-0">
-                                <Clock className="w-6 h-6 animate-spin" style={{ animationDuration: '4s' }} />
-                              </div>
-                              <div>
-                                <h1 className="text-base sm:text-lg font-black tracking-tight leading-tight">সমিতি মেম্বারশিপ আবেদন পেন্ডিং</h1>
-                                <p className="text-[10.5px] text-amber-100 mt-1 font-medium font-sans">আপনার আবেদনটি বর্তমানে এডমিন এবং ট্রাস্টি বোর্ডের সক্রিয় বিবেচনায় রয়েছে</p>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="p-6 space-y-5 text-slate-700">
-                            {resendSamitySuccess && (
-                              <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl flex items-center gap-3 text-emerald-900 font-bold text-xs animate-fadeIn">
-                                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-                                <p>{resendSamitySuccess}</p>
-                              </div>
-                            )}
-
-                            <div className="bg-amber-50/55 border border-amber-200/50 p-4 rounded-2.5xl flex items-start gap-3">
-                              <Clock className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
-                              <div className="text-[11px] leading-relaxed font-sans font-bold text-amber-900">
-                                <p className="text-xs font-black">📢 আবেদনটি বর্তমানে পেন্ডিং আছে (Pending Approval)</p>
-                                <p className="mt-1 text-amber-805 font-medium font-sans">আপনার সমিতির সদস্যপদ আবেদনটি ডাটাবেজে পেন্ডিং হিসেবে আছে। আপনি চাইলে তথ্য পরিবর্তন করে আবার সাবমিট করতে পারেন অথবা সরাসরি এডমিন প্যানেলে আবেদন রিসেন্ড করতে পারেন।</p>
-                              </div>
-                            </div>
-
-                            <div className="bg-slate-50 border border-slate-150 rounded-2.5xl p-4.5 space-y-3">
-                              <h3 className="text-xs font-black text-slate-500 uppercase tracking-wider flex items-center gap-1.5 border-b border-slate-200 pb-1.5">
-                                <Building2 className="w-3.5 h-3.5 text-slate-400" /> প্রেরিত আবেদনের তথ্যাদিঃ
-                              </h3>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px] font-sans">
-                                <div>
-                                  <span className="text-slate-400 font-semibold block">আবেদনকারীর নামঃ</span>
-                                  <p className="text-slate-800 font-black">{liveUser.name}</p>
-                                </div>
-                                <div>
-                                  <span className="text-slate-400 font-semibold block">সদস্য আইডি (Member ID):</span>
-                                  <p className="text-emerald-800 font-black font-mono">{liveUser.memberId}</p>
-                                </div>
-                                <div>
-                                  <span className="text-slate-400 font-semibold block">মোবাইল নম্বরঃ</span>
-                                  <p className="text-slate-700 font-bold font-mono">{liveUser.phone}</p>
-                                </div>
-                                <div>
-                                  <span className="text-slate-400 font-semibold block">স্থায়ী দেশ (Country):</span>
-                                  <p className="text-slate-700 font-bold">{liveUser.country || 'Bangladesh'}</p>
-                                </div>
-                                {liveUser.monthlySavingsTarget && (
-                                  <div>
-                                    <span className="text-slate-400 font-semibold block">মনোনীত মাসিক সঞ্চয় কিস্তিঃ</span>
-                                    <p className="text-indigo-700 font-extrabold font-mono">৳ {liveUser.monthlySavingsTarget.toLocaleString('bn-BD')} BDT</p>
-                                  </div>
-                                )}
-                                <div>
-                                  <span className="text-slate-400 font-semibold block">আবেদনের তারিখঃ</span>
-                                  <p className="text-slate-600 font-sans font-bold">
-                                    {liveUser.samityAppliedAt ? new Date(liveUser.samityAppliedAt).toLocaleString('bn-BD') : 'উপাত্ত নেই'}
-                                  </p>
-                                </div>
-                              </div>
-                            </div>
-
-                            <p className="text-[10px] text-slate-400 text-center">
-                              *ভেরিফিকেশন সম্পন্ন হতে সাধারণত 1 থেকে 12 ঘন্টা পর্যন্ত সময় লাগতে পারে।*
-                            </p>
-
-                            <div className="pt-2 border-t border-slate-100 flex flex-col gap-2.5">
-                              <button
-                                onClick={() => setIsReapplyingSamity(true)}
-                                className="w-full px-4 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl text-xs font-bold hover:from-emerald-700 hover:to-teal-700 active:scale-98 transition text-center cursor-pointer shadow-md flex items-center justify-center gap-2"
-                              >
-                                <FileText className="w-4 h-4" />
-                                📝 তথ্য সংশোধন ও নতুন করে আবেদন জমা দিন (Edit & Resubmit)
-                              </button>
-
-                              <button
-                                onClick={handleDirectResendSamityRequest}
-                                disabled={resendSamityLoading}
-                                className="w-full px-4 py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold active:scale-98 transition text-center cursor-pointer shadow-md flex items-center justify-center gap-2 disabled:opacity-50"
-                              >
-                                <RefreshCw className={`w-4 h-4 ${resendSamityLoading ? 'animate-spin' : ''}`} />
-                                {resendSamityLoading ? 'এডমিন প্যানেলে পাঠানো হচ্ছে...' : '⚡ এডমিন প্যানেলে আবেদন রিসেন্ড / রিফ্রেশ করুন (Instant Resend to Admin)'}
-                              </button>
-
-                              <button
-                                onClick={() => {
-                                  setModalType(null);
-                                  setIsReapplyingSamity(false);
-                                }}
-                                className="w-full px-4 py-2.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-600 rounded-xl text-xs font-bold transition text-center cursor-pointer"
-                              >
-                                ড্যাশবোর্ডে ফিরে যান (Return Home)
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ) : liveUser.samityStatus === 'rejected' ? (
-                      <div className="p-4 sm:p-6 max-w-2xl mx-auto">
-                        <div className="bg-white rounded-3xl border border-slate-150 overflow-hidden shadow-xl mt-6 text-left">
-                          <div className="bg-gradient-to-r from-rose-600 to-rose-700 p-6 text-white relative overflow-hidden">
-                            <div className="absolute right-0 top-0 translate-x-12 -translate-y-6 w-32 h-32 bg-white/5 rounded-full blur-xl pointer-events-none" />
-                            <button 
-                              onClick={() => {
-                                setModalType(null);
-                                setIsReapplyingSamity(false);
-                              }}
-                              className="mb-4 flex items-center gap-1.5 text-xs text-rose-50 hover:text-white transition bg-rose-700/40 p-2 py-1 rounded-lg cursor-pointer"
-                            >
-                              <ChevronLeft className="w-3.5 h-3.5" />
-                              বাহির হোন
-                            </button>
-                            <div className="flex items-center gap-3">
-                              <div className="w-12 h-12 bg-white/10 rounded-2xl flex items-center justify-center text-white shrink-0">
-                                <AlertCircle className="w-6 h-6 text-white" />
-                              </div>
-                              <div>
-                                <h1 className="text-base sm:text-lg font-black tracking-tight leading-tight">সমিতি সদস্যপদ আবেদন প্রত্যাখ্যাত</h1>
-                                <p className="text-[10.5px] text-rose-100 mt-1 font-medium font-sans">দুঃখিত! আপনার মেম্বারশিপ আবেদনটি অফিস কর্তৃক বাতিল করা হয়েছে।</p>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="p-6 space-y-5 text-slate-700">
-                            <div className="bg-rose-50 border border-rose-100 p-4 rounded-2.5xl flex items-start gap-3">
-                              <ShieldAlert className="w-5 h-5 text-rose-650 mt-0.5 shrink-0" />
-                              <div className="text-[11px] leading-relaxed font-sans font-bold text-rose-950">
-                                <p className="text-xs font-black">❌ আবেদন বাতিলের কারণঃ</p>
-                                <p className="mt-1 text-rose-800 font-extrabold text-[12px] bg-white border border-rose-100 px-3 py-2 rounded-xl mt-1 leading-normal font-sans">
-                                  {liveUser.samityRejectReason || 'প্রদত্ত তথ্যের অমিল বা অসম্পূর্ণ নমিনি ডকুমেন্টস এর কারণে আপনার আবেদনটি বাতিল করা হয়েছে। সঠিক তথ্য প্রদান করে পুনরায় আবেদন করুন।'}
-                                </p>
-                              </div>
-                            </div>
-
-                            <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row gap-3">
-                              <button
-                                onClick={async () => {
-                                  try {
-                                    const userRef = doc(db, 'users', liveUser.uid);
-                                    await updateDoc(userRef, {
-                                      samityStatus: 'none',
-                                      samityRejectReason: ''
-                                    });
-                                    await syncLiveProfile();
-                                  } catch (e) {
-                                    console.error('Error resetting samity status:', e);
-                                  }
-                                }}
-                                className="flex-1 px-4 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl text-xs font-bold hover:from-emerald-700 hover:to-teal-700 active:scale-98 transition text-center cursor-pointer shadow-md shadow-emerald-50"
-                              >
-                                📝 নতুন করে পুনরায় আবেদন করুন
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setModalType(null);
-                                  setIsReapplyingSamity(false);
-                                }}
-                                className="flex-1 px-4 py-3 bg-slate-100 border border-slate-200 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-200 active:scale-98 transition text-center cursor-pointer"
-                              >
-                                ফিরে যান
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="p-4 sm:p-6">
-                        <SamityRequestForm
-                          user={liveUser}
-                          appConfig={appConfig}
-                          onClose={() => {
-                            setModalType(null);
-                            setIsReapplyingSamity(false);
-                          }}
-                          onSubmitSuccess={async () => {
-                            setIsReapplyingSamity(false);
-                            await syncLiveProfile();
-                          }}
-                        />
-                      </div>
-                    )}
+                  <div className="fixed inset-0 z-50 overflow-y-auto bg-[#FAFDFB] w-full h-full min-h-screen font-sans pt-0">
+                    <SamityScreen
+                      user={liveUser}
+                      allUsers={allUsers}
+                      onBack={() => setModalType(null)}
+                      syncLiveProfile={syncLiveProfile}
+                      setActiveTab={setActiveTab}
+                      setModalType={setModalType}
+                      appConfig={appConfig}
+                      allNotices={allNotices}
+                      transactions={allTransactions || transactions || []}
+                    />
                   </div>
                 )}
                 {modalType === 'telecom' && (

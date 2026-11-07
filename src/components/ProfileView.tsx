@@ -92,6 +92,7 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
   const [showOwnerModal, setShowOwnerModal] = useState(false);
   const [showShareholderModal, setShowShareholderModal] = useState(false);
   const [showInvestorModal, setShowInvestorModal] = useState(false);
+  const [showSupporterModal, setShowSupporterModal] = useState(false);
   const [showGeneralMemberModal, setShowGeneralMemberModal] = useState(false);
   const [modalSavingsTarget, setModalSavingsTarget] = useState<number>(1000);
   const [submittingUpgrade, setSubmittingUpgrade] = useState(false);
@@ -760,7 +761,7 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
   // ----------------------------------------------------
   // Shareholder / Investor Upgrade Form Submission
   // ----------------------------------------------------
-  const handleApplyMembership = async (category: 'shareholder' | 'investor', monthlyTarget: number) => {
+  const handleApplyMembership = async (category: 'shareholder' | 'investor' | 'supporter', monthlyTarget: number) => {
     setSubmittingUpgrade(true);
     setUpgradeModalMsg(null);
     try {
@@ -806,10 +807,14 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
       // Notification
       const titleText = category === 'shareholder' 
         ? '👑 অভিনন্দন! আপনি এখন একজন শেয়ার হোল্ডার সদস্য' 
-        : '💎 অভিনন্দন! আপনি এখন একজন ইনভেস্টর সদস্য';
+        : category === 'investor'
+        ? '💎 অভিনন্দন! আপনি এখন একজন ইনভেস্টর সদস্য'
+        : '🟡 অভিনন্দন! আপনি এখন একজন সাপোর্টার সদস্য';
       const descText = category === 'shareholder'
-        ? `আপনার আবেদন সফল হয়েছে। আপনি শেয়ার হোল্ডার সদস্য হিসেবে প্রতি মাসে ৳${monthlyTarget.toLocaleString('bn-BD')} সঞ্চয় কিস্তি বজায় রাখার অঙ্গীকার করেছেন। আপনার প্রোফাইলে লাল ভেরিফাইড টিক যুক্ত হয়েছে।`
-        : `আপনার আবেদন সফল হয়েছে। আপনি ইনভেস্টর সদস্য হিসেবে প্রতি মাসে ৳${monthlyTarget.toLocaleString('bn-BD')} সঞ্চয় কিস্তি পরিচালনার অঙ্গীকার করেছেন। আপনার প্রোফাইলে ব্লু ভেরিফাইড টিক যুক্ত হয়েছে।`;
+        ? `আপনার আবেদন সফল হয়েছে। আপনি শেয়ার হোল্ডার সদস্য হিসেবে প্রতি মাসে ৳${monthlyTarget.toLocaleString('bn-BD')} সঞ্চয় কিস্তি বজায় রাখার অঙ্গীকার করেছেন।`
+        : category === 'investor'
+        ? `আপনার আবেদন সফল হয়েছে। আপনি ইনভেস্টর সদস্য হিসেবে প্রতি মাসে ৳${monthlyTarget.toLocaleString('bn-BD')} সঞ্চয় কিস্তি পরিচালনার অঙ্গীকার করেছেন।`
+        : `আপনার আবেদন সফল হয়েছে। আপনি সাপোর্টার সদস্য হিসেবে প্রতি মাসে ৳${monthlyTarget.toLocaleString('bn-BD')} সঞ্চয় কিস্তি পরিচালনার অঙ্গীকার করেছেন।`;
 
       await addDoc(collection(db, 'user_notifications'), {
         userId: user.uid,
@@ -823,6 +828,7 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
       setSuccessMsg(titleText);
       setShowShareholderModal(false);
       setShowInvestorModal(false);
+      setShowSupporterModal(false);
       onUpdate();
       setTimeout(() => setSuccessMsg(''), 5000);
     } catch (err: any) {
@@ -872,84 +878,105 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
         <div className="absolute -top-16 -left-16 w-44 h-44 bg-emerald-500/15 rounded-full blur-3xl pointer-events-none" />
         <div className="absolute -bottom-16 -right-16 w-44 h-44 bg-teal-400/15 rounded-full blur-3xl pointer-events-none" />
 
-        {/* Top Category Buttons Row: 🔴 অনার | 🔵 শেয়ার হোল্ডার | 🟢 ইনভেস্টার | ⚪ সাধারণ সদস্য (এক লাইনে ফুটিয়ে তোলা হয়েছে) */}
-        <div className="grid grid-cols-4 gap-1 sm:gap-2 mb-3.5 relative z-10 w-full">
+        {/* Top Category Buttons Row: 🔴 অনার | 🔵 শেয়ার হোল্ডার | 🟢 ইনভেস্টার | 🟡 সাপোর্টার | ⚪ সাধারণ সদস্য */}
+        <div className="grid grid-cols-5 gap-1 sm:gap-1.5 mb-3.5 relative z-10 w-full">
           {/* 1. 🔴 অনার (Owner) */}
           <button
             type="button"
             onClick={() => setShowOwnerModal(true)}
-            className={`px-1 sm:px-2 py-2 rounded-xl border transition-all cursor-pointer flex flex-col items-center justify-center text-center shadow-md active:scale-95 ${
+            className={`px-0.5 sm:px-1.5 py-1.5 sm:py-2 rounded-xl border transition-all cursor-pointer flex flex-col items-center justify-center text-center shadow-md active:scale-95 ${
               memberCategoryMeta.key === 'owner'
                 ? 'bg-gradient-to-b from-red-600 via-rose-600 to-red-700 text-white border-red-300 shadow-red-900/70 ring-2 ring-red-400'
                 : 'bg-gradient-to-b from-red-900/90 to-red-950/90 hover:from-red-800 hover:to-red-900 text-white border-red-500/70 shadow-red-950/60'
             }`}
-            title="অনার মেম্বারশিপের নিয়ম ও সুবিধাবলী"
+            title="অনার মেম্বারশিপের নিয়ম ও সুবিধাবলী (৳৫,০০০/মাস)"
           >
-            <div className="flex items-center gap-0.5 text-[10px] sm:text-xs font-black leading-tight text-white">
-              <span className="text-xs sm:text-sm">👑</span>
+            <div className="flex items-center gap-0.5 text-[9.5px] sm:text-xs font-black leading-tight text-white">
+              <span className="text-xs">👑</span>
               <span className="truncate">অনার</span>
             </div>
-            <span className="text-[7.5px] sm:text-[9px] text-red-200 font-medium leading-none mt-1">নিয়ম</span>
+            <span className="text-[7px] sm:text-[8.5px] text-red-200 font-bold leading-none mt-1">৳৫,০০০</span>
           </button>
 
           {/* 2. 🔵 শেয়ার হোল্ডার (Shareholder) */}
           <button
             type="button"
             onClick={() => {
-              setModalSavingsTarget(user.monthlySavingsTarget || 2000);
+              setModalSavingsTarget(user.monthlySavingsTarget || 3000);
               setShowShareholderModal(true);
             }}
-            className={`px-1 sm:px-2 py-2 rounded-xl border transition-all cursor-pointer flex flex-col items-center justify-center text-center shadow-md active:scale-95 ${
+            className={`px-0.5 sm:px-1.5 py-1.5 sm:py-2 rounded-xl border transition-all cursor-pointer flex flex-col items-center justify-center text-center shadow-md active:scale-95 ${
               memberCategoryMeta.key === 'shareholder'
                 ? 'bg-gradient-to-b from-blue-600 via-indigo-600 to-blue-700 text-white border-blue-300 shadow-blue-900/70 ring-2 ring-blue-400'
                 : 'bg-gradient-to-b from-blue-900/90 to-blue-950/90 hover:from-blue-800 hover:to-blue-900 text-white border-blue-500/70 shadow-blue-950/60'
             }`}
-            title="শেয়ার হোল্ডার হওয়ার শর্তাবলী, নিয়ম ও আবেদন ফরম"
+            title="শেয়ার হোল্ডার হওয়ার শর্তাবলী, নিয়ম ও আবেদন ফরম (৳৩,০০০/মাস)"
           >
-            <div className="flex items-center gap-0.5 text-[10px] sm:text-xs font-black leading-tight text-white">
-              <span className="text-xs sm:text-sm">🛡️</span>
-              <span className="truncate">শেয়ারহোল্ডার</span>
+            <div className="flex items-center gap-0.5 text-[9.5px] sm:text-xs font-black leading-tight text-white">
+              <span className="text-xs">🛡️</span>
+              <span className="truncate">শেয়ার</span>
             </div>
-            <span className="text-[7.5px] sm:text-[9px] text-blue-200 font-medium leading-none mt-1">আবেদন</span>
+            <span className="text-[7px] sm:text-[8.5px] text-blue-200 font-bold leading-none mt-1">৳৩,০০০</span>
           </button>
 
           {/* 3. 🟢 ইনভেস্টার (Investor) */}
           <button
             type="button"
             onClick={() => {
-              setModalSavingsTarget(user.monthlySavingsTarget || 1000);
+              setModalSavingsTarget(user.monthlySavingsTarget || 2000);
               setShowInvestorModal(true);
             }}
-            className={`px-1 sm:px-2 py-2 rounded-xl border transition-all cursor-pointer flex flex-col items-center justify-center text-center shadow-md active:scale-95 ${
+            className={`px-0.5 sm:px-1.5 py-1.5 sm:py-2 rounded-xl border transition-all cursor-pointer flex flex-col items-center justify-center text-center shadow-md active:scale-95 ${
               memberCategoryMeta.key === 'investor'
                 ? 'bg-gradient-to-b from-emerald-600 via-green-600 to-emerald-700 text-white border-emerald-300 shadow-emerald-900/70 ring-2 ring-emerald-400'
                 : 'bg-gradient-to-b from-emerald-900/90 to-emerald-950/90 hover:from-emerald-800 hover:to-emerald-900 text-white border-emerald-500/70 shadow-emerald-950/60'
             }`}
-            title="ইনভেস্টার হওয়ার শর্তাবলী, নিয়ম ও আবেদন ফরম"
+            title="ইনভেস্টার হওয়ার শর্তাবলী, নিয়ম ও আবেদন ফরম (৳২,০০০/মাস)"
           >
-            <div className="flex items-center gap-0.5 text-[10px] sm:text-xs font-black leading-tight text-white">
-              <span className="text-xs sm:text-sm">💎</span>
+            <div className="flex items-center gap-0.5 text-[9.5px] sm:text-xs font-black leading-tight text-white">
+              <span className="text-xs">💎</span>
               <span className="truncate">ইনভেস্টার</span>
             </div>
-            <span className="text-[7.5px] sm:text-[9px] text-emerald-200 font-medium leading-none mt-1">আবেদন</span>
+            <span className="text-[7px] sm:text-[8.5px] text-emerald-200 font-bold leading-none mt-1">৳২,০০০</span>
           </button>
 
-          {/* 4. ⚪ সাধারণ সদস্য (General Member) */}
+          {/* 4. 🟡 সাপোর্টার (Supporter) */}
+          <button
+            type="button"
+            onClick={() => {
+              setModalSavingsTarget(user.monthlySavingsTarget || 1000);
+              setShowSupporterModal(true);
+            }}
+            className={`px-0.5 sm:px-1.5 py-1.5 sm:py-2 rounded-xl border transition-all cursor-pointer flex flex-col items-center justify-center text-center shadow-md active:scale-95 ${
+              memberCategoryMeta.key === 'supporter'
+                ? 'bg-gradient-to-b from-amber-500 via-yellow-500 to-amber-600 text-white border-amber-300 shadow-amber-900/70 ring-2 ring-amber-400'
+                : 'bg-gradient-to-b from-amber-900/90 to-amber-950/90 hover:from-amber-800 hover:to-amber-900 text-white border-amber-500/70 shadow-amber-950/60'
+            }`}
+            title="সাপোর্টার মেম্বারশিপের নিয়ম ও সুবিধাবলী (৳১,০০০/মাস)"
+          >
+            <div className="flex items-center gap-0.5 text-[9.5px] sm:text-xs font-black leading-tight text-white">
+              <span className="text-xs">🟡</span>
+              <span className="truncate">সাপোর্টার</span>
+            </div>
+            <span className="text-[7px] sm:text-[8.5px] text-amber-200 font-bold leading-none mt-1">৳১,০০০</span>
+          </button>
+
+          {/* 5. ⚪ সাধারণ সদস্য (General Member) */}
           <button
             type="button"
             onClick={() => setShowGeneralMemberModal(true)}
-            className={`px-1 sm:px-2 py-2 rounded-xl border transition-all cursor-pointer flex flex-col items-center justify-center text-center shadow-md active:scale-95 ${
+            className={`px-0.5 sm:px-1.5 py-1.5 sm:py-2 rounded-xl border transition-all cursor-pointer flex flex-col items-center justify-center text-center shadow-md active:scale-95 ${
               memberCategoryMeta.key === 'regular' || (!memberCategoryMeta.key)
                 ? 'bg-white text-slate-900 border-slate-300 shadow-slate-400/50 ring-2 ring-slate-300 font-black'
                 : 'bg-gradient-to-b from-slate-800/90 to-slate-900/90 hover:from-slate-700 hover:to-slate-800 text-slate-100 border-slate-500/70 shadow-slate-950/60'
             }`}
             title="সাধারণ সদস্যের নিয়মাবলী ও সুযোগ সুবিধা"
           >
-            <div className="flex items-center gap-0.5 text-[10px] sm:text-xs font-black leading-tight text-white">
-              <span className="text-xs sm:text-sm">👤</span>
+            <div className="flex items-center gap-0.5 text-[9.5px] sm:text-xs font-black leading-tight text-white">
+              <span className="text-xs">👤</span>
               <span className="truncate">সাধারণ</span>
             </div>
-            <span className="text-[7.5px] sm:text-[9px] text-slate-300 font-medium leading-none mt-1">সুযোগ</span>
+            <span className="text-[7px] sm:text-[8.5px] text-slate-300 font-bold leading-none mt-1">সুযোগ</span>
           </button>
         </div>
 
@@ -962,6 +989,8 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
               ? 'ring-blue-600 ring-offset-slate-950 bg-blue-600/20 border-2 border-blue-500 shadow-blue-900/60'
               : memberCategoryMeta.key === 'investor'
               ? 'ring-emerald-500 ring-offset-slate-950 bg-emerald-600/20 border-2 border-emerald-400 shadow-emerald-900/60'
+              : memberCategoryMeta.key === 'supporter'
+              ? 'ring-amber-400 ring-offset-slate-950 bg-amber-500/20 border-2 border-amber-400 shadow-amber-900/60'
               : 'ring-slate-400 ring-offset-slate-950 bg-slate-800/40 border-2 border-slate-600'
           }`}>
             {isCustomPic ? (
@@ -1018,7 +1047,7 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
 
         {/* Line 1: [1. পদবী] -> [2. নাম] -> [3. একটিভ] */}
         <div className="flex items-center justify-center gap-1.5 sm:gap-2 flex-wrap mb-1.5">
-          {/* 1. পদবী (ওনার / শেয়ার হোল্ডার / ইনভেস্টার / সাধারণ সদস্য) */}
+          {/* 1. পদবী (ওনার / শেয়ার হোল্ডার / ইনভেস্টার / সাপোর্টার / সাধারণ সদস্য) */}
           <span 
             className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-black shadow-md border ${
               memberCategoryMeta.key === 'owner'
@@ -1027,11 +1056,13 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
                 ? 'bg-blue-600 text-white border-blue-400 shadow-blue-950/50'
                 : memberCategoryMeta.key === 'investor'
                 ? 'bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/50'
+                : memberCategoryMeta.key === 'supporter'
+                ? 'bg-amber-500 text-white border-amber-300 shadow-amber-950/50'
                 : 'bg-slate-700/90 text-slate-200 border-slate-600'
             }`}
             title={memberCategoryMeta.titleBn}
           >
-            <span>{memberCategoryMeta.key === 'owner' ? '🔴' : memberCategoryMeta.key === 'shareholder' ? '🔵' : memberCategoryMeta.key === 'investor' ? '🟢' : '⚪'}</span>
+            <span>{memberCategoryMeta.key === 'owner' ? '🔴' : memberCategoryMeta.key === 'shareholder' ? '🔵' : memberCategoryMeta.key === 'investor' ? '🟢' : memberCategoryMeta.key === 'supporter' ? '🟡' : '⚪'}</span>
             <span>{memberCategoryMeta.shortLabel || memberCategoryMeta.badgeBn}</span>
           </span>
 
@@ -1145,22 +1176,25 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
       {/* ---------------------------------------------------- */}
       <AnimatePresence>
         {showCropperModal && cropImageRaw && (
-          <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 text-left">
+          <div className="fixed inset-0 z-[130] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            
             <motion.div
-              initial={{ opacity: 0, scale: 0.94 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.94 }}
-              className="bg-white rounded-3xl max-w-sm w-full p-4 sm:p-5 shadow-2xl border border-slate-200 overflow-hidden space-y-3.5"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
             >
               {/* Cropper Header */}
-              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold">
-                    <Camera className="w-4 h-4 text-emerald-600" />
+              <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-white/10 rounded-xl">
+                    <Camera className="w-5 h-5 text-emerald-400" />
                   </div>
                   <div>
-                    <h3 className="text-xs font-black text-slate-900">ফটো ক্রপ ও কাটিং (WhatsApp Style)</h3>
-                    <p className="text-[9.5px] text-slate-500">ছবি টেনে কাঙ্ক্ষিত অংশ বৃত্তের মাঝে বসান</p>
+                    <h3 className="text-lg font-black">ফটো ক্রপ ও কাটিং</h3>
+                    <p className="text-[10px] text-emerald-100/70 font-medium tracking-wide uppercase">WhatsApp Style Cropper</p>
                   </div>
                 </div>
                 <button
@@ -1169,113 +1203,123 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
                     setShowCropperModal(false);
                     setCropImageRaw(null);
                   }}
-                  className="p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 cursor-pointer"
+                  className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
                 >
-                  <X className="w-4 h-4" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 
-              {/* Viewport Interactive Cropper Frame: Full Coverage with Circular Viewfinder */}
-              {(() => {
-                const CIRCLE_SIZE = 240;
-                const rawW = cropImgDims.w || 300;
-                const rawH = cropImgDims.h || 300;
-                const baseScale = Math.max(CIRCLE_SIZE / rawW, CIRCLE_SIZE / rawH);
-                const displayW = rawW * baseScale * cropZoom;
-                const displayH = rawH * baseScale * cropZoom;
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                <div className="text-center space-y-2">
+                  <p className="text-sm text-slate-600 font-bold">
+                    ছবি টেনে কাঙ্ক্ষিত অংশ বৃত্তের মাঝে বসান
+                  </p>
+                </div>
 
-                return (
-                  <div 
-                    className="relative w-[280px] h-[280px] mx-auto bg-slate-950 rounded-2xl overflow-hidden cursor-grab active:cursor-grabbing select-none border border-slate-800 shadow-inner flex items-center justify-center touch-none"
-                    onMouseDown={(e) => handlePanStart(e.clientX, e.clientY)}
-                    onMouseMove={(e) => handlePanMove(e.clientX, e.clientY)}
-                    onMouseUp={handlePanEnd}
-                    onMouseLeave={handlePanEnd}
-                    onTouchStart={handleTouchStart}
-                    onTouchMove={handleTouchMove}
-                    onTouchEnd={handleTouchEnd}
-                  >
-                    {/* Circular Viewfinder Overlay with Subtle 3x3 Grid */}
-                    <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center">
-                      <div className="w-[240px] h-[240px] rounded-full border-2 border-white shadow-[0_0_0_9999px_rgba(0,0,0,0.75)] relative overflow-hidden">
-                        {/* 3x3 Grid */}
-                        <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 opacity-25 pointer-events-none">
-                          <div className="border-r border-b border-white" />
-                          <div className="border-r border-b border-white" />
-                          <div className="border-b border-white" />
-                          <div className="border-r border-b border-white" />
-                          <div className="border-r border-b border-white" />
-                          <div className="border-b border-white" />
-                          <div className="border-r border-white" />
-                          <div className="border-r border-white" />
-                          <div />
+                {/* Viewport Interactive Cropper Frame */}
+                {(() => {
+                  const CIRCLE_SIZE = 260;
+                  const rawW = cropImgDims.w || 300;
+                  const rawH = cropImgDims.h || 300;
+                  const baseScale = Math.max(CIRCLE_SIZE / rawW, CIRCLE_SIZE / rawH);
+                  const displayW = rawW * baseScale * cropZoom;
+                  const displayH = rawH * baseScale * cropZoom;
+
+                  return (
+                    <div 
+                      className="relative w-[300px] h-[300px] mx-auto bg-slate-950 rounded-3xl overflow-hidden cursor-grab active:cursor-grabbing select-none border-4 border-white shadow-2xl flex items-center justify-center touch-none"
+                      onMouseDown={(e) => handlePanStart(e.clientX, e.clientY)}
+                      onMouseMove={(e) => handlePanMove(e.clientX, e.clientY)}
+                      onMouseUp={handlePanEnd}
+                      onMouseLeave={handlePanEnd}
+                      onTouchStart={handleTouchStart}
+                      onTouchMove={handleTouchMove}
+                      onTouchEnd={handleTouchEnd}
+                    >
+                      {/* Circular Viewfinder Overlay */}
+                      <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center">
+                        <div className="w-[260px] h-[260px] rounded-full border-2 border-emerald-400/50 shadow-[0_0_0_9999px_rgba(0,0,0,0.8)] relative overflow-hidden">
+                          {/* 3x3 Grid */}
+                          <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 opacity-20 pointer-events-none">
+                            <div className="border-r border-b border-white" />
+                            <div className="border-r border-b border-white" />
+                            <div className="border-b border-white" />
+                            <div className="border-r border-b border-white" />
+                            <div className="border-r border-b border-white" />
+                            <div className="border-b border-white" />
+                            <div className="border-r border-white" />
+                            <div className="border-r border-white" />
+                            <div />
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    {/* Transformed Image Preview: Exact Sized matching Canvas geometry */}
-                    <div
-                      className="absolute pointer-events-none"
-                      style={{
-                        width: `${displayW}px`,
-                        height: `${displayH}px`,
-                        left: '50%',
-                        top: '50%',
-                        transform: `translate(-50%, -50%) translate(${cropPan.x}px, ${cropPan.y}px) rotate(${cropRotation}deg)`,
-                        transformOrigin: 'center center'
-                      }}
-                    >
-                      <img
-                        ref={cropImageRef}
-                        src={cropImageRaw || ''}
-                        alt="Crop Preview"
-                        draggable={false}
-                        className="w-full h-full object-fill pointer-events-none block"
+                      {/* Transformed Image Preview */}
+                      <div
+                        className="absolute pointer-events-none"
+                        style={{
+                          width: `${displayW}px`,
+                          height: `${displayH}px`,
+                          left: '50%',
+                          top: '50%',
+                          transform: `translate(-50%, -50%) translate(${cropPan.x}px, ${cropPan.y}px) rotate(${cropRotation}deg)`,
+                          transformOrigin: 'center center'
+                        }}
+                      >
+                        <img
+                          ref={cropImageRef}
+                          src={cropImageRaw || ''}
+                          alt="Crop Preview"
+                          draggable={false}
+                          className="w-full h-full object-fill pointer-events-none block"
+                        />
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Zoom & Rotation Controls Bar */}
+                <div className="bg-slate-50 rounded-2.5xl p-5 border border-slate-200/80 space-y-4 shadow-inner">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between text-xs font-black text-slate-500 uppercase tracking-wider px-1">
+                      <span>ছবি জুম করুন (Zoom)</span>
+                      <span>{Math.round(cropZoom * 100)}%</span>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <button
+                        type="button"
+                        onClick={() => setCropZoom((prev) => Math.max(0.5, Number((prev - 0.2).toFixed(2))))}
+                        className="w-10 h-10 bg-white hover:bg-slate-100 text-slate-700 rounded-xl border border-slate-200 flex items-center justify-center cursor-pointer shadow-sm active:scale-95 text-lg font-black"
+                      >
+                        -
+                      </button>
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="3.0"
+                        step="0.05"
+                        value={cropZoom}
+                        onChange={(e) => setCropZoom(parseFloat(e.target.value))}
+                        className="flex-1 accent-emerald-600 h-2 rounded-lg cursor-pointer"
                       />
+                      <button
+                        type="button"
+                        onClick={() => setCropZoom((prev) => Math.min(3.0, Number((prev + 0.2).toFixed(2))))}
+                        className="w-10 h-10 bg-white hover:bg-slate-100 text-slate-700 rounded-xl border border-slate-200 flex items-center justify-center cursor-pointer shadow-sm active:scale-95 text-lg font-black"
+                      >
+                        +
+                      </button>
                     </div>
                   </div>
-                );
-              })()}
 
-              {/* Zoom & Rotation Controls Bar */}
-              <div className="space-y-2 p-2.5 bg-slate-50 rounded-2xl border border-slate-200/80 text-[11px] font-bold">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setCropZoom((prev) => Math.max(0.5, Number((prev - 0.15).toFixed(2))))}
-                      className="w-7 h-7 bg-white hover:bg-slate-100 text-slate-700 rounded-lg border border-slate-200 flex items-center justify-center cursor-pointer shadow-xs active:scale-95 text-sm font-black"
-                      title="ছোট করুন (Zoom Out)"
-                    >
-                      -
-                    </button>
-                    <input
-                      type="range"
-                      min="0.5"
-                      max="3.0"
-                      step="0.05"
-                      value={cropZoom}
-                      onChange={(e) => setCropZoom(parseFloat(e.target.value))}
-                      className="w-24 sm:w-28 accent-emerald-600 cursor-pointer"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setCropZoom((prev) => Math.min(3.0, Number((prev + 0.15).toFixed(2))))}
-                      className="w-7 h-7 bg-white hover:bg-slate-100 text-slate-700 rounded-lg border border-slate-200 flex items-center justify-center cursor-pointer shadow-xs active:scale-95 text-sm font-black"
-                      title="বড় করুন (Zoom In)"
-                    >
-                      +
-                    </button>
-                  </div>
-
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-3 pt-2">
                     <button
                       type="button"
                       onClick={() => setCropRotation((prev) => (prev + 90) % 360)}
-                      className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 rounded-lg border border-slate-200 flex items-center gap-1 cursor-pointer shadow-xs active:scale-95 text-[10.5px]"
+                      className="flex-1 py-3 bg-white hover:bg-slate-100 text-slate-700 rounded-xl border border-slate-200 flex items-center justify-center gap-2 cursor-pointer shadow-sm active:scale-95 text-xs font-black"
                     >
-                      <RotateCw className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>90°</span>
+                      <RotateCw className="w-4 h-4 text-emerald-600" />
+                      <span>ঘোরান (90°)</span>
                     </button>
 
                     <button
@@ -1285,24 +1329,24 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
                         setCropZoom(1);
                         setCropPan({ x: 0, y: 0 });
                       }}
-                      className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-700 rounded-lg border border-slate-200 flex items-center gap-1 cursor-pointer shadow-xs active:scale-95 text-[10.5px]"
-                      title="পজিশন ও জুম রিসেট"
+                      className="flex-1 py-3 bg-white hover:bg-slate-100 text-slate-700 rounded-xl border border-slate-200 flex items-center justify-center gap-2 cursor-pointer shadow-sm active:scale-95 text-xs font-black"
                     >
-                      <RotateCcw className="w-3.5 h-3.5 text-amber-600" />
+                      <RotateCcw className="w-4 h-4 text-amber-600" />
+                      <span>রিসেট</span>
                     </button>
                   </div>
                 </div>
               </div>
 
               {/* Action Buttons */}
-              <div className="flex items-center gap-2 pt-1">
+              <div className="p-6 bg-slate-50 border-t border-slate-100 grid grid-cols-3 gap-3">
                 <button
                   type="button"
                   onClick={() => {
                     setShowCropperModal(false);
                     setCropImageRaw(null);
                   }}
-                  className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer text-center"
+                  className="py-4 bg-white hover:bg-slate-100 text-slate-600 font-black rounded-2xl border border-slate-200 transition-all active:scale-95 cursor-pointer text-center text-sm"
                 >
                   বাতিল
                 </button>
@@ -1311,14 +1355,17 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
                   type="button"
                   disabled={savingCroppedPic}
                   onClick={handleCropAndSave}
-                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-emerald-900/10 active:scale-95"
+                  className="col-span-2 py-4 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-2xl text-base shadow-lg transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-2 disabled:bg-slate-300 disabled:shadow-none"
                 >
                   {savingCroppedPic ? (
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <>
+                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      <span>সংরক্ষণ হচ্ছে...</span>
+                    </>
                   ) : (
                     <>
-                      <Check className="w-4 h-4 stroke-[3]" />
-                      <span>ক্রপ ও সেভ করুন</span>
+                      <Check className="w-5 h-5 stroke-[3]" />
+                      <span>ক্রপ ও সেভ সম্পন্ন করুন</span>
                     </>
                   )}
                 </button>
@@ -1327,258 +1374,260 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
           </div>
         )}
       </AnimatePresence>
-
+ 
       {/* ---------------------------------------------------- */}
       {/* 👑 Shareholder Rules & Application Modal */}
       {/* ---------------------------------------------------- */}
       <AnimatePresence>
         {showShareholderModal && (
-          <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 text-left overflow-y-auto">
+          <div className="fixed inset-0 z-[130] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            
             <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-rose-200 overflow-hidden space-y-4 my-auto max-h-[90vh] flex flex-col"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
             >
               {/* Modal Header */}
-              <div className="flex items-center justify-between pb-3 border-b border-rose-100 shrink-0">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-10 h-10 rounded-2xl bg-rose-50 text-rose-600 border border-rose-200 flex items-center justify-center text-xl shadow-xs">
+              <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-white/10 flex items-center justify-center text-xl shadow-xs border border-white/10">
                     👑
                   </div>
                   <div>
-                    <h3 className="text-sm sm:text-base font-black text-slate-900 flex items-center gap-2">
-                      <span>শেয়ার হোল্ডার সদস্য নীতিমালা ও আবেদন</span>
-                      <span className="text-[10px] bg-rose-100 text-rose-800 px-2 py-0.5 rounded-full font-bold">লাল টিক ভেরিফাইড</span>
-                    </h3>
-                    <p className="text-[10.5px] text-slate-500">নিয়ম ও শর্তাবলি পড়ে শেয়ার হোল্ডার ফরম ফিলাপ করুন</p>
+                    <h3 className="text-lg font-black leading-tight">শেয়ার হোল্ডার আবেদন</h3>
+                    <p className="text-[10px] text-emerald-100/70 font-medium tracking-wide uppercase">Shareholder Membership Portal</p>
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setShowShareholderModal(false)}
-                  className="p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 cursor-pointer"
+                  className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
-              {upgradeModalMsg && (
-                <div className="bg-rose-50 border border-rose-200 text-rose-800 p-3 rounded-2xl text-xs font-bold shrink-0">
-                  {upgradeModalMsg}
-                </div>
-              )}
+              <div className="flex-1 overflow-y-auto p-6 space-y-6 flex flex-col">
+                {upgradeModalMsg && (
+                  <div className="bg-rose-50 border border-rose-200 text-rose-800 p-4 rounded-2xl text-xs font-bold shadow-sm shrink-0">
+                    {upgradeModalMsg}
+                  </div>
+                )}
 
-              {/* Scrollable Content */}
-              <div className="overflow-y-auto pr-1 space-y-4 text-xs">
-                {/* Rules & Conditions Card */}
-                <div className="bg-rose-50/70 border border-rose-200/80 rounded-2xl p-4 space-y-2.5">
-                  <h4 className="font-black text-rose-900 text-xs flex items-center gap-1.5">
-                    <span>📜</span>
-                    <span>শেয়ার হোল্ডার হওয়ার আবশ্যকীয় নিয়ম ও শর্তাবলীঃ</span>
-                  </h4>
-                  <ul className="space-y-2 text-[11px] text-slate-700 leading-relaxed font-medium">
-                    <li className="flex items-start gap-2">
-                      <span className="text-rose-600 font-bold">1.</span>
-                      <span><strong>বড় প্রজেক্ট ও জায়গার ক্যাপাসিটি:</strong> আমরা যখন কোনো জমি বা বড় প্রজেক্ট ক্রয় করব, তখন সর্বনিম্ন <strong>50,000 টাকা থেকে 5,00,000 টাকা (5 লাখ টাকা)</strong> পর্যন্ত এককালীন দেওয়ার আর্থিক সক্ষমতা থাকতে হবে।</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-rose-600 font-bold">2.</span>
-                      <span><strong>মাসিক নিয়মিত সঞ্চয় কিস্তি:</strong> প্রতি মাসে মিনিমাম <strong>1,000 টাকা থেকে 5,000 টাকা</strong> পর্যন্ত সঞ্চয় কিস্তি নিয়মিত চালিয়ে যেতে হবে।</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-rose-600 font-bold">3.</span>
-                      <span><strong>100% সম্পূর্ণ প্রোফাইল তথ্য:</strong> পিতা, মাতা, এনআইডি নম্বর, জন্ম তারিখ, পেশা, নমিনি ও জরুরি যোগাযোগ নম্বর বাধ্যতামূলক।</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-rose-600 font-bold">4.</span>
-                      <span><strong>সম্মাননা ও অধিকার:</strong> শেয়ার হোল্ডার সদস্য হিসেবে প্রোফাইলে <strong>লাল ভেরিফাইড টিক (Red Verified Tick)</strong> ব্যাজ প্রদর্শন করবে এবং প্রজেক্টের মুনাফা বণ্টন পাবেন।</span>
-                    </li>
-                  </ul>
-                </div>
+                {/* Scrollable Content Container */}
+                <div className="flex-1 overflow-y-auto pr-1 space-y-4 text-xs">
+                  {/* Rules & Conditions Card */}
+                  <div className="bg-rose-50/70 border border-rose-200/80 rounded-2xl p-4 space-y-2.5">
+                    <h4 className="font-black text-rose-900 text-xs flex items-center gap-1.5">
+                      <span>📜</span>
+                      <span>শেয়ার হোল্ডার হওয়ার আবশ্যকীয় নিয়ম ও শর্তাবলীঃ</span>
+                    </h4>
+                    <ul className="space-y-2 text-[11px] text-slate-700 leading-relaxed font-medium">
+                      <li className="flex items-start gap-2">
+                        <span className="text-rose-600 font-bold">1.</span>
+                        <span><strong>বড় প্রজেক্ট ও জায়গার ক্যাপাসিটি:</strong> আমরা যখন কোনো জমি বা বড় প্রজেক্ট ক্রয় করব, তখন সর্বনিম্ন <strong>50,000 টাকা থেকে 5,00,000 টাকা (5 লাখ টাকা)</strong> পর্যন্ত এককালীন দেওয়ার আর্থিক সক্ষমতা থাকতে হবে।</span>
+                      </li>
+                      <li className="flex items-start gap-2">
+                        <span className="text-rose-600 font-bold">2.</span>
+                        <span><strong>মাসিক নিয়মিত সঞ্চয় কিস্তি:</strong> প্রতি মাসে মিনিমাম <strong>1,000 টাকা থেকে 5,000 টাকা</strong> পর্যন্ত সঞ্চয় কিস্তি নিয়মিত চালিয়ে যেতে হবে।</span>
+                      </li>
+                      <li className="flex items-start gap-2">
+                        <span className="text-rose-600 font-bold">3.</span>
+                        <span><strong>100% সম্পূর্ণ প্রোফাইল তথ্য:</strong> পিতা, মাতা, এনআইডি নম্বর, জন্ম তারিখ, পেশা, নমিনি ও জরুরি যোগাযোগ নম্বর বাধ্যতামূলক।</span>
+                      </li>
+                      <li className="flex items-start gap-2">
+                        <span className="text-rose-600 font-bold">4.</span>
+                        <span><strong>সম্মাননা ও অধিকার:</strong> শেয়ার হোল্ডার সদস্য হিসেবে প্রোফাইলে <strong>লাল ভেরিফাইড টিক (Red Verified Tick)</strong> ব্যাজ প্রদর্শন করবে এবং প্রজেক্টের মুনাফা বণ্টন পাবেন।</span>
+                      </li>
+                    </ul>
+                  </div>
 
-                {/* Form Fields: Monthly Savings Target */}
-                <div className="space-y-2">
-                  <label className="block text-xs font-black text-slate-800">
-                    মাসিক সঞ্চয় কিস্তি নির্বাচন করুন (টাকা)*:
-                  </label>
-                  <div className="grid grid-cols-4 gap-2">
-                    {[1000, 2000, 3000, 5000].map((amt) => (
-                      <button
-                        key={amt}
-                        type="button"
-                        onClick={() => setModalSavingsTarget(amt)}
-                        className={`py-2 px-1 rounded-xl text-center font-bold text-xs border transition cursor-pointer ${
-                          modalSavingsTarget === amt
-                            ? 'bg-rose-600 text-white border-rose-600 shadow-sm'
-                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                        }`}
-                      >
-                        ৳{amt.toLocaleString('bn-BD')}
-                      </button>
-                    ))}
+                  {/* Form Fields: Monthly Savings Target */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-black text-slate-800">
+                      মাসিক সঞ্চয় কিস্তি নির্বাচন করুন (টাকা)*:
+                    </label>
+                    <div className="grid grid-cols-4 gap-2">
+                      {[1000, 2000, 3000, 5000].map((amt) => (
+                        <button
+                          key={amt}
+                          type="button"
+                          onClick={() => setModalSavingsTarget(amt)}
+                          className={`py-2 px-1 rounded-xl text-center font-bold text-xs border transition cursor-pointer ${
+                            modalSavingsTarget === amt
+                              ? 'bg-rose-600 text-white border-rose-600 shadow-sm'
+                              : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          ৳{amt.toLocaleString('bn-BD')}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Profile Fields Required for 100% completion */}
+                  <div className="space-y-3 pt-2 border-t border-slate-100">
+                    <h5 className="font-black text-slate-800 text-[11.5px] flex items-center justify-between">
+                      <span>প্রোফাইল তথ্য ও ভেরিফিকেশন ফরমঃ</span>
+                      {isProfileComplete && (
+                        <span className="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                          ✓ তথ্য সম্পূর্ণ
+                        </span>
+                      )}
+                    </h5>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-600 mb-1">পেশা (Profession)*</label>
+                        <input
+                          type="text"
+                          value={profession}
+                          onChange={(e) => setProfession(e.target.value)}
+                          placeholder="যেমন: ব্যবসা / চাকরি"
+                          className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-600 mb-1">বিকল্প / জরুরি ফোন নম্বর*</label>
+                        <input
+                          type="tel"
+                          value={emergencyPhone}
+                          onChange={(e) => setEmergencyPhone(e.target.value)}
+                          placeholder="01XXXXXXXXX"
+                          className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-600 mb-1">পিতার নাম (Father's Name)*</label>
+                        <input
+                          type="text"
+                          value={fatherName}
+                          onChange={(e) => setFatherName(e.target.value)}
+                          placeholder="পিতার নাম লিখুন"
+                          className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-600 mb-1">মাতার নাম (Mother's Name)*</label>
+                        <input
+                          type="text"
+                          value={motherName}
+                          onChange={(e) => setMotherName(e.target.value)}
+                          placeholder="মাতার নাম লিখুন"
+                          className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-600 mb-1">জাতীয় পরিচয়পত্র (NID)*</label>
+                        <input
+                          type="text"
+                          value={nid}
+                          onChange={(e) => setNid(e.target.value)}
+                          placeholder="10/13/17 ডিজিটের NID"
+                          className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-600 mb-1">জন্ম তারিখ (DOB)*</label>
+                        <input
+                          type="date"
+                          value={dob}
+                          onChange={(e) => setDob(e.target.value)}
+                          className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-600 mb-1">নমিনীর নাম (Nominee Name)*</label>
+                        <input
+                          type="text"
+                          value={nomineeName}
+                          onChange={(e) => setNomineeName(e.target.value)}
+                          placeholder="নমিনীর নাম"
+                          className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-600 mb-1">নমিনীর ফোন নম্বর*</label>
+                        <input
+                          type="tel"
+                          value={nomineePhone}
+                          onChange={(e) => setNomineePhone(e.target.value)}
+                          placeholder="01XXXXXXXXX"
+                          className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-600 mb-1">বিভাগ (Division)*</label>
+                        <input
+                          type="text"
+                          value={division}
+                          onChange={(e) => setDivision(e.target.value)}
+                          placeholder="যেমন: ঢাকা"
+                          className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-600 mb-1">জেলা (District)*</label>
+                        <input
+                          type="text"
+                          value={district}
+                          onChange={(e) => setDistrict(e.target.value)}
+                          placeholder="যেমন: গাজীপুর"
+                          className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-600 mb-1">থানা / উপজেলা (Thana)*</label>
+                        <input
+                          type="text"
+                          value={thana}
+                          onChange={(e) => setThana(e.target.value)}
+                          placeholder="যেমন: সদর"
+                          className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-600 mb-1">গ্রাম / পোস্ট অফিস / ঠিকানা (Village / Post Office)*</label>
+                        <input
+                          type="text"
+                          value={postOffice}
+                          onChange={(e) => setPostOffice(e.target.value)}
+                          placeholder="গ্রাম, রোড বা পোস্ট অফিস"
+                          className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                {/* Profile Fields Required for 100% completion */}
-                <div className="space-y-3 pt-2 border-t border-slate-100">
-                  <h5 className="font-black text-slate-800 text-[11.5px] flex items-center justify-between">
-                    <span>প্রোফাইল তথ্য ও ভেরিফিকেশন ফরমঃ</span>
-                    {isProfileComplete && (
-                      <span className="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                        ✓ তথ্য সম্পূর্ণ
-                      </span>
+                {/* Action Buttons */}
+                <div className="flex items-center gap-2 pt-3 border-t border-slate-100 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setShowShareholderModal(false)}
+                    className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer text-center"
+                  >
+                    বাতিল
+                  </button>
+                  <button
+                    type="button"
+                    disabled={submittingUpgrade}
+                    onClick={() => handleApplyMembership('shareholder', modalSavingsTarget)}
+                    className="flex-2 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-rose-900/10"
+                  >
+                    {submittingUpgrade ? (
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <>
+                        <span>👑</span>
+                        <span>শেয়ার হোল্ডার আবেদন সম্পন্ন করুন</span>
+                      </>
                     )}
-                  </h5>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">পেশা (Profession)*</label>
-                      <input
-                        type="text"
-                        value={profession}
-                        onChange={(e) => setProfession(e.target.value)}
-                        placeholder="যেমন: ব্যবসা / চাকরি"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">বিকল্প / জরুরি ফোন নম্বর*</label>
-                      <input
-                        type="tel"
-                        value={emergencyPhone}
-                        onChange={(e) => setEmergencyPhone(e.target.value)}
-                        placeholder="01XXXXXXXXX"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">পিতার নাম (Father's Name)*</label>
-                      <input
-                        type="text"
-                        value={fatherName}
-                        onChange={(e) => setFatherName(e.target.value)}
-                        placeholder="পিতার নাম লিখুন"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">মাতার নাম (Mother's Name)*</label>
-                      <input
-                        type="text"
-                        value={motherName}
-                        onChange={(e) => setMotherName(e.target.value)}
-                        placeholder="মাতার নাম লিখুন"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">জাতীয় পরিচয়পত্র (NID)*</label>
-                      <input
-                        type="text"
-                        value={nid}
-                        onChange={(e) => setNid(e.target.value)}
-                        placeholder="10/13/17 ডিজিটের NID"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">জন্ম তারিখ (DOB)*</label>
-                      <input
-                        type="date"
-                        value={dob}
-                        onChange={(e) => setDob(e.target.value)}
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">নমিনীর নাম (Nominee Name)*</label>
-                      <input
-                        type="text"
-                        value={nomineeName}
-                        onChange={(e) => setNomineeName(e.target.value)}
-                        placeholder="নমিনীর নাম"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">নমিনীর ফোন নম্বর*</label>
-                      <input
-                        type="tel"
-                        value={nomineePhone}
-                        onChange={(e) => setNomineePhone(e.target.value)}
-                        placeholder="01XXXXXXXXX"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">বিভাগ (Division)*</label>
-                      <input
-                        type="text"
-                        value={division}
-                        onChange={(e) => setDivision(e.target.value)}
-                        placeholder="যেমন: ঢাকা"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">জেলা (District)*</label>
-                      <input
-                        type="text"
-                        value={district}
-                        onChange={(e) => setDistrict(e.target.value)}
-                        placeholder="যেমন: গাজীপুর"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">থানা / উপজেলা (Thana)*</label>
-                      <input
-                        type="text"
-                        value={thana}
-                        onChange={(e) => setThana(e.target.value)}
-                        placeholder="যেমন: সদর"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">গ্রাম / পোস্ট অফিস / ঠিকানা (Village / Post Office)*</label>
-                      <input
-                        type="text"
-                        value={postOffice}
-                        onChange={(e) => setPostOffice(e.target.value)}
-                        placeholder="গ্রাম, রোড বা পোস্ট অফিস"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-rose-500 focus:outline-none"
-                      />
-                    </div>
-                  </div>
+                  </button>
                 </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex items-center gap-2 pt-3 border-t border-slate-100 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setShowShareholderModal(false)}
-                  className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer text-center"
-                >
-                  বাতিল
-                </button>
-                <button
-                  type="button"
-                  disabled={submittingUpgrade}
-                  onClick={() => handleApplyMembership('shareholder', modalSavingsTarget)}
-                  className="flex-2 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-rose-900/10"
-                >
-                  {submittingUpgrade ? (
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <>
-                      <span>👑</span>
-                      <span>শেয়ার হোল্ডার আবেদন সম্পন্ন করুন</span>
-                    </>
-                  )}
-                </button>
               </div>
             </motion.div>
           </div>
@@ -1590,85 +1639,87 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
       {/* ---------------------------------------------------- */}
       <AnimatePresence>
         {showInvestorModal && (
-          <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 text-left overflow-y-auto">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-sky-200 overflow-hidden space-y-4 my-auto max-h-[90vh] flex flex-col"
-            >
-              {/* Modal Header */}
-              <div className="flex items-center justify-between pb-3 border-b border-sky-100 shrink-0">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-10 h-10 rounded-2xl bg-sky-50 text-sky-600 border border-sky-200 flex items-center justify-center text-xl shadow-xs">
-                    💎
-                  </div>
-                  <div>
-                    <h3 className="text-sm sm:text-base font-black text-slate-900 flex items-center gap-2">
-                      <span>ইনভেস্টর সদস্য নীতিমালা ও আবেদন</span>
-                      <span className="text-[10px] bg-sky-100 text-sky-800 px-2 py-0.5 rounded-full font-bold">ব্লু টিক ভেরিফাইড</span>
-                    </h3>
-                    <p className="text-[10.5px] text-slate-500">নিয়ম ও শর্তাবলি পড়ে ইনভেস্টর ফরম ফিলাপ করুন</p>
-                  </div>
+          <motion.div
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className="fixed inset-0 z-[140] bg-white flex flex-col font-sans text-left"
+          >
+            {/* Top Spacer for Notification Bar */}
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 border-b border-sky-100 bg-white sticky top-0 z-10">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-sky-50 text-sky-600 border border-sky-200 flex items-center justify-center text-xl shadow-xs">
+                  💎
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setShowInvestorModal(false)}
-                  className="p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 cursor-pointer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 leading-tight">
+                    ইনভেস্টর সদস্য নীতিমালা
+                  </h3>
+                  <p className="text-[10px] text-slate-500 font-bold mt-0.5">নিয়ম ও শর্তাবলি পড়ে আবেদন করুন</p>
+                </div>
               </div>
+              <button
+                type="button"
+                onClick={() => setShowInvestorModal(false)}
+                className="p-1 hover:bg-slate-100 rounded-full text-slate-400 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-              {upgradeModalMsg && (
-                <div className="bg-rose-50 border border-rose-200 text-rose-800 p-3 rounded-2xl text-xs font-bold shrink-0">
-                  {upgradeModalMsg}
-                </div>
-              )}
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="max-w-lg mx-auto space-y-5">
+                {upgradeModalMsg && (
+                  <div className="bg-rose-50 border border-rose-200 text-rose-800 p-3.5 rounded-2xl text-xs font-black shadow-3xs">
+                    {upgradeModalMsg}
+                  </div>
+                )}
 
-              {/* Scrollable Content */}
-              <div className="overflow-y-auto pr-1 space-y-4 text-xs">
                 {/* Rules & Conditions Card */}
-                <div className="bg-sky-50/70 border border-sky-200/80 rounded-2xl p-4 space-y-2.5">
-                  <h4 className="font-black text-sky-900 text-xs flex items-center gap-1.5">
+                <div className="bg-sky-50 border border-sky-200 rounded-2xl p-4 space-y-3 shadow-3xs">
+                  <h4 className="font-black text-sky-900 text-xs flex items-center gap-2 uppercase tracking-wider">
                     <span>📜</span>
-                    <span>ইনভেস্টর হওয়ার আবশ্যকীয় নিয়ম ও শর্তাবলীঃ</span>
+                    <span>আবশ্যকীয় নিয়ম ও শর্তাবলীঃ</span>
                   </h4>
-                  <ul className="space-y-2 text-[11px] text-slate-700 leading-relaxed font-medium">
-                    <li className="flex items-start gap-2">
-                      <span className="text-sky-600 font-bold">1.</span>
-                      <span><strong>এককালীন কোনো বড় বাধ্যবাধকতা নেই:</strong> জমি কেনা বা বড় প্রজেক্টের ক্ষেত্রে কোনো এককালীন বড় অঙ্কের অর্থ দেওয়ার বাধ্যবাধকতা নেই।</span>
+                  <ul className="space-y-3 text-[11px] text-slate-700 leading-relaxed font-bold">
+                    <li className="flex items-start gap-2.5">
+                      <span className="text-sky-600 font-black">১.</span>
+                      <span><strong>এককালীন কোনো বড় বাধ্যবাধকতা নেই:</strong> কোনো বড় অঙ্কের অর্থ দেওয়ার বাধ্যবাধকতা নেই।</span>
                     </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-sky-600 font-bold">2.</span>
-                      <span><strong>মাসিক নিয়মিত সঞ্চয় কিস্তি:</strong> প্রতি মাসে মিনিমাম <strong>500 টাকা থেকে 5,000 টাকা</strong> পর্যন্ত সঞ্চয় কিস্তি নিয়মিত চালিয়ে যেতে হবে।</span>
+                    <li className="flex items-start gap-2.5">
+                      <span className="text-sky-600 font-black">২.</span>
+                      <span><strong>মাসিক সঞ্চয় কিস্তি:</strong> প্রতি মাসে মিনিমাম <strong>৫০০ টাকা থেকে ৫,০০০ টাকা</strong> সঞ্চয় করতে হবে।</span>
                     </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-sky-600 font-bold">3.</span>
-                      <span><strong>100% সম্পূর্ণ প্রোফাইল তথ্য:</strong> পিতা, মাতা, এনআইডি নম্বর, জন্ম তারিখ, পেশা, নমিনি ও জরুরি যোগাযোগ নম্বর পূরণ বাধ্যতামূলক।</span>
+                    <li className="flex items-start gap-2.5">
+                      <span className="text-sky-600 font-black">৩.</span>
+                      <span><strong>১০০% সম্পূর্ণ প্রোফাইল তথ্য:</strong> এনআইডি, নমিনি ও জরুরি যোগাযোগ নম্বর পূরণ বাধ্যতামূলক।</span>
                     </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-sky-600 font-bold">4.</span>
-                      <span><strong>সম্মাননা ও অধিকার:</strong> ইনভেস্টর সদস্য হিসেবে প্রোফাইলে <strong>ব্লু ভেরিফাইড টিক (Blue Verified Tick)</strong> ব্যাজ প্রদর্শন করবে এবং সঞ্চয়ের ওপর নিয়মিত মুনাফা লাভ করবেন।</span>
+                    <li className="flex items-start gap-2.5">
+                      <span className="text-sky-600 font-black">৪.</span>
+                      <span><strong>সম্মাননা ও অধিকার:</strong> প্রোফাইলে <strong>ব্লু ভেরিফাইড টিক</strong> প্রদর্শিত হবে।</span>
                     </li>
                   </ul>
                 </div>
 
                 {/* Form Fields: Monthly Savings Target */}
-                <div className="space-y-2">
-                  <label className="block text-xs font-black text-slate-800">
-                    মাসিক সঞ্চয় কিস্তি নির্বাচন করুন (টাকা)*:
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-3">
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider">
+                    মাসিক সঞ্চয় কিস্তি নির্বাচন করুন *
                   </label>
-                  <div className="grid grid-cols-5 gap-1.5">
+                  <div className="grid grid-cols-3 gap-2">
                     {[500, 1000, 2000, 3000, 5000].map((amt) => (
                       <button
                         key={amt}
                         type="button"
                         onClick={() => setModalSavingsTarget(amt)}
-                        className={`py-2 px-1 rounded-xl text-center font-bold text-xs border transition cursor-pointer ${
+                        className={`py-3 px-1 rounded-xl text-center font-black text-xs border transition active:scale-95 ${
                           modalSavingsTarget === amt
-                            ? 'bg-sky-600 text-white border-sky-600 shadow-sm'
-                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                            ? 'bg-sky-600 text-white border-sky-600 shadow-md shadow-sky-200'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
                         }`}
                       >
                         ৳{amt.toLocaleString('bn-BD')}
@@ -1677,168 +1728,200 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
                   </div>
                 </div>
 
-                {/* Profile Fields Required for 100% completion */}
-                <div className="space-y-3 pt-2 border-t border-slate-100">
-                  <h5 className="font-black text-slate-800 text-[11.5px] flex items-center justify-between">
-                    <span>প্রোফাইল তথ্য ও ভেরিফিকেশন ফরমঃ</span>
-                    {isProfileComplete && (
-                      <span className="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                        ✓ তথ্য সম্পূর্ণ
-                      </span>
-                    )}
+                {/* Profile Fields */}
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-4">
+                  <h5 className="font-black text-slate-800 text-[11px] uppercase tracking-wider border-b border-slate-200 pb-2">
+                    প্রোফাইল তথ্য ও ভেরিফিকেশন ফরমঃ
                   </h5>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">পেশা (Profession)*</label>
+                  <div className="grid grid-cols-1 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="block text-[10px] font-black text-slate-500 uppercase">পেশা (Profession) *</label>
                       <input
                         type="text"
                         value={profession}
                         onChange={(e) => setProfession(e.target.value)}
                         placeholder="যেমন: ব্যবসা / চাকরি"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-sky-500 focus:outline-none"
+                        className="w-full text-xs font-bold px-3 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-1 focus:ring-sky-500 focus:outline-none shadow-sm"
                       />
                     </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">বিকল্প / জরুরি ফোন নম্বর*</label>
+                    <div className="space-y-1.5">
+                      <label className="block text-[10px] font-black text-slate-500 uppercase">বিকল্প ফোন নম্বর *</label>
                       <input
                         type="tel"
                         value={emergencyPhone}
                         onChange={(e) => setEmergencyPhone(e.target.value)}
                         placeholder="01XXXXXXXXX"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-sky-500 focus:outline-none"
+                        className="w-full text-xs font-bold px-3 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-1 focus:ring-sky-500 focus:outline-none shadow-sm"
                       />
                     </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">পিতার নাম (Father's Name)*</label>
-                      <input
-                        type="text"
-                        value={fatherName}
-                        onChange={(e) => setFatherName(e.target.value)}
-                        placeholder="পিতার নাম লিখুন"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-sky-500 focus:outline-none"
-                      />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="block text-[10px] font-black text-slate-500 uppercase">পিতার নাম *</label>
+                        <input
+                          type="text"
+                          value={fatherName}
+                          onChange={(e) => setFatherName(e.target.value)}
+                          className="w-full text-xs font-bold px-3 py-2.5 bg-white border border-slate-200 rounded-xl shadow-sm"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="block text-[10px] font-black text-slate-500 uppercase">মাতার নাম *</label>
+                        <input
+                          type="text"
+                          value={motherName}
+                          onChange={(e) => setMotherName(e.target.value)}
+                          className="w-full text-xs font-bold px-3 py-2.5 bg-white border border-slate-200 rounded-xl shadow-sm"
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">মাতার নাম (Mother's Name)*</label>
-                      <input
-                        type="text"
-                        value={motherName}
-                        onChange={(e) => setMotherName(e.target.value)}
-                        placeholder="মাতার নাম লিখুন"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-sky-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">জাতীয় পরিচয়পত্র (NID)*</label>
-                      <input
-                        type="text"
-                        value={nid}
-                        onChange={(e) => setNid(e.target.value)}
-                        placeholder="10/13/17 ডিজিটের NID"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-sky-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">জন্ম তারিখ (DOB)*</label>
-                      <input
-                        type="date"
-                        value={dob}
-                        onChange={(e) => setDob(e.target.value)}
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-sky-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">নমিনীর নাম (Nominee Name)*</label>
-                      <input
-                        type="text"
-                        value={nomineeName}
-                        onChange={(e) => setNomineeName(e.target.value)}
-                        placeholder="নমিনীর নাম"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-sky-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">নমিনীর ফোন নম্বর*</label>
-                      <input
-                        type="tel"
-                        value={nomineePhone}
-                        onChange={(e) => setNomineePhone(e.target.value)}
-                        placeholder="01XXXXXXXXX"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-sky-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">বিভাগ (Division)*</label>
-                      <input
-                        type="text"
-                        value={division}
-                        onChange={(e) => setDivision(e.target.value)}
-                        placeholder="যেমন: ঢাকা"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-sky-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">জেলা (District)*</label>
-                      <input
-                        type="text"
-                        value={district}
-                        onChange={(e) => setDistrict(e.target.value)}
-                        placeholder="যেমন: গাজীপুর"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-sky-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">থানা / উপজেলা (Thana)*</label>
-                      <input
-                        type="text"
-                        value={thana}
-                        onChange={(e) => setThana(e.target.value)}
-                        placeholder="যেমন: সদর"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-sky-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">গ্রাম / পোস্ট অফিস / ঠিকানা (Village / Post Office)*</label>
-                      <input
-                        type="text"
-                        value={postOffice}
-                        onChange={(e) => setPostOffice(e.target.value)}
-                        placeholder="গ্রাম, রোড বা পোস্ট অফিস"
-                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-sky-500 focus:outline-none"
-                      />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="block text-[10px] font-black text-slate-500 uppercase">জাতীয় পরিচয়পত্র *</label>
+                        <input
+                          type="text"
+                          value={nid}
+                          onChange={(e) => setNid(e.target.value)}
+                          className="w-full text-xs font-bold px-3 py-2.5 bg-white border border-slate-200 rounded-xl shadow-sm"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="block text-[10px] font-black text-slate-500 uppercase">জন্ম তারিখ *</label>
+                        <input
+                          type="date"
+                          value={dob}
+                          onChange={(e) => setDob(e.target.value)}
+                          className="w-full text-xs font-bold px-3 py-2.5 bg-white border border-slate-200 rounded-xl shadow-sm"
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Action Buttons */}
-              <div className="flex items-center gap-2 pt-3 border-t border-slate-100 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setShowInvestorModal(false)}
-                  className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer text-center"
-                >
-                  বাতিল
-                </button>
-                <button
-                  type="button"
-                  disabled={submittingUpgrade}
-                  onClick={() => handleApplyMembership('investor', modalSavingsTarget)}
-                  className="flex-2 py-2.5 bg-sky-600 hover:bg-sky-700 text-white font-black rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-sky-900/10"
-                >
-                  {submittingUpgrade ? (
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <>
-                      <span>💎</span>
-                      <span>ইনভেস্টর আবেদন সম্পন্ন করুন</span>
-                    </>
-                  )}
-                </button>
+                <div className="flex gap-3 pt-6 pb-20">
+                  <button
+                    type="button"
+                    onClick={() => setShowInvestorModal(false)}
+                    className="flex-1 py-4 bg-slate-100 hover:bg-slate-200 text-slate-600 font-black rounded-2xl text-sm active:scale-95 transition"
+                  >
+                    বাতিল
+                  </button>
+                  <button
+                    type="button"
+                    disabled={submittingUpgrade}
+                    onClick={() => handleApplyMembership('investor', modalSavingsTarget)}
+                    className="flex-[2] py-4 bg-sky-600 hover:bg-sky-700 text-white font-black rounded-2xl text-sm shadow-lg shadow-sky-200 active:scale-95 transition flex items-center justify-center gap-2"
+                  >
+                    {submittingUpgrade ? (
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <>
+                        <span>💎</span>
+                        <span>ইনভেস্টর আবেদন জমা দিন</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
-            </motion.div>
-          </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ---------------------------------------------------- */}
+      {/* 🟡 MODAL: SUPPORTER RULES & APPLICATION FORM */}
+      {/* ---------------------------------------------------- */}
+      <AnimatePresence>
+        {showSupporterModal && (
+          <motion.div
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className="fixed inset-0 z-[140] bg-white flex flex-col font-sans text-left"
+          >
+            {/* Top Spacer for Notification Bar */}
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 border-b border-amber-100 bg-white sticky top-0 z-10">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-50 text-amber-600 border border-amber-200 flex items-center justify-center text-xl shadow-xs">
+                  🟡
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 leading-tight">
+                    সাপোর্টার সদস্য নীতিমালা
+                  </h3>
+                  <p className="text-[10px] text-slate-500 font-bold mt-0.5">সদস্য আবেদন ও শর্তাবলি</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSupporterModal(false)}
+                className="p-1 hover:bg-slate-100 rounded-full text-slate-400 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="max-w-md mx-auto space-y-5">
+                {upgradeModalMsg && (
+                  <div className="bg-rose-50 border border-rose-200 text-rose-800 p-3.5 rounded-2xl text-xs font-black shadow-3xs">
+                    {upgradeModalMsg}
+                  </div>
+                )}
+
+                {/* Rules & Conditions Card */}
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 space-y-3 shadow-3xs">
+                  <h4 className="font-black text-amber-900 text-xs flex items-center gap-2 uppercase tracking-wider">
+                    <span>📜</span>
+                    <span>সাপোর্টার হওয়ার শর্তাবলীঃ</span>
+                  </h4>
+                  <ul className="space-y-3 text-[11px] text-slate-700 leading-relaxed font-bold">
+                    <li className="flex items-start gap-2.5">
+                      <span className="text-amber-600 font-black">১.</span>
+                      <span><strong>মাসিক কিস্তি ৳১,০০০:</strong> প্রতি মাসে নিয়মিত ১,০০০ টাকা সঞ্চয় করতে হবে।</span>
+                    </li>
+                    <li className="flex items-start gap-2.5">
+                      <span className="text-amber-600 font-black">২.</span>
+                      <span><strong>অতিরিক্ত ফি নেই:</strong> কোনো অতিরিক্ত মাসিক বা বাৎসরিক ফি নেই।</span>
+                    </li>
+                    <li className="flex items-start gap-2.5">
+                      <span className="text-amber-600 font-black">৩.</span>
+                      <span><strong>প্রোফাইল ভেরিফিকেশন:</strong> নমিনি ও সাধারণ তথ্য প্রদান বাধ্যতামূলক।</span>
+                    </li>
+                  </ul>
+                </div>
+
+                <div className="pt-10 pb-20 flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowSupporterModal(false)}
+                    className="flex-1 py-4 bg-slate-100 hover:bg-slate-200 text-slate-600 font-black rounded-2xl text-sm active:scale-95 transition"
+                  >
+                    বাতিল
+                  </button>
+                  <button
+                    type="button"
+                    disabled={submittingUpgrade}
+                    onClick={() => handleApplyMembership('supporter', 1000)}
+                    className="flex-[2] py-4 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-2xl text-sm shadow-lg shadow-amber-200 active:scale-95 transition flex items-center justify-center gap-2"
+                  >
+                    {submittingUpgrade ? (
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <>
+                        <span>🟡</span>
+                        <span>সাপোর্টার আবেদন সম্পন্ন করুন</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
 
@@ -2284,7 +2367,7 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
               </span>
             </div>
 
-            {/* 4 Category Cards Grid */}
+            {/* 5 Category Cards Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               {/* 1. ওনার (Owner) - Red */}
               <div className={`p-3 rounded-2xl border transition-all ${
@@ -2305,14 +2388,14 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
                       <span className="text-[9.5px] text-red-600 font-bold">প্রোফাইল কালারঃ লাল</span>
                     </div>
                   </div>
-                  <span className="text-[10px] font-black text-red-700 bg-red-100 px-2 py-0.5 rounded-lg border border-red-200">
-                    ৳৪,০০০/মাস
+                  <span className="text-[10px] font-black text-red-700 bg-red-100 px-2 py-0.5 rounded-lg border border-red-200 font-mono">
+                    ৳৫,০০০/মাস
                   </span>
                 </div>
                 <div className="space-y-1 text-[10px] text-slate-600 font-medium pt-1 border-t border-slate-200/80">
                   <div className="flex justify-between">
-                    <span>• ৩ মাস পর পর কিস্তিঃ</span>
-                    <strong className="text-red-700 font-bold">৳১০,০০০</strong>
+                    <span>• প্রজেক্ট এক্সট্রা ইনভেস্টমেন্টঃ</span>
+                    <strong className="text-red-700 font-bold">স্বচ্ছিক (পছন্দমতো পরিমাণ)</strong>
                   </div>
                   <div className="flex justify-between">
                     <span>• বাধ্যতামূলক নমিনিঃ</span>
@@ -2343,14 +2426,14 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
                       <span className="text-[9.5px] text-blue-600 font-bold">প্রোফাইল কালারঃ নীল</span>
                     </div>
                   </div>
-                  <span className="text-[10px] font-black text-blue-700 bg-blue-100 px-2 py-0.5 rounded-lg border border-blue-200">
-                    ৳২,০০০/মাস
+                  <span className="text-[10px] font-black text-blue-700 bg-blue-100 px-2 py-0.5 rounded-lg border border-blue-200 font-mono">
+                    ৳৩,০০০/মাস
                   </span>
                 </div>
                 <div className="space-y-1 text-[10px] text-slate-600 font-medium pt-1 border-t border-slate-200/80">
                   <div className="flex justify-between">
-                    <span>• ৩ মাস পর পর কিস্তিঃ</span>
-                    <strong className="text-blue-700 font-bold">৳৫,০০০</strong>
+                    <span>• প্রজেক্ট এক্সট্রা ইনভেস্টমেন্টঃ</span>
+                    <strong className="text-blue-700 font-bold">স্বচ্ছিক (পছন্দমতো পরিমাণ)</strong>
                   </div>
                   <div className="flex justify-between">
                     <span>• বাধ্যতামূলক নমিনিঃ</span>
@@ -2381,27 +2464,65 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
                       <span className="text-[9.5px] text-emerald-600 font-bold">প্রোফাইল কালারঃ সবুজ</span>
                     </div>
                   </div>
-                  <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-200">
-                    ৳১,০০০/মাস
+                  <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-200 font-mono">
+                    ৳২,০০০/মাস
                   </span>
                 </div>
                 <div className="space-y-1 text-[10px] text-slate-600 font-medium pt-1 border-t border-slate-200/80">
                   <div className="flex justify-between">
-                    <span>• ৩ মাস পর পর কিস্তিঃ</span>
-                    <strong className="text-emerald-700 font-bold">কোনো ফি নেই (৳০)</strong>
+                    <span>• প্রজেক্ট এক্সট্রা ইনভেস্টমেন্টঃ</span>
+                    <strong className="text-emerald-700 font-bold">স্বচ্ছিক (পছন্দমতো পরিমাণ)</strong>
                   </div>
                   <div className="flex justify-between">
                     <span>• বাধ্যতামূলক নমিনিঃ</span>
                     <strong className="text-slate-800 font-bold">২ জন</strong>
                   </div>
                   <p className="text-[9.5px] text-slate-500 pt-0.5 leading-tight">
-                    নির্ধারিত ১,০০০ টাকা মাসিক কিস্তি ব্যতিরেকে কোনো অতিরিক্ত টাকা দিতে হবে না।
+                    নির্ধারিত ২,০০০ টাকা মাসিক কিস্তি ব্যতিরেকে প্রজেক্টে স্বইচ্ছায় অংশ নেওয়ার সুযোগ।
                   </p>
                 </div>
               </div>
 
-              {/* 4. সাধারণ সদস্য (General) - Silver */}
+              {/* 4. সাপোর্টার (Supporter) - Yellow */}
               <div className={`p-3 rounded-2xl border transition-all ${
+                memberCategoryMeta.key === 'supporter' 
+                  ? 'bg-amber-50/90 border-amber-500 ring-2 ring-amber-500/40 shadow-md' 
+                  : 'bg-slate-50/80 border-slate-200 opacity-90 hover:opacity-100'
+              }`}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-base">🟡</span>
+                    <div>
+                      <h4 className="text-xs font-black text-amber-800 flex items-center gap-1">
+                        <span>সাপোর্টার</span>
+                        {memberCategoryMeta.key === 'supporter' && (
+                          <span className="text-[9px] bg-amber-500 text-white font-black px-1.5 py-0.2 rounded-full">বর্তমান</span>
+                        )}
+                      </h4>
+                      <span className="text-[9.5px] text-amber-700 font-bold">প্রোফাইল কালারঃ হলুদ</span>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-black text-amber-900 bg-amber-100 px-2 py-0.5 rounded-lg border border-amber-200 font-mono">
+                    ৳১,০০০/মাস
+                  </span>
+                </div>
+                <div className="space-y-1 text-[10px] text-slate-600 font-medium pt-1 border-t border-slate-200/80">
+                  <div className="flex justify-between">
+                    <span>• প্রজেক্ট এক্সট্রা ইনভেস্টমেন্টঃ</span>
+                    <strong className="text-amber-800 font-bold">স্বচ্ছিক (পছন্দমতো পরিমাণ)</strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>• বাধ্যতামূলক নমিনিঃ</span>
+                    <strong className="text-slate-800 font-bold">১ জন</strong>
+                  </div>
+                  <p className="text-[9.5px] text-slate-500 pt-0.5 leading-tight">
+                    নির্ধারিত ১,০০০ টাকা মাসিক কিস্তি ব্যতিরেকে প্রজেক্টে স্বইচ্ছায় অংশ নেওয়ার সুযোগ।
+                  </p>
+                </div>
+              </div>
+
+              {/* 5. সাধারণ সদস্য (General) - Silver */}
+              <div className={`p-3 rounded-2xl border transition-all sm:col-span-2 ${
                 memberCategoryMeta.key === 'regular' 
                   ? 'bg-slate-100/90 border-slate-400 ring-2 ring-slate-400/40 shadow-md' 
                   : 'bg-slate-50/80 border-slate-200 opacity-90 hover:opacity-100'
@@ -2425,8 +2546,8 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
                 </div>
                 <div className="space-y-1 text-[10px] text-slate-600 font-medium pt-1 border-t border-slate-200/80">
                   <div className="flex justify-between">
-                    <span>• ৩ মাস পর পর কিস্তিঃ</span>
-                    <strong className="text-slate-700 font-bold">প্রযোজ্য নয়</strong>
+                    <span>• প্রজেক্ট এক্সট্রা ইনভেস্টমেন্টঃ</span>
+                    <strong className="text-slate-700 font-bold">স্বচ্ছিক (পছন্দমতো পরিমাণ)</strong>
                   </div>
                   <div className="flex justify-between">
                     <span>• বাধ্যতামূলক নমিনিঃ</span>
@@ -2701,238 +2822,249 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
         </motion.div>
       )}
 
-      {/* Phone Change Request Modal */}
       <AnimatePresence>
         {showPhoneChangeModal && (
-          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 text-left">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-3xl max-w-md w-full p-5 shadow-2xl border border-slate-100 relative overflow-hidden space-y-4"
-            >
-              {/* Header */}
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center font-bold">
-                    <Phone className="w-5 h-5 text-[#009273]" />
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-black text-slate-900">মোবাইল নম্বর পরিবর্তনের আবেদন</h3>
-                    <p className="text-[10px] text-slate-500 font-medium">এডমিন অনুমোদন দিলে আপনার নম্বর অটোমেটিক আপডেট হবে</p>
-                  </div>
+          <motion.div
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className="fixed inset-0 z-[140] bg-white flex flex-col font-sans text-left"
+          >
+            {/* Top Spacer for Notification Bar */}
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-white sticky top-0 z-10">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center font-bold">
+                  <Phone className="w-5 h-5 text-[#009273]" />
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setShowPhoneChangeModal(false)}
-                  className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 leading-tight">নম্বর পরিবর্তনের আবেদন</h3>
+                  <p className="text-[10px] text-slate-500 font-bold mt-0.5">সিকিউর মোবাইল নম্বর আপডেট সিস্টেম</p>
+                </div>
               </div>
+              <button
+                type="button"
+                onClick={() => setShowPhoneChangeModal(false)}
+                className="p-1 hover:bg-slate-100 rounded-full text-slate-400 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-              {/* Security & Data Preservation Notice */}
-              <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-2xl text-[11px] text-emerald-900 space-y-1">
-                <p className="font-bold flex items-center gap-1 text-[#009273]">
-                  <ShieldCheck className="w-4 h-4 text-[#009273] shrink-0" />
-                  নিরাপত্তা ও ডাটা সংরক্ষণের বার্তা:
-                </p>
-                <p className="text-[10.5px] leading-relaxed text-slate-700">
-                  নম্বর পরিবর্তন করা হলেও আপনার অ্যাকাউন্টের মেইন ওয়ালেট ব্যালেন্স, সঞ্চয় খতিয়ান, ডিপিএস, লভ্যাংশ, কিস্তি তথ্য ও মেম্বার আইডি <strong>100% নিরাপদ ও অপরিবর্তিত থাকবে</strong>। শুধু লগইন করার মোবাইল নম্বরটি আপডেট হবে।
-                </p>
-              </div>
-
-              {/* Fee Notice */}
-              <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-2xl text-[11px] text-amber-900 flex items-start gap-2">
-                <CreditCard className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <div className="space-y-0.5">
-                  <p className="font-extrabold text-amber-900">{currentFeeDetails.badgeText}</p>
-                  <p className="text-[10.5px] leading-relaxed text-amber-800">
-                    {currentFeeDetails.noticeText} (আপনার বর্তমান ব্যালেন্স: <span className="font-bold text-slate-900">৳{(user.balance || 0).toFixed(2)}</span>)
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="max-w-md mx-auto space-y-5">
+                {/* Security & Data Preservation Notice */}
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-[11px] text-emerald-900 space-y-2 shadow-3xs">
+                  <p className="font-black flex items-center gap-1.5 text-[#009273] uppercase tracking-wider">
+                    <ShieldCheck className="w-4 h-4 text-[#009273] shrink-0" />
+                    নিরাপত্তা ও ডাটা সুরক্ষা:
+                  </p>
+                  <p className="text-[11px] leading-relaxed text-slate-700 font-bold">
+                    নম্বর পরিবর্তন করা হলেও আপনার অ্যাকাউন্টের ব্যালেন্স, সঞ্চয় ও মেম্বার আইডি <strong>১০০% নিরাপদ ও অপরিবর্তিত থাকবে</strong>। শুধু লগইন করার মোবাইল নম্বরটি আপডেট হবে।
                   </p>
                 </div>
-              </div>
 
-              {phoneModalMsg && (
-                <div className={`p-3 rounded-2xl text-xs font-bold flex items-center gap-2 ${
-                  phoneModalMsg.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'
-                }`}>
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>{phoneModalMsg.text}</span>
-                </div>
-              )}
-
-              <form onSubmit={handleSubmitPhoneChange} className="space-y-3">
-                <div>
-                  <label className="text-[11px] font-bold text-slate-700 block mb-1">
-                    বর্তমান মোবাইল নম্বর
-                  </label>
-                  <input
-                    type="text"
-                    disabled
-                    value={user.phone || ''}
-                    className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-600"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-bold text-slate-700 block mb-1">
-                    নতুন মোবাইল নম্বর <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="tel"
-                    required
-                    placeholder="01700000000"
-                    value={newPhoneInput}
-                    onChange={(e) => setNewPhoneInput(e.target.value)}
-                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-[#009273] outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-bold text-slate-700 block mb-1">
-                    নম্বর পরিবর্তনের কারণ (ঐচ্ছিক)
-                  </label>
-                  <textarea
-                    rows={2}
-                    placeholder="যেমন: নতুন নম্বর ব্যবহার করছি বা আগের নম্বরটি হারিয়ে গেছে..."
-                    value={phoneReasonInput}
-                    onChange={(e) => setPhoneReasonInput(e.target.value)}
-                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-800 focus:ring-2 focus:ring-[#009273] outline-none resize-none"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowPhoneChangeModal(false)}
-                    className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer"
-                  >
-                    বন্ধ করুন
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={phoneSubmitting}
-                    className="flex-1 py-2.5 bg-[#009273] hover:bg-[#007b61] text-white font-black rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-teal-900/10"
-                  >
-                    {phoneSubmitting ? (
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    ) : (
-                      <>
-                        <Send className="w-3.5 h-3.5" />
-                        <span>আবেদন সাবমিট করুন</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* 👥 Add / Edit Nominee Modal */}
-      <AnimatePresence>
-        {showNomineeModal && (
-          <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 text-left">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-3xl max-w-md w-full p-5 shadow-2xl border border-pink-200 overflow-hidden space-y-4"
-            >
-              <div className="flex items-center justify-between pb-3 border-b border-pink-100">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-2xl bg-pink-50 border border-pink-200 text-pink-600 flex items-center justify-center font-bold">
-                    <Users className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-black text-slate-900">
-                      {editingNomineeIndex !== null ? 'মনোনীত নমিনি তথ্য সংশোধন' : 'নতুন নমিনির তথ্য যোগ'}
-                    </h3>
-                    <p className="text-[10px] text-slate-500 font-medium">উত্তরাধিকার নমিনির নাম, মোবাইল নম্বর ও সম্পর্ক তথ্য দিন</p>
+                {/* Fee Notice */}
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-[11px] text-amber-900 flex items-start gap-3 shadow-3xs">
+                  <CreditCard className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="font-black uppercase tracking-wider text-amber-900">{currentFeeDetails.badgeText}</p>
+                    <p className="text-[11px] leading-relaxed text-amber-800 font-bold">
+                      {currentFeeDetails.noticeText}
+                    </p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setShowNomineeModal(false)}
-                  className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
 
-              <form onSubmit={handleSaveNomineeModal} className="space-y-3 text-xs">
-                <div>
-                  <label className="block text-[10.5px] font-bold text-slate-700 mb-1">
-                    নমিনির পূর্ণ নাম <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={nomFormName}
-                    onChange={(e) => setNomFormName(e.target.value)}
-                    placeholder="নমিনির নাম লিখুন"
-                    className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-pink-500"
-                  />
-                </div>
+                {phoneModalMsg && (
+                  <div className={`p-4 rounded-2xl text-xs font-black flex items-center gap-2 shadow-3xs ${
+                    phoneModalMsg.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'
+                  }`}>
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{phoneModalMsg.text}</span>
+                  </div>
+                )}
 
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="block text-[10.5px] font-bold text-slate-700 mb-1">
-                      সম্পর্ক (স্ত্রী, সন্তান, পিতা)*
+                <form onSubmit={handleSubmitPhoneChange} className="space-y-4">
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block mb-2">
+                      বর্তমান মোবাইল নম্বর
                     </label>
                     <input
                       type="text"
-                      required
-                      value={nomFormRel}
-                      onChange={(e) => setNomFormRel(e.target.value)}
-                      placeholder="যেমন: স্ত্রী"
-                      className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-pink-500"
+                      disabled
+                      value={user.phone || ''}
+                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-3 text-sm font-mono font-black text-slate-400"
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-[10.5px] font-bold text-slate-700 mb-1">
-                      মোবাইল নম্বর*
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block mb-2">
+                      নতুন মোবাইল নম্বর *
                     </label>
                     <input
                       type="tel"
                       required
-                      value={nomFormPhone}
-                      onChange={(e) => setNomFormPhone(e.target.value)}
-                      placeholder="01XXXXXXXXX"
-                      className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-pink-500"
+                      placeholder="017XXXXXXXX"
+                      value={newPhoneInput}
+                      onChange={(e) => setNewPhoneInput(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-3 text-sm font-mono font-black text-slate-900 focus:ring-2 focus:ring-[#009273] outline-none shadow-sm"
                     />
                   </div>
-                </div>
 
-                <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
-                  <button
-                    type="button"
-                    onClick={() => setShowNomineeModal(false)}
-                    className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer text-center"
-                  >
-                    বাতিল
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={savingNominees}
-                    className="flex-1 py-2.5 bg-pink-600 hover:bg-pink-700 text-white font-black rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-pink-900/20"
-                  >
-                    {savingNominees ? (
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    ) : (
-                      <>
-                        <Check className="w-4 h-4 stroke-[3]" />
-                        <span>ডাটা সেভ করুন</span>
-                      </>
-                    )}
-                  </button>
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block mb-2">
+                      পরিবর্তনের কারণ (ঐচ্ছিক)
+                    </label>
+                    <textarea
+                      rows={3}
+                      placeholder="যেমন: নতুন নম্বর ব্যবহার করছি..."
+                      value={phoneReasonInput}
+                      onChange={(e) => setPhoneReasonInput(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-3 text-sm text-slate-800 focus:ring-2 focus:ring-[#009273] outline-none resize-none shadow-sm"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-3 pt-4 pb-20">
+                    <button
+                      type="button"
+                      onClick={() => setShowPhoneChangeModal(false)}
+                      className="flex-1 py-4 bg-slate-100 hover:bg-slate-200 text-slate-600 font-black rounded-2xl text-sm active:scale-95 transition"
+                    >
+                      বাতিল
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={phoneSubmitting}
+                      className="flex-[2] py-4 bg-[#009273] hover:bg-[#007b61] text-white font-black rounded-2xl text-sm shadow-lg shadow-teal-100 active:scale-95 transition flex items-center justify-center gap-2"
+                    >
+                      {phoneSubmitting ? (
+                        <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <>
+                          <Send className="w-4 h-4" />
+                          <span>আবেদন সাবমিট করুন</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showNomineeModal && (
+          <motion.div
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className="fixed inset-0 z-[140] bg-white flex flex-col font-sans text-left"
+          >
+            {/* Top Spacer for Notification Bar */}
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-pink-100 bg-white sticky top-0 z-10">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-pink-50 border border-pink-200 text-pink-600 flex items-center justify-center font-bold shadow-xs">
+                  <Users className="w-5 h-5" />
                 </div>
-              </form>
-            </motion.div>
-          </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 leading-tight">
+                    {editingNomineeIndex !== null ? 'নমিনি তথ্য সংশোধন' : 'নতুন নমিনি যোগ'}
+                  </h3>
+                  <p className="text-[10px] text-slate-500 font-bold mt-0.5">নমিনির বিস্তারিত তথ্য প্রদান করুন</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowNomineeModal(false)}
+                className="p-1 hover:bg-slate-100 rounded-full text-slate-400 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="max-w-md mx-auto space-y-5">
+                <form onSubmit={handleSaveNomineeModal} className="space-y-4">
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-2">
+                      নমিনির পূর্ণ নাম *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={nomFormName}
+                      onChange={(e) => setNomFormName(e.target.value)}
+                      placeholder="নমিনির নাম লিখুন"
+                      className="w-full text-sm font-black p-3 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-pink-500 shadow-sm"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-2">
+                        সম্পর্ক *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={nomFormRel}
+                        onChange={(e) => setNomFormRel(e.target.value)}
+                        placeholder="যেমন: স্ত্রী / সন্তান"
+                        className="w-full text-sm font-black p-3 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-pink-500 shadow-sm"
+                      />
+                    </div>
+
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-2">
+                        মোবাইল নম্বর *
+                      </label>
+                      <input
+                        type="tel"
+                        required
+                        value={nomFormPhone}
+                        onChange={(e) => setNomFormPhone(e.target.value)}
+                        placeholder="01XXXXXXXXX"
+                        className="w-full text-sm font-mono font-black p-3 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-pink-500 shadow-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 pt-6 pb-20">
+                    <button
+                      type="button"
+                      onClick={() => setShowNomineeModal(false)}
+                      className="flex-1 py-4 bg-slate-100 hover:bg-slate-200 text-slate-600 font-black rounded-2xl text-sm active:scale-95 transition"
+                    >
+                      বাতিল
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingNominees}
+                      className="flex-[2] py-4 bg-pink-600 hover:bg-pink-700 text-white font-black rounded-2xl text-sm shadow-lg shadow-pink-200 active:scale-95 transition flex items-center justify-center gap-2"
+                    >
+                      {savingNominees ? (
+                        <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <>
+                          <Check className="w-5 h-5 stroke-[3]" />
+                          <span>ডাটা সেভ করুন</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
     </motion.div>

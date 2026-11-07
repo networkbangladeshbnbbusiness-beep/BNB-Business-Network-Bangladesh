@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { User, Transaction, Offer, AppConfig, generateBNBTrxId, formatShortTrxId } from '../types';
+import { User, Transaction, Offer, AppConfig, getEffectiveBalance, generateBNBTrxId, formatShortTrxId } from '../types';
 import { db } from '../lib/firebase';
 import UnifiedBackButton from './UnifiedBackButton';
 import { verifyUserPin } from '../lib/memberUtils';
-import { collection, addDoc, doc, updateDoc, setDoc, query, where, getDocs } from 'firebase/firestore';
+import { collection, addDoc, doc, updateDoc, setDoc, query, where, getDocs, runTransaction } from 'firebase/firestore';
+import { apiUrl } from '../config/api';
 import { 
   ChevronLeft, 
   Smartphone, 
@@ -308,6 +309,7 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
     try {
       const updatedBalance = (user.balance || 0) + 5;
       user.balance = updatedBalance; // Optimistic update
+      (user as any).mainBalance = updatedBalance;
 
       const txId = `tx-bonus-${Date.now()}`;
       const newTx: Transaction = {
@@ -327,8 +329,14 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
       setBonusText('অভিনন্দন! আপনার মেইন ওয়ালেটে ৳5.00 বোনাস সফলভাবে যুক্ত করা হয়েছে।');
       syncLiveProfile();
 
-      // Async Firestore updates
-      updateDoc(doc(db, 'users', user.uid), { balance: updatedBalance, mainBalance: updatedBalance }).catch(console.error);
+      // Atomic Firestore updates
+      const userRef = doc(db, 'users', user.uid);
+      runTransaction(db, async (t) => {
+        const uSnap = await t.get(userRef);
+        if (!uSnap.exists()) return;
+        const nextBal = getEffectiveBalance(uSnap.data()) + 5;
+        t.update(userRef, { balance: nextBal, mainBalance: nextBal });
+      }).catch(console.error);
       setDoc(doc(db, 'transactions', newTx.id), newTx, { merge: true }).catch(console.error);
     } catch (err) {
       console.error(err);
@@ -362,78 +370,46 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
       return;
     }
 
-    if ((user.balance || 0) < selectedOffer.price) {
+    if (getEffectiveBalance(user) < selectedOffer.price) {
       setPurchaseError('আপনার মেইন ওয়ালেট ব্যালেন্স পর্যাপ্ত নয়! দয়া করে মেইন ড্যাশবোর্ড থেকে টাকা জমা বা রিচার্জ করে ব্যালেন্স বাড়ান।');
       return;
     }
 
     try {
-      const remainingBalance = (user.balance || 0) - selectedOffer.price;
-      user.balance = remainingBalance; // ⚡ Instant optimistic balance update
+      setIsProcessing(true);
 
-      const offerOp = selectedOffer.operator || '';
-      const rules = appConfig?.rechargeCashbackRules || [];
-      const matchedCashback = getMatchedCashbackForRule(rules, selectedOffer.price, offerOp);
+      const res = await fetch(apiUrl('/api/recharge'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.uid,
+          number: cleanNumber,
+          operator: selectedOffer.operator,
+          type: 'prepaid',
+          amount: selectedOffer.price,
+          package_id: (selectedOffer as any).driveId || selectedOffer.id,
+          pin: inputPin,
+          accountNumber: user.memberId || user.phone
+        })
+      });
 
-      const ambTrxId = generateBNBTrxId('BN');
-      const txId = `tx-tel-${ambTrxId}`;
-      let description = `${selectedOffer.operator} নম্বরে (${recipientNumber}) প্যাকঃ "${selectedOffer.title}" ক্রয়ের আবেদন করা হয়েছে। অ্যাডমিন ভেরিফিকেশন পেন্ডিং রয়েছে।`;
-      if (matchedCashback > 0) {
-        description += ` (স্পেশাল ক্যাশব্যাক অফারঃ ৳${matchedCashback} টাকা)`;
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || !data || data.success === false) {
+        throw new Error(data?.error || data?.message || 'সার্ভার থেকে ড্রাইভ অফার রিচার্জ সম্পূর্ণ করা যায়নি।');
       }
 
-      const newTx: Transaction = {
-        id: txId,
-        transactionId: ambTrxId,
-        receiptNo: ambTrxId,
-        userId: user.uid,
-        userName: user.name,
-        memberId: user.memberId,
-        type: 'telecom_recharge',
-        typeLabel: 'টেলিকম রিচার্জ',
-        amount: selectedOffer.price,
-        status: 'pending',
-        description: description,
-        createdAt: new Date().toISOString(),
-        rechargeCashback: matchedCashback,
-        phone: recipientNumber,
-        receiverPhone: recipientNumber,
-        paymentMethod: selectedOffer.operator,
-        operator: selectedOffer.operator,
-        packTitle: selectedOffer.title
-      } as any;
+      const remainingBalance = Math.max(0, getEffectiveBalance(user) - selectedOffer.price);
+      user.balance = remainingBalance;
+      (user as any).mainBalance = remainingBalance;
 
-      // ⚡ INSTANT SUCCESS RESPONSE - NO WAITING/SPINNING!
       setPurchaseSuccess(true);
       setIsProcessing(false);
       syncLiveProfile();
 
-      // Background Firestore persistence
-      (async () => {
-        try {
-          await updateDoc(doc(db, 'users', user.uid), { balance: remainingBalance, mainBalance: remainingBalance });
-          await setDoc(doc(db, 'transactions', newTx.id), newTx, { merge: true });
-          addDoc(collection(db, 'admin_notifications'), {
-            title: '📱 নতুন টেলিকম ড্রাইভ প্যাক ক্রয় আবেদন',
-            message: `${user.name || 'সদস্য'} (${user.memberId || 'N/A'}) ${selectedOffer.operator} নম্বরে (${recipientNumber}) "${selectedOffer.title}" প্যাক ৳${selectedOffer.price} টাকা ক্রয় আবেদন করেছেন।`,
-            userId: user.uid,
-            userName: user.name || '',
-            memberId: user.memberId || '',
-            recipientPhone: recipientNumber,
-            operator: selectedOffer.operator,
-            amount: selectedOffer.price,
-            type: 'telecom_recharge',
-            read: false,
-            createdAt: new Date().toISOString()
-          }).catch(e => console.warn('Admin notif error:', e));
-        } catch (dbErr) {
-          console.error("Firestore purchase save error:", dbErr);
-        }
-      })();
-
-      // Show Full-Screen Transaction Receipt Modal
+      const ambTrxId = data.trxid || generateBNBTrxId('ST');
       setReceiptModalData({
-        typeLabel: `ড্রাইভ প্যাক (${selectedOffer.operator})`,
+        typeLabel: `ড্রাইভ অফার রিচার্জ (${selectedOffer.operator})`,
         transactionId: ambTrxId,
         amount: selectedOffer.price,
         fee: 0,
@@ -441,9 +417,9 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
         status: 'pending',
         beneficiaryName: user.name,
         beneficiaryAccount: user.memberId || user.phone,
-        senderPhone: recipientNumber,
-        paymentMethod: selectedOffer.operator,
-        description: description,
+        senderPhone: cleanNumber,
+        paymentMethod: `${selectedOffer.operator} (Success TopUp API)`,
+        description: `${selectedOffer.operator} নম্বরে (${cleanNumber}) "${selectedOffer.title}" ৳${selectedOffer.price} টাকা অটো ড্রাইভ রিচার্জ প্রসেসিংয়ে রয়েছে।`,
         transactionDate: new Date().toLocaleString('bn-BD', {
           day: 'numeric',
           month: 'numeric',
@@ -459,7 +435,7 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
       setIsReceiptOpen(true);
     } catch (err: any) {
       console.error(err);
-      setPurchaseError(`ক্রয় সম্পন্নকরণে ত্রুটি ঘটেছেঃ ${err?.message || 'সার্ভার সংযোগ সমস্যা'}`);
+      setPurchaseError(`অটো ড্রাইভ রিচার্জ প্রসেসে ত্রুটিঃ ${err?.message || 'সার্ভার সাড়াদান করছে না'}`);
       setIsProcessing(false);
     }
   };
@@ -491,7 +467,7 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
       return;
     }
 
-    if ((user.balance || 0) < reloadAmt) {
+    if (getEffectiveBalance(user) < reloadAmt) {
       setPurchaseError('অপর্যাপ্ত মেইন ওয়ালেট ব্যালেন্স! দয়া করে ড্যাশবোর্ড বা হোম পেজ থেকে ওয়ালেট ব্যালেন্স রিচার্জ করুন।');
       return;
     }
@@ -504,8 +480,9 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
             : (appConfig?.mobileRechargePercent ?? 2.0));
 
       const commission = (reloadAmt * rate) / 100;
-      const remainingBalance = (user.balance || 0) - reloadAmt + commission;
+      const remainingBalance = getEffectiveBalance(user) - reloadAmt + commission;
       user.balance = remainingBalance; // ⚡ Instant optimistic balance update
+      (user as any).mainBalance = remainingBalance;
 
       const rules = appConfig?.rechargeCashbackRules || [];
       const matchedCashback = getMatchedCashbackForRule(rules, reloadAmt, cashRechargeOperator);
@@ -552,10 +529,17 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
       setIsProcessing(false);
       syncLiveProfile();
       
-      // Async background save to Firestore
+      // Async background save to Firestore via atomic transaction
       (async () => {
         try {
-          await updateDoc(doc(db, 'users', user.uid), { balance: remainingBalance, mainBalance: remainingBalance });
+          const userRef = doc(db, 'users', user.uid);
+          await runTransaction(db, async (t) => {
+            const uSnap = await t.get(userRef);
+            if (!uSnap.exists()) return;
+            const liveBal = getEffectiveBalance(uSnap.data());
+            const nextBal = Math.max(0, liveBal - reloadAmt + commission);
+            t.update(userRef, { balance: nextBal, mainBalance: nextBal });
+          });
           await setDoc(doc(db, 'transactions', newTx.id), newTx, { merge: true });
           addDoc(collection(db, 'admin_notifications'), {
             title: '⚡ নতুন মোবাইল রিচার্জ আবেদন',
@@ -853,19 +837,23 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
         {/* Daily bonus toast notification */}
         <AnimatePresence>
           {showMoneyExchange && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-50 bg-slate-50 overflow-y-auto"
-            >
-              <MoneyExchangeModule 
-                user={user} 
-                onClose={() => setShowMoneyExchange(false)} 
-                syncLiveProfile={syncLiveProfile} 
-                appConfig={appConfig}
-              />
-            </motion.div>
+            <div className="fixed inset-0 z-50 bg-white flex flex-col">
+              <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+              <motion.div
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                className="flex-1 overflow-y-auto bg-white"
+              >
+                <MoneyExchangeModule 
+                  user={user} 
+                  onClose={() => setShowMoneyExchange(false)} 
+                  syncLiveProfile={syncLiveProfile} 
+                  appConfig={appConfig}
+                />
+              </motion.div>
+            </div>
           )}
           {bonusText && (
             <motion.div 
@@ -1106,15 +1094,17 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
       {/* POPUP BUY BOTTOM DIALOG */}
       <AnimatePresence>
         {selectedOffer && (
-          <div className="fixed inset-0 bg-black/80 flex items-end justify-center z-50 p-4 backdrop-blur-xs text-slate-800">
+          <div className="fixed inset-0 z-50 bg-white flex flex-col">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
             <motion.div
-              initial={{ y: 250, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 250, opacity: 0 }}
-              className="bg-white rounded-t-3xl rounded-b-3xl overflow-hidden shadow-2xl w-full max-w-sm border border-slate-100 flex flex-col"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="flex-1 flex flex-col overflow-hidden bg-white text-slate-800"
             >
               {/* Card top branding header */}
-              <div className="bg-indigo-900 text-white p-4 flex justify-between items-center">
+              <div className="bg-indigo-900 text-white p-4 flex justify-between items-center shrink-0">
                 <div>
                   <h3 className="text-xs font-extrabold uppercase text-indigo-300 leading-none">টেলিকম ধামাকা প্যাক</h3>
                   <span className="text-sm font-black text-white mt-1 block">অনলাইন ক্রয় প্যানেল</span>
@@ -1128,7 +1118,7 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
               </div>
 
               {/* Purchase Body / Forms */}
-              <div className="p-5 space-y-4">
+              <div className="flex-1 overflow-y-auto p-5 space-y-4">
                 
                 {purchaseError && (
                   <div className="bg-red-50 text-red-700 border border-red-150 p-2.5 text-xs rounded-xl flex items-center gap-1.5 font-bold leading-normal">
@@ -1213,7 +1203,7 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
                     <button
                       type="submit"
                       disabled={isProcessing}
-                      className="w-full py-2.5 mt-2 bg-indigo-805 hover:bg-indigo-905 bg-indigo-900 border border-indigo-950 text-white font-extrabold rounded-xl text-xs transition cursor-pointer shadow-md flex items-center justify-center gap-1.5"
+                      className="w-full py-2.5 mt-2 bg-indigo-900 border border-indigo-950 text-white font-extrabold rounded-xl text-xs transition cursor-pointer shadow-md flex items-center justify-center gap-1.5"
                     >
                       {isProcessing ? (
                         <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -1232,76 +1222,93 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
       {/* POPUP CASH RECHARGE OVERLAY SCREEN */}
       <AnimatePresence>
         {showAddBalanceModal && (
-          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-            <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl">
-              <h3 className="text-sm font-black text-slate-800 mb-4">মেইন থেকে রিচার্জ ব্যালেন্সে টাকা অ্যাড</h3>
-              {addBalanceMsg && (
-                <div className={`p-2.5 rounded-xl text-xs font-bold mb-3 flex items-center justify-between ${
-                  addBalanceMsg.type === 'error' ? 'bg-rose-100 text-rose-800 border border-rose-200' : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                }`}>
-                  <span>{addBalanceMsg.text}</span>
-                  <button type="button" onClick={() => setAddBalanceMsg(null)} className="text-slate-500 hover:text-slate-700 ml-2">×</button>
+          <div className="fixed inset-0 z-50 bg-white flex flex-col">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="flex-1 overflow-y-auto p-6 bg-white flex flex-col items-center justify-center"
+            >
+              <div className="w-full max-w-sm space-y-6">
+                <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                  <h3 className="text-sm font-black text-slate-800">মেইন থেকে রিচার্জ ব্যালেন্সে টাকা অ্যাড</h3>
+                  <button onClick={() => setShowAddBalanceModal(false)} className="p-1.5 hover:bg-slate-100 rounded-full">
+                    <X className="w-5 h-5 text-slate-500" />
+                  </button>
                 </div>
-              )}
-              <form onSubmit={async (e) => {
-                e.preventDefault();
-                setAddBalanceMsg(null);
-                if (Number(addBalanceAmount) > (user.balance || 0)) {
-                  setAddBalanceMsg({ text: 'ব্যালেন্স অপর্যাপ্ত', type: 'error' });
-                  return;
-                }
-                if (addBalancePin !== user.pin) {
-                  setAddBalanceMsg({ text: 'ভুল পিন', type: 'error' });
-                  return;
-                }
-                setIsProcessing(true);
-                try {
-                  const commission = Number(addBalanceAmount) * 0.02; // 2%
-                  const totalToAdd = Number(addBalanceAmount) + commission;
-                  const userRef = doc(db, 'users', user.uid);
-                  await updateDoc(userRef, {
-                    balance: (user.balance || 0) - Number(addBalanceAmount),
-                    mainBalance: (user.balance || 0) - Number(addBalanceAmount),
-                    telecomBalance: (user.telecomBalance || 0) + totalToAdd
-                  });
-                  setAddBalanceMsg({ text: 'সফলভাবে রিচার্জ ব্যালেন্সে টাকা যুক্ত হয়েছে।', type: 'success' });
-                  setTimeout(() => {
-                    setShowAddBalanceModal(false);
-                    setAddBalanceAmount('');
-                    setAddBalancePin('');
-                    setAddBalanceMsg(null);
-                  }, 1200);
-                } catch (err) {
-                  console.error(err);
-                  setAddBalanceMsg({ text: 'ট্রানজেকশন ব্যর্থ হয়েছে।', type: 'error' });
-                } finally {
-                  setIsProcessing(false);
-                }
-              }}>
-                <div className="mb-4">
-                  <label className="text-xs font-bold text-slate-600">পরিমাণ (৳)</label>
-                  <input type="number" value={addBalanceAmount} onChange={(e) => setAddBalanceAmount(e.target.value)} required className="w-full p-2 bg-slate-50 border rounded-xl mt-1 text-sm font-mono" placeholder="1000" />
-                  <p className="text-[10px] text-emerald-600 font-bold mt-1">কমিশন (2%): ৳{(Number(addBalanceAmount) * 0.02).toFixed(2)}</p>
-                </div>
-                <div className="mb-6">
-                  <label className="text-xs font-bold text-slate-600">পিন নম্বর</label>
-                  <input type="password" value={addBalancePin} onChange={(e) => setAddBalancePin(e.target.value)} required maxLength={4} className="w-full p-2 bg-slate-50 border rounded-xl mt-1 text-sm font-mono" placeholder="••••" />
-                </div>
-                <div className="flex gap-2">
-                  <button type="button" onClick={() => setShowAddBalanceModal(false)} className="flex-1 p-2 bg-slate-100 rounded-xl text-xs font-bold">বাতিল</button>
-                  <button type="submit" disabled={isProcessing} className="flex-1 p-2 bg-rose-600 text-white rounded-xl text-xs font-bold">নিশ্চিত করুন</button>
-                </div>
-              </form>
+
+                {addBalanceMsg && (
+                  <div className={`p-3 rounded-xl text-xs font-bold flex items-center justify-between ${
+                    addBalanceMsg.type === 'error' ? 'bg-rose-100 text-rose-800 border border-rose-200' : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                  }`}>
+                    <span>{addBalanceMsg.text}</span>
+                    <button type="button" onClick={() => setAddBalanceMsg(null)} className="text-slate-500 hover:text-slate-700 ml-2">×</button>
+                  </div>
+                )}
+                <form onSubmit={async (e) => {
+                  e.preventDefault();
+                  setAddBalanceMsg(null);
+                  if (Number(addBalanceAmount) > (user.balance || 0)) {
+                    setAddBalanceMsg({ text: 'ব্যালেন্স অপর্যাপ্ত', type: 'error' });
+                    return;
+                  }
+                  if (addBalancePin !== user.pin) {
+                    setAddBalanceMsg({ text: 'ভুল পিন', type: 'error' });
+                    return;
+                  }
+                  setIsProcessing(true);
+                  try {
+                    const commission = Number(addBalanceAmount) * 0.02; // 2%
+                    const totalToAdd = Number(addBalanceAmount) + commission;
+                    const userRef = doc(db, 'users', user.uid);
+                    await updateDoc(userRef, {
+                      balance: (user.balance || 0) - Number(addBalanceAmount),
+                      mainBalance: (user.balance || 0) - Number(addBalanceAmount),
+                      telecomBalance: (user.telecomBalance || 0) + totalToAdd
+                    });
+                    setAddBalanceMsg({ text: 'সফলভাবে রিচার্জ ব্যালেন্সে টাকা যুক্ত হয়েছে।', type: 'success' });
+                    setTimeout(() => {
+                      setShowAddBalanceModal(false);
+                      setAddBalanceAmount('');
+                      setAddBalancePin('');
+                      setAddBalanceMsg(null);
+                    }, 1200);
+                  } catch (err) {
+                    console.error(err);
+                    setAddBalanceMsg({ text: 'ট্রানজেকশন ব্যর্থ হয়েছে।', type: 'error' });
+                  } finally {
+                    setIsProcessing(false);
+                  }
+                }} className="space-y-5">
+                  <div>
+                    <label className="text-xs font-bold text-slate-600 block mb-1">পরিমাণ (৳)</label>
+                    <input type="number" value={addBalanceAmount} onChange={(e) => setAddBalanceAmount(e.target.value)} required className="w-full p-3 bg-slate-50 border rounded-xl text-sm font-mono focus:outline-none" placeholder="1000" />
+                    <p className="text-[10px] text-emerald-600 font-bold mt-1">কমিশন (2%): ৳{(Number(addBalanceAmount) * 0.02).toFixed(2)}</p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-slate-600 block mb-1">পিন নম্বর</label>
+                    <input type="password" value={addBalancePin} onChange={(e) => setAddBalancePin(e.target.value)} required maxLength={4} className="w-full p-3 bg-slate-50 border rounded-xl text-sm font-mono focus:outline-none" placeholder="••••" />
+                  </div>
+                  <div className="flex gap-3 pt-2">
+                    <button type="button" onClick={() => setShowAddBalanceModal(false)} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 rounded-xl text-xs font-bold transition">বাতিল</button>
+                    <button type="submit" disabled={isProcessing} className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition shadow-md">নিশ্চিত করুন</button>
+                  </div>
+                </form>
+              </div>
             </motion.div>
           </div>
         )}
         {showCashRecharge && (
-          <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-0 sm:p-4 backdrop-blur-xs text-slate-800">
+          <div className="fixed inset-0 z-50 bg-white flex flex-col">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
             <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white sm:rounded-3xl overflow-y-auto shadow-2xl w-full h-full sm:h-auto sm:max-w-md border-0 sm:border border-slate-100 flex flex-col min-h-screen sm:min-h-0"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="flex-1 flex flex-col overflow-hidden bg-white text-slate-800"
             >
               <div className="bg-indigo-900 text-white p-3.5 sm:p-4 flex justify-between items-center shrink-0 sticky top-0 z-20 shadow-sm">
                 <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
@@ -1313,7 +1320,7 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
                         : '💸 মোবাইল ক্যাশ রিচার্জ'}
                   </span>
                   <span className="bg-indigo-800/80 text-emerald-300 px-2 py-0.5 rounded-full text-[10px] font-extrabold font-mono border border-indigo-700/60 inline-flex items-center gap-1">
-                    মোবাইল ব্যালেন্স: ৳{(user.balance || 0).toLocaleString('en-US')}
+                    ব্যালেন্স: ৳{(user.balance || 0).toLocaleString('en-US')}
                   </span>
                 </div>
                 <button 
@@ -1342,7 +1349,7 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
                     </div>
                   </div>
                 ) : (
-                  <form onSubmit={handleCashRechargeSubmit} className="space-y-3.5 text-left text-xs font-bold text-slate-600">
+                  <form onSubmit={handleCashRechargeSubmit} className="space-y-3.5 text-left text-xs font-bold text-slate-600 pb-10">
                     
                     {purchaseError && (
                       <div className="bg-rose-50 border border-rose-200 text-rose-800 p-2.5 rounded-xl text-xs font-bold flex items-center justify-between">
@@ -1358,8 +1365,8 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
                       </div>
                     ) : (
                       <div className="space-y-1.5">
-                        <label className="block text-[10px] text-slate-500 font-extrabold tracking-wide">রিচার্জ OPERATOR নির্বাচন করুন</label>
-                        <div className="grid grid-cols-6 gap-1">
+                        <label className="block text-[10px] text-slate-500 font-extrabold tracking-wide uppercase">রিচার্জ অপারেটর নির্বাচন করুন</label>
+                        <div className="grid grid-cols-3 gap-2">
                           {['Grameenphone', 'Robi', 'Airtel', 'Banglalink', 'Teletalk', 'Skitto'].map((op, idx) => {
                             const isSelected = cashRechargeOperator === op;
                             const colors = op === 'Grameenphone' ? 'bg-blue-50 border-blue-200 text-blue-900' :
@@ -1373,25 +1380,13 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
                                 key={`${op}-${idx}`}
                                 type="button"
                                 onClick={() => setCashRechargeOperator(op)}
-                                className={`py-1.5 px-0.5 rounded-xl border text-center transition-all flex flex-col items-center justify-center gap-1 cursor-pointer active:scale-95 ${
+                                className={`py-2 px-1 rounded-xl border text-center transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95 ${
                                   isSelected 
                                     ? `${colors} border-2 ring-2 ring-indigo-500/30 font-black scale-102` 
                                     : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700'
                                 }`}
                               >
-                                <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[8.5px] font-black ${
-                                  op === 'Grameenphone' ? 'bg-blue-500 text-white' :
-                                  op === 'Robi' ? 'bg-red-500 text-white' :
-                                  op === 'Airtel' ? 'bg-rose-600 text-white' :
-                                  op === 'Banglalink' ? 'bg-orange-500 text-white' :
-                                  op === 'Teletalk' ? 'bg-emerald-600 text-white' :
-                                  'bg-yellow-400 text-slate-900'
-                                }`}>
-                                  {op === 'Grameenphone' ? 'GP' : op === 'Banglalink' ? 'BL' : op.substring(0, 4)}
-                                </div>
-                                <span className="text-[8px] font-black block leading-none truncate max-w-full">
-                                  {op === 'Grameenphone' ? 'GP' : op === 'Banglalink' ? 'BL' : op}
-                                </span>
+                                <span className="text-[10px] font-black">{op}</span>
                               </button>
                             );
                           })}
@@ -1401,7 +1396,7 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
                     </div>
 
                     <div>
-                      <label className="block text-[10px] text-slate-500 mb-1">রিচার্জের পরিমাণ (৳)</label>
+                      <label className="block text-[10px] text-slate-500 mb-1 uppercase">রিচার্জের পরিমাণ (৳)</label>
                       <input
                         type="number"
                         required
@@ -1409,19 +1404,19 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
                         value={cashRechargeAmount}
                         onChange={(e) => setCashRechargeAmount(e.target.value)}
                         placeholder="10 - 1000 টাকা"
-                        className="w-full p-2.5 bg-slate-50 border border-slate-205 rounded-xl font-mono text-xs focus:outline-none"
+                        className="w-full p-3 bg-slate-50 border border-slate-205 rounded-xl font-mono text-sm focus:outline-none"
                       />
                     </div>
 
                     <div>
                       <div className="flex justify-between items-center mb-1">
-                        <label className="block text-[10px] text-slate-500">প্রাপক মোবাইল নম্বর</label>
+                        <label className="block text-[10px] text-slate-500 uppercase">প্রাপক মোবাইল নম্বর</label>
                         <button 
                           type="button" 
                           onClick={() => setCashRecipientNumber(user.phone || '')} 
                           className="text-[9px] text-indigo-700 hover:underline font-black"
                         >
-                          নিজের মোবাইল নম্বর ব্যবহার করুন ({user.phone || 'N/A'})
+                          নিজে ({user.phone || 'N/A'})
                         </button>
                       </div>
                       <input
@@ -1430,13 +1425,13 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
                         maxLength={11}
                         value={cashRecipientNumber}
                         onChange={(e) => setCashRecipientNumber(e.target.value.replace(/\D/g, ''))}
-                        placeholder="উদাঃ 018XXXXXXXX (11 ডিজিটের মোবাইল নম্বর)"
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs text-slate-805"
+                        placeholder="উদাঃ 01XXXXXXXXX"
+                        className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-mono text-sm text-slate-805 focus:outline-none"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-[10px] text-slate-500 mb-1">আপনার 4 ডিজিটের পিন নম্বর</label>
+                      <label className="block text-[10px] text-slate-500 mb-1 uppercase">সিকিউরিটি পিন নম্বর</label>
                       <input
                         type="password"
                         required
@@ -1444,24 +1439,23 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
                         value={cashRechargePin}
                         onChange={(e) => setCashRechargePin(e.target.value.replace(/\D/g, ''))}
                         placeholder="••••"
-                        className="w-full p-2 bg-slate-50 border border-slate-202 rounded-xl text-center font-mono text-sm tracking-widest text-slate-805"
+                        className="w-full p-3 bg-slate-50 border border-slate-202 rounded-xl text-center font-mono text-lg tracking-widest text-slate-805 focus:outline-none"
                       />
                     </div>
 
-                    {/* Submit Button - Directly below PIN input as requested */}
                     <button
                       type="submit"
                       disabled={isProcessing}
-                      className="w-full py-3 bg-indigo-900 border border-indigo-950 hover:bg-indigo-950 text-white font-extrabold rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1 shadow-md active:scale-98"
+                      className="w-full py-4 bg-indigo-900 border border-indigo-950 hover:bg-indigo-950 text-white font-extrabold rounded-xl text-sm transition cursor-pointer flex items-center justify-center gap-1 shadow-md active:scale-98 mt-2"
                     >
                       {isProcessing ? (
-                        <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                       ) : (
-                        'রিচার্জ করুন'
+                        'রিচার্জ নিশ্চিত করুন'
                       )}
                     </button>
 
-                    {/* Dynamic Cashback Offers List inside the Modal */}
+                    {/* Dynamic Cashback Offers List */}
                     {(() => {
                       const opRules = getFilteredRulesForOperator(appConfig?.rechargeCashbackRules || [], cashRechargeOperator);
                       return (
@@ -1469,16 +1463,11 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
                           <div className="flex items-center justify-between mb-1">
                             <label className="text-[10.5px] text-purple-900 font-black tracking-wide flex items-center gap-1.5">
                               <span className="text-sm">🎁</span>
-                              <span>বিশেষ ক্যাশব্যাক অফার স্ল্যাব (ক্লিক করুন)</span>
+                              <span>বিশেষ ক্যাশব্যাক স্ল্যাব (ক্লিক করুন)</span>
                             </label>
-                            {opRules.length > 0 && (
-                              <span className="text-[9px] font-extrabold bg-purple-200 text-purple-900 px-2 py-0.5 rounded-full">
-                                {opRules.length}টি অফার
-                              </span>
-                            )}
                           </div>
                           {opRules.length > 0 ? (
-                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-[220px] overflow-y-auto pr-1">
+                            <div className="grid grid-cols-2 gap-2">
                               {opRules.map((rule, idx) => {
                                 const isSelected = Number(cashRechargeAmount) === Number(rule.amount);
                                 return (
@@ -1486,14 +1475,14 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
                                     key={rule.id ? `${rule.id}-${idx}` : `cb-${rule.amount}-${idx}`}
                                     type="button"
                                     onClick={() => setCashRechargeAmount(String(rule.amount))}
-                                    className={`p-2 rounded-xl text-left border transition-all active:scale-95 flex flex-col justify-between cursor-pointer ${
+                                    className={`p-2.5 rounded-xl text-left border transition-all active:scale-95 flex flex-col justify-between cursor-pointer ${
                                       isSelected 
-                                        ? 'bg-purple-650 text-white border-purple-650 font-black shadow-md scale-102 animate-pulse' 
-                                        : 'bg-white border-purple-100 hover:bg-purple-50 text-slate-700 hover:border-purple-250'
+                                        ? 'bg-purple-600 text-white border-purple-600 font-black shadow-md' 
+                                        : 'bg-white border-purple-100 hover:bg-purple-50 text-slate-700'
                                     }`}
                                   >
-                                    <span className={`text-[10px] font-black font-sans ${isSelected ? 'text-white' : 'text-purple-950'}`}>৳{rule.amount} রিচার্জ নিন</span>
-                                    <span className={`text-[9.5px] font-black font-sans mt-0.5 ${isSelected ? 'text-purple-100' : 'text-purple-750'}`}>
+                                    <span className="text-[11px] font-black">৳{rule.amount} রিচার্জ</span>
+                                    <span className={`text-[10px] font-bold mt-0.5 ${isSelected ? 'text-purple-100' : 'text-purple-600'}`}>
                                       ক্যাশব্যাকঃ ৳{rule.cashback}
                                     </span>
                                   </button>
@@ -1501,63 +1490,8 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
                               })}
                             </div>
                           ) : (
-                            <div className="bg-white border border-purple-100/60 rounded-xl p-3 text-[10px] font-bold text-purple-700 text-center leading-relaxed">
-                              {cashRechargeOperator} রিচার্জে বর্তমানে কোনো বিশেষ ক্যাশব্যাক স্ল্যাব সেট করা নেই। সাধারণ রিচার্জ কমিশন পাবেন।
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
-
-                    {/* Dynamic Commission Calculation Showcase Block */}
-                    {(() => {
-                      const activeRate = ['Alaap', 'Brilliant'].includes(cashRechargeOperator)
-                        ? 0
-                        : (user.customTelecomPercent !== undefined && user.customTelecomPercent > 0
-                            ? user.customTelecomPercent
-                            : (appConfig?.mobileRechargePercent ?? 2.0));
-                      const expectedCashback = cashRechargeAmount ? (Number(cashRechargeAmount) * activeRate) / 100 : 0;
-                      
-                      const rechargeVal = Number(cashRechargeAmount) || 0;
-                      const matchedCashback = getMatchedCashbackForRule(appConfig?.rechargeCashbackRules || [], rechargeVal, cashRechargeOperator);
-
-                      return (
-                        <div className="space-y-2">
-                          <div className="bg-emerald-50 border border-emerald-100 p-3 rounded-2xl space-y-1.5 text-left text-xs text-emerald-800">
-                            <div className="flex justify-between items-center font-bold">
-                              <span className="text-[10.5px]">💰 {
-                                cashRechargeOperator === 'Alaap' 
-                                  ? 'আলাপ রিচার্জ' 
-                                  : cashRechargeOperator === 'Brilliant' 
-                                    ? 'ব্রিলিয়ান্ট রিচার্জ' 
-                                    : 'মোবাইল রিচার্জ'
-                              } কমিশনঃ</span>
-                              <span className="bg-emerald-100 text-emerald-900 border border-emerald-200 px-2 py-0.5 rounded-lg text-[10px] font-black font-mono shrink-0">
-                                {activeRate}% কমিশন লাভ
-                              </span>
-                            </div>
-                            {['Alaap', 'Brilliant'].includes(cashRechargeOperator) ? (
-                              <p className="text-[9.5px] text-indigo-900 font-bold leading-relaxed font-sans">
-                                {cashRechargeOperator} রিচার্জে কোনো সাধারণ কমিশন নেই, শুধুমাত্র বিশেষ ক্যাশব্যাক অফার প্রযোজ্য।
-                              </p>
-                            ) : expectedCashback > 0 ? (
-                              <p className="text-[10px] text-emerald-700 font-extrabold leading-normal">
-                                আপনি ৳{cashRechargeAmount} টাকায় <strong className="text-emerald-950">৳{expectedCashback.toFixed(2)}</strong> লভ্যাংশ কমিশন (2%) পাবেন।
-                              </p>
-                            ) : (
-                              <p className="text-[9.5px] text-emerald-600 font-bold leading-relaxed font-sans">
-                                যত টাকা মোবাইল রিচার্জ করবেন সেই অনুযায়ী 2% কমিশন ওয়ালেটে যুক্ত হবে।
-                              </p>
-                            )}
-                          </div>
-
-                          {matchedCashback > 0 && (
-                            <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 p-3 rounded-2xl flex items-center gap-2.5 text-xs text-purple-900 animate-pulse">
-                              <span className="text-lg shrink-0">🎁</span>
-                              <div className="text-left font-sans leading-normal">
-                                <p className="text-[11px] font-black text-purple-950">বিশেষ ক্যাশব্যাক অফার!</p>
-                                <p className="text-[10px] text-purple-700 font-extrabold">এই রিচার্জে আপনি পাবেন ফ্ল্যাট <span className="text-[11px] font-black text-indigo-900 font-mono">৳{matchedCashback}</span> টাকা ক্যাশব্যাক!</p>
-                              </div>
+                            <div className="bg-white/60 border border-purple-100/60 rounded-xl p-3 text-[10px] font-bold text-purple-700 text-center leading-relaxed">
+                              {cashRechargeOperator || 'অপারেটর'} রিচার্জে বর্তমানে কোনো বিশেষ ক্যাশব্যাক স্ল্যাব নেই।
                             </div>
                           )}
                         </div>
@@ -1570,17 +1504,18 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
           </div>
         )}
 
-        {/* ================= TELECOM HELPLINE & SUPPORT MODAL ================= */}
         {showHelplineModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/75 backdrop-blur-xs animate-fade-in">
+          <div className="fixed inset-0 z-50 bg-white flex flex-col">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
             <motion.div
-              initial={{ scale: 0.95, opacity: 0, y: 10 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 10 }}
-              className="bg-white rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl border border-slate-100 text-left font-sans relative overflow-hidden"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="flex-1 flex flex-col overflow-hidden bg-white text-slate-800"
             >
               {/* Header */}
-              <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div className="flex justify-between items-center border-b border-slate-100 p-4 shrink-0">
                 <div className="flex items-center gap-2.5">
                   <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center font-black">
                     <Headphones className="w-5 h-5" />
@@ -1598,105 +1533,108 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
                 </button>
               </div>
 
-              {/* Notice/Subtext */}
-              <div className="p-3 bg-emerald-50/80 border border-emerald-200/70 rounded-2xl text-[11px] font-bold text-emerald-900 leading-relaxed flex items-start gap-2">
-                <Sparkles className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                <span>{appConfig?.telecomHelplineNotice || 'যেকোনো বিষয় জানতে বা সমস্যার সমাধানের জন্য আমাদের হেল্পলাইন ওয়াটসঅ্যাপে মেসেজ অথবা সরাসরি কল করুন।'}</span>
-              </div>
-
-              {/* Helpline Details Card */}
-              <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-black uppercase text-slate-400">হেল্পলাইন নম্বর:</span>
-                  <span className="text-[10px] font-black text-emerald-600 bg-emerald-100/60 px-2 py-0.5 rounded-md font-mono">
-                    24/7 সচল
-                  </span>
+              <div className="flex-1 overflow-y-auto p-5 space-y-6">
+                {/* Notice/Subtext */}
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs font-bold text-emerald-900 leading-relaxed flex items-start gap-2.5">
+                  <Sparkles className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                  <span>{appConfig?.telecomHelplineNotice || 'যেকোনো বিষয় জানতে বা সমস্যার সমাধানের জন্য আমাদের হেল্পলাইন ওয়াটসঅ্যাপে মেসেজ অথবা সরাসরি কল করুন।'}</span>
                 </div>
 
-                <div className="flex items-center justify-between bg-white border border-slate-200 rounded-xl p-2.5">
-                  <div className="flex items-center gap-2">
-                    <PhoneCall className="w-4 h-4 text-emerald-600" />
-                    <span className="text-sm font-black text-slate-900 font-mono tracking-wider">
-                      {appConfig?.telecomHelplinePhone || '01865911728'}
+                {/* Helpline Details Card */}
+                <div className="bg-slate-50 border border-slate-200 rounded-3xl p-5 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase text-slate-400">হেল্পলাইন নম্বর:</span>
+                    <span className="text-[10px] font-black text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded-md font-mono">
+                      24/7 সচল
                     </span>
                   </div>
-                  <button
-                    onClick={() => {
-                      const num = appConfig?.telecomHelplinePhone || '01865911728';
-                      navigator.clipboard.writeText(num);
-                      setCopiedHelpline(true);
-                      setTimeout(() => setCopiedHelpline(false), 2000);
-                    }}
-                    className="flex items-center gap-1 text-[10px] font-black bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1.5 rounded-lg transition cursor-pointer"
-                  >
-                    {copiedHelpline ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-slate-500" />}
-                    <span>{copiedHelpline ? 'কপি হয়েছে' : 'কপি করুন'}</span>
-                  </button>
+
+                  <div className="flex items-center justify-between bg-white border border-slate-200 rounded-2xl p-4">
+                    <div className="flex items-center gap-3">
+                      <PhoneCall className="w-5 h-5 text-emerald-600" />
+                      <span className="text-base font-black text-slate-900 font-mono tracking-wider">
+                        {appConfig?.telecomHelplinePhone || '01865911728'}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const num = appConfig?.telecomHelplinePhone || '01865911728';
+                        navigator.clipboard.writeText(num);
+                        setCopiedHelpline(true);
+                        setTimeout(() => setCopiedHelpline(false), 2000);
+                      }}
+                      className="flex items-center gap-1.5 text-[11px] font-black bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-xl transition cursor-pointer"
+                    >
+                      {copiedHelpline ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4 text-slate-500" />}
+                      <span>{copiedHelpline ? 'কপি হয়েছে' : 'কপি করুন'}</span>
+                    </button>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="grid grid-cols-1 gap-3 pt-2">
+                    <button
+                      onClick={() => {
+                        const num = (appConfig?.telecomHelplinePhone || '01865911728').replace(/\D/g, '');
+                        const formattedNum = num.startsWith('88') ? num : `88${num}`;
+                        window.open(`https://wa.me/${formattedNum}`, '_blank');
+                      }}
+                      className="w-full py-4 bg-[#25D366] hover:bg-[#20bd5a] text-white font-black text-sm rounded-2xl flex items-center justify-center gap-2.5 transition shadow-md cursor-pointer"
+                    >
+                      <MessageSquare className="w-5 h-5" />
+                      <span>WhatsApp মেসেজ পাঠান</span>
+                    </button>
+
+                    <a
+                      href={`tel:${appConfig?.telecomHelplinePhone || '01865911728'}`}
+                      className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm rounded-2xl flex items-center justify-center gap-2.5 transition shadow-md text-center"
+                    >
+                      <PhoneCall className="w-5 h-5" />
+                      <span>সরাসরি কল করুন</span>
+                    </a>
+                  </div>
+
+                  {/* Facebook Link Button */}
+                  {(appConfig?.telecomHelplineFacebook || 'https://facebook.com') && (
+                    <button
+                      onClick={() => {
+                        const fbUrl = appConfig?.telecomHelplineFacebook || 'https://facebook.com';
+                        const validUrl = fbUrl.startsWith('http') ? fbUrl : `https://${fbUrl}`;
+                        window.open(validUrl, '_blank');
+                      }}
+                      className="w-full py-3.5 bg-[#1877F2] hover:bg-[#166fe5] text-white font-black text-xs rounded-2xl flex items-center justify-center gap-2 transition shadow-sm cursor-pointer"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      <span>অফিসিয়াল ফেসবুক পেজে যান</span>
+                    </button>
+                  )}
                 </div>
-
-                {/* Action Buttons */}
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  {/* WhatsApp Chat Button */}
-                  <button
-                    onClick={() => {
-                      const num = (appConfig?.telecomHelplinePhone || '01865911728').replace(/\D/g, '');
-                      const formattedNum = num.startsWith('88') ? num : `88${num}`;
-                      window.open(`https://wa.me/${formattedNum}`, '_blank');
-                    }}
-                    className="w-full py-2.5 px-3 bg-[#25D366] hover:bg-[#20bd5a] text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer active:scale-95"
-                  >
-                    <MessageSquare className="w-4 h-4" />
-                    <span>WhatsApp মেসেজ</span>
-                  </button>
-
-                  {/* Phone Direct Call Button */}
-                  <a
-                    href={`tel:${appConfig?.telecomHelplinePhone || '01865911728'}`}
-                    className="w-full py-2.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer text-center active:scale-95"
-                  >
-                    <PhoneCall className="w-4 h-4" />
-                    <span>সরাসরি কল</span>
-                  </a>
-                </div>
-
-                {/* Facebook Link Button */}
-                {(appConfig?.telecomHelplineFacebook || 'https://facebook.com') && (
-                  <button
-                    onClick={() => {
-                      const fbUrl = appConfig?.telecomHelplineFacebook || 'https://facebook.com';
-                      const validUrl = fbUrl.startsWith('http') ? fbUrl : `https://${fbUrl}`;
-                      window.open(validUrl, '_blank');
-                    }}
-                    className="w-full py-2.5 px-3 bg-[#1877F2] hover:bg-[#166fe5] text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer active:scale-95 mt-1"
-                  >
-                    <ExternalLink className="w-4 h-4" />
-                    <span>ফেসবুক আইডি / পেজ লিংকে যান</span>
-                  </button>
-                )}
               </div>
 
               {/* Footer Close Button */}
-              <button
-                onClick={() => setShowHelplineModal(false)}
-                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black rounded-xl text-xs transition cursor-pointer"
-              >
-                বন্ধ করুন
-              </button>
+              <div className="p-4 bg-slate-50 border-t border-slate-100 shrink-0 pb-10">
+                <button
+                  onClick={() => setShowHelplineModal(false)}
+                  className="w-full py-3.5 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-black rounded-2xl text-sm transition cursor-pointer"
+                >
+                  বন্ধ করুন
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
 
-        {/* ================= LOCALIZED TELECOM TRANSACTION HISTORY MODAL ================= */}
         {showSectionTxHistory && (
-          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
-            <motion.div 
-              initial={{ opacity: 0, y: 50 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 50 }}
-              className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col max-h-[85vh] sm:max-h-[80vh] overflow-hidden text-slate-800 font-sans"
+          <div className="fixed inset-0 z-50 bg-white flex flex-col">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="flex-1 flex flex-col overflow-hidden bg-white text-slate-800"
             >
               {/* Header */}
-              <div className="bg-gradient-to-r from-indigo-700 via-indigo-800 to-slate-900 text-white px-5 py-4 flex items-center justify-between shadow-sm">
+              <div className="bg-gradient-to-r from-indigo-700 via-indigo-800 to-slate-900 text-white px-5 py-4 flex items-center justify-between shrink-0 shadow-sm">
                 <div className="flex items-center gap-2">
                   <ClipboardList className="w-5 h-5 text-indigo-200" />
                   <div>
@@ -1716,7 +1654,7 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
               </div>
 
               {/* Search Bar */}
-              <div className="p-4 border-b border-slate-100 bg-slate-50/50">
+              <div className="p-4 border-b border-slate-100 bg-slate-50/50 shrink-0">
                 <div className="relative">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
                   <input 
@@ -1724,12 +1662,12 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
                     value={txModalSearch}
                     onChange={(e) => setTxModalSearch(e.target.value)}
                     placeholder="পরিমাণ, নম্বর বা অপারেটর দিয়ে খুঁজুন..."
-                    className="w-full bg-white border border-slate-200 pl-10 pr-4 py-2 rounded-2xl text-xs font-medium focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600"
+                    className="w-full bg-white border border-slate-200 pl-10 pr-4 py-2.5 rounded-2xl text-sm font-medium focus:outline-none focus:border-indigo-600"
                   />
                   {txModalSearch && (
                     <button 
                       onClick={() => setTxModalSearch('')}
-                      className="text-[10px] font-black text-slate-400 hover:text-slate-600 absolute right-3.5 top-2.5"
+                      className="text-[11px] font-black text-slate-400 hover:text-slate-600 absolute right-3.5 top-2.5"
                     >
                       মুছুন
                     </button>
@@ -1738,9 +1676,9 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
               </div>
 
               {/* Content */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-white">
                 {loadingTx ? (
-                  <div className="text-center py-10 text-slate-400 text-xs font-bold">
+                  <div className="text-center py-20 text-slate-400 text-xs font-bold">
                     খতিয়ান লোড হচ্ছে...
                   </div>
                 ) : (() => {
@@ -1764,7 +1702,7 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
 
                   if (filteredTxs.length === 0) {
                     return (
-                      <div className="text-center py-10 text-slate-400 text-xs font-bold">
+                      <div className="text-center py-20 text-slate-400 text-xs font-bold">
                         কোনো টেলিকম রিচার্জ বা ড্রাইভ রেকর্ড পাওয়া যায়নি।
                       </div>
                     );
@@ -1775,27 +1713,27 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
                       <div 
                         key={`${tx.id}-${idx}`} 
                         onClick={() => openReceiptForTx(tx)}
-                        className="p-3 bg-white border border-slate-150 hover:border-indigo-300 hover:bg-indigo-50/30 rounded-2xl shadow-3xs flex justify-between items-start gap-3 text-left cursor-pointer transition active:scale-[0.99]"
+                        className="p-4 bg-white border border-slate-150 hover:border-indigo-300 hover:bg-indigo-50/10 rounded-2xl shadow-3xs flex justify-between items-start gap-4 text-left cursor-pointer transition active:scale-[0.99]"
                       >
-                        <div className="space-y-1">
-                          <span className="text-xs font-black text-slate-800 block">{tx.typeLabel || 'মোবাইল রিচার্জ'}</span>
-                          <span className="text-[10px] text-slate-400 block font-medium">
+                        <div className="space-y-1.5 flex-1 min-w-0">
+                          <span className="text-sm font-black text-slate-900 block truncate">{tx.typeLabel || 'মোবাইল রিচার্জ'}</span>
+                          <span className="text-[10px] text-slate-400 block font-bold font-mono">
                             {new Date(tx.createdAt).toLocaleDateString('bn-BD')} {new Date(tx.createdAt).toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit' })}
                           </span>
-                          <p className="text-[10.5px] text-slate-650 font-bold leading-normal">{tx.description}</p>
+                          <p className="text-[11px] text-slate-600 font-bold leading-relaxed">{tx.description}</p>
                           {tx.id && (
-                            <span className="inline-block text-[9px] bg-slate-105 text-slate-500 font-mono px-2 py-0.5 rounded-md">
-                              TXN ID: {tx.id.replace('tx-tel-', '').replace('tx-cash-', '').toUpperCase()}
+                            <span className="inline-block text-[9px] bg-slate-100 text-slate-500 font-mono px-2 py-0.5 rounded-md">
+                              TXID: {tx.id.replace('tx-tel-', '').replace('tx-cash-', '').toUpperCase()}
                             </span>
                           )}
                         </div>
                         <div className="text-right shrink-0">
-                          <span className="text-xs font-black font-mono block text-rose-600">
+                          <span className="text-sm font-black font-mono block text-rose-600">
                             - ৳{tx.amount.toLocaleString('en-US')}
                           </span>
-                          <span className={`inline-block text-[8.5px] font-extrabold px-1.5 py-0.2 mt-1 rounded-md uppercase ${
-                            tx.status === 'success' || tx.status === 'approved' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
-                            tx.status === 'pending' ? 'bg-amber-50 text-amber-700 border border-amber-100' : 'bg-rose-50 text-rose-700 border border-rose-100'
+                          <span className={`inline-block text-[9px] font-black px-2 py-0.5 mt-2 rounded-md uppercase border ${
+                            tx.status === 'success' || tx.status === 'approved' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
+                            tx.status === 'pending' ? 'bg-amber-50 text-amber-700 border-amber-100' : 'bg-rose-50 text-rose-700 border-rose-100'
                           }`}>
                             {tx.status === 'success' || tx.status === 'approved' ? 'সফল' : tx.status === 'pending' ? 'অপেক্ষমাণ' : 'ব্যর্থ'}
                           </span>
@@ -1807,8 +1745,8 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
               </div>
 
               {/* Footer */}
-              <div className="p-4 bg-slate-50 border-t border-slate-100 text-center">
-                <span className="text-[10px] text-slate-400 font-bold">© BUSINESS NETWORK BANGLADESH (BNB)</span>
+              <div className="p-4 bg-slate-50 border-t border-slate-100 text-center shrink-0 pb-10">
+                <span className="text-[10px] text-slate-400 font-black tracking-widest uppercase">© BUSINESS NETWORK BANGLADESH</span>
               </div>
             </motion.div>
           </div>

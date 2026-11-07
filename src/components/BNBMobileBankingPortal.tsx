@@ -1,11 +1,13 @@
 import { JenifyPaymentGateway } from './JenifyPaymentGateway';
 import React, { useState, useEffect } from 'react';
 import { X, PlusCircle, Globe, Banknote, Send, ArrowRight, Home, FileText, ChevronLeft, CreditCard, CheckCircle2, AlertCircle, Copy, Search, HelpCircle, Eye, EyeOff, ChevronDown, Lightbulb, Flame, Droplet, Wifi, Tv, Smartphone, UploadCloud, Trash2, Image, Camera, ChevronRight, RotateCcw, Briefcase, Bookmark, Info, ShieldCheck, Lock } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { User, Transaction, AppConfig, SavedBNBCard, normalizePaidMonthsArray, getEffectiveBalance, generateBNBTrxId, formatShortTrxId } from '../types';
 import { db } from '../lib/firebase';
 import { collection, addDoc, query, where, getDocs, getDoc, orderBy, limit, doc, updateDoc, onSnapshot, setDoc, deleteDoc, runTransaction } from 'firebase/firestore';
 import BNBAutoSalaryPay from './BNBAutoSalaryPay';
 import { BNBPaymentReceiptModal, PaymentReceiptData } from './BNBPaymentReceiptModal';
+import { BNBTransferAnimationModal } from './BNBTransferAnimationModal';
 import { OtpVerificationModal } from './OtpVerificationModal';
 import { useBackHandler } from '../lib/navigationManager';
 import UnifiedBackButton from './UnifiedBackButton';
@@ -84,6 +86,23 @@ export const BNBMobileBankingPortal: React.FC<BNBMobileBankingPortalProps> = ({
   const [errorMsg, setErrorMsg] = useState('');
   const [receiptModalData, setReceiptModalData] = useState<PaymentReceiptData | null>(null);
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
+
+  // Send Money Animated Transfer Screen State
+  const [isTransferAnimOpen, setIsTransferAnimOpen] = useState(false);
+  const [transferAnimData, setTransferAnimData] = useState<{
+    senderName: string;
+    senderPhone: string;
+    receiverName: string;
+    receiverPhone: string;
+    amount: number;
+    txId?: string;
+  }>({
+    senderName: '',
+    senderPhone: '',
+    receiverName: '',
+    receiverPhone: '',
+    amount: 0
+  });
 
   // End-to-End OTP Verification System States (Blueprint Architecture)
   const [isOtpModalOpen, setIsOtpModalOpen] = useState(false);
@@ -1506,7 +1525,7 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
         const sData = senderSnap.data();
         const rData = receiverSnap.data();
 
-        const currentSenderBal = sData.balance || 0;
+        const currentSenderBal = getEffectiveBalance(sData);
         if (currentSenderBal < amountNum) {
           throw new Error(`পর্যাপ্ত ওয়ালেট ব্যালেন্স নেই! আপনার বর্তমান ওয়ালেট ব্যালেন্স ৳ ${currentSenderBal.toLocaleString('en-US')} BDT।`);
         }
@@ -1516,7 +1535,7 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
           finalReceiverBal = (rData.savings || 0) + amountNum;
           transaction.update(receiverRef, { savings: finalReceiverBal, dpsBalance: finalReceiverBal });
         } else {
-          finalReceiverBal = (rData.balance || 0) + amountNum;
+          finalReceiverBal = getEffectiveBalance(rData) + amountNum;
           transaction.update(receiverRef, { balance: finalReceiverBal, mainBalance: finalReceiverBal });
         }
 
@@ -2212,7 +2231,18 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
           senderPhone: user.phone,
           transactionDate: new Date().toLocaleString('bn-BD', { day: 'numeric', month: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: true })
         });
-        setIsReceiptOpen(true);
+
+        // Trigger Animated BNB Transfer Screen ⚡
+        setTransferAnimData({
+          senderName: user.name || 'প্রেরক',
+          senderPhone: user.memberId || user.phone || '',
+          receiverName: receiverData.name || 'প্রাপক',
+          receiverPhone: receiverData.memberId || receiverData.phone || sendTargetId,
+          amount: amountNum,
+          txId: generatedTxId
+        });
+        setIsTransferAnimOpen(true);
+
         setSendTargetId('');
         setSendAmount('');
         setSecurityPin('');
@@ -5939,51 +5969,68 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
                 </div>
 
                 {/* Month Picker Popup modal */}
-                {showMonthPopup && (
-                  <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-                    <div className="bg-white text-slate-800 w-full max-w-sm rounded-3xl shadow-xl p-5 space-y-4">
-                      <h3 className="text-sm font-black text-slate-900">মাস নির্বাচন করুন</h3>
-                      <div className="grid grid-cols-1 gap-2 max-h-[300px] overflow-y-auto">
-                        {[
-                          { en: 'January 2026', bn: 'জানুয়ারি 2026' },
-                          { en: 'February 2026', bn: 'ফেব্রুয়ারি 2026' },
-                          { en: 'March 2026', bn: 'মার্চ 2026' },
-                          { en: 'April 2026', bn: 'এপ্রিল 2026' },
-                          { en: 'May 2026', bn: 'মে 2026' },
-                          { en: 'June 2026', bn: 'জুন 2026' },
-                          { en: 'July 2026', bn: 'জুলাই 2026' },
-                          { en: 'August 2026', bn: 'আগস্ট 2026' },
-                          { en: 'September 2026', bn: 'সেপ্টেম্বর 2026' },
-                          { en: 'October 2026', bn: 'অক্টোবর 2026' },
-                          { en: 'November 2026', bn: 'নভেম্বর 2026' },
-                          { en: 'December 2026', bn: 'ডিসেম্বর 2026' },
-                        ].map((m) => (
-                          <button
-                            key={m.en}
-                            type="button"
-                            onClick={() => {
-                              setBillMonth(m.en);
-                              setShowMonthPopup(false);
-                            }}
-                            className={`w-full flex items-center justify-between p-3 border rounded-xl text-xs ${billMonth === m.en ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200'}`}
-                          >
-                            <span className="font-bold text-slate-800">{m.en} ({m.bn})</span>
-                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${billMonth === m.en ? 'border-emerald-500' : 'border-slate-300'}`}>
-                              {billMonth === m.en && <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />}
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setShowMonthPopup(false)}
-                        className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs cursor-pointer"
+                <AnimatePresence>
+                  {showMonthPopup && (
+                    <div className="fixed inset-0 z-[150] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+                      <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+                      
+                      <motion.div 
+                        initial={{ y: "100%" }} 
+                        animate={{ y: 0 }} 
+                        exit={{ y: "100%" }} 
+                        transition={{ type: "spring", damping: 25, stiffness: 200 }} 
+                        className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden text-left"
                       >
-                        বন্ধ করুন
-                      </button>
+                        <div className="bg-[#004a2c] text-white px-6 py-5 flex items-center justify-between shrink-0">
+                          <h3 className="font-black text-lg">মাস নির্বাচন করুন</h3>
+                          <button onClick={() => setShowMonthPopup(false)} className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer">
+                            <X className="w-5 h-5" />
+                          </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-6 space-y-3">
+                          {[
+                            { en: 'January 2026', bn: 'জানুয়ারি 2026' },
+                            { en: 'February 2026', bn: 'ফেব্রুয়ারি 2026' },
+                            { en: 'March 2026', bn: 'মার্চ 2026' },
+                            { en: 'April 2026', bn: 'এপ্রিল 2026' },
+                            { en: 'May 2026', bn: 'মে 2026' },
+                            { en: 'June 2026', bn: 'জুন 2026' },
+                            { en: 'July 2026', bn: 'জুলাই 2026' },
+                            { en: 'August 2026', bn: 'আগস্ট 2026' },
+                            { en: 'September 2026', bn: 'সেপ্টেম্বর 2026' },
+                            { en: 'October 2026', bn: 'অক্টোবর 2026' },
+                            { en: 'November 2026', bn: 'নভেম্বর 2026' },
+                            { en: 'December 2026', bn: 'ডিসেম্বর 2026' },
+                          ].map((m) => (
+                            <button
+                              key={m.en}
+                              type="button"
+                              onClick={() => {
+                                setBillMonth(m.en);
+                                setShowMonthPopup(false);
+                              }}
+                              className={`w-full flex items-center justify-between p-5 border-2 rounded-2xl transition-all ${billMonth === m.en ? 'border-emerald-500 bg-emerald-50 shadow-sm' : 'border-slate-100 hover:border-slate-200'}`}
+                            >
+                              <span className="font-bold text-slate-800">{m.en} <span className="text-slate-400">({m.bn})</span></span>
+                              <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${billMonth === m.en ? 'border-emerald-500' : 'border-slate-300'}`}>
+                                {billMonth === m.en && <div className="w-3 h-3 rounded-full bg-emerald-500" />}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                        <div className="p-6 bg-slate-50 border-t border-slate-100">
+                          <button
+                            type="button"
+                            onClick={() => setShowMonthPopup(false)}
+                            className="w-full py-4.5 bg-[#004a2c] hover:bg-[#003a22] text-white font-black rounded-2xl text-sm transition cursor-pointer"
+                          >
+                            বন্ধ করুন
+                          </button>
+                        </div>
+                      </motion.div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </AnimatePresence>
 
                 {/* Amount input field */}
                 <div className="space-y-1.5">
@@ -6590,213 +6637,286 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
         )}
 
         {/* More Rates Modal */}
-        {isMoreRatesOpen && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-            <div className="bg-white text-slate-800 w-full max-w-md rounded-3xl shadow-xl overflow-hidden animate-in fade-in-50 zoom-in-95 duration-200">
-              <div className="bg-[#0B1528] text-white p-4 flex justify-between items-center">
-                <div className="flex items-center gap-2">
-                  <Globe className="w-5 h-5 text-emerald-400 animate-spin" style={{ animationDuration: '6s' }} />
-                  <div>
-                    <h3 className="text-xs font-black">গ্লোবাল লাইভ রেমিট্যান্স রেট</h3>
-                    <p className="text-[9px] text-emerald-400 font-semibold">লাইভ রেটসমূহ</p>
+        <AnimatePresence>
+          {isMoreRatesOpen && (
+            <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+              <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+              <motion.div 
+                initial={{ y: "100%" }} 
+                animate={{ y: 0 }} 
+                exit={{ y: "100%" }} 
+                transition={{ type: "spring", damping: 25, stiffness: 200 }} 
+                className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden text-left"
+              >
+                <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between shrink-0">
+                  <div className="flex items-center gap-3">
+                    <Globe className="w-6 h-6 text-emerald-300 animate-spin" style={{ animationDuration: '8s' }} />
+                    <div>
+                      <h3 className="font-bold text-lg">গ্লোবাল লাইভ রেট</h3>
+                      <p className="text-[10px] text-emerald-200 uppercase tracking-widest font-bold">Remittance Rates</p>
+                    </div>
                   </div>
-                </div>
-                <button 
-                  onClick={() => setIsMoreRatesOpen(false)}
-                  className="p-1.5 hover:bg-white/10 rounded-full transition text-white"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="p-4 space-y-4">
-                {/* Search country */}
-                <div className="relative">
-                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                    <Search className="w-4 h-4" />
-                  </span>
-                  <input
-                    type="text"
-                    placeholder="দেশের নাম বা কারেন্সি খুঁজুন..."
-                    value={ratesSearchQuery}
-                    onChange={(e) => setRatesSearchQuery(e.target.value)}
-                    className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                  />
+                  <button onClick={() => setIsMoreRatesOpen(false)} className="p-2 hover:bg-white/10 rounded-full transition cursor-pointer">
+                    <X className="w-6 h-6" />
+                  </button>
                 </div>
 
-                {/* Country rates list */}
-                <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
-                  {remittanceRates
-                    .filter(rate => 
-                      rate.name.toLowerCase().includes(ratesSearchQuery.toLowerCase()) ||
-                      (rate.flag && rate.flag.includes(ratesSearchQuery))
-                    )
-                    .map((rate, idx) => (
-                      <div key={`${rate.id}-${idx}`} className="p-3 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-2xl flex items-center justify-between transition shadow-3xs">
-                        <div className="flex items-center gap-3">
-                          <span className="text-2xl leading-none">{rate.flag}</span>
-                          <div className="text-left">
-                            <p className="text-xs font-black text-slate-800">{rate.name}</p>
-                            <span className="text-[9px] text-slate-400 font-semibold">{rate.multiplier || '1 একক'}</span>
+                <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                  {/* Search country */}
+                  <div className="relative">
+                    <span className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400">
+                      <Search className="w-5 h-5" />
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="দেশের নাম বা কারেন্সি খুঁজুন..."
+                      value={ratesSearchQuery}
+                      onChange={(e) => setRatesSearchQuery(e.target.value)}
+                      className="w-full pl-11 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-bold focus:outline-none focus:ring-4 focus:ring-emerald-500/10 focus:bg-white transition-all"
+                    />
+                  </div>
+
+                  {/* Country rates list */}
+                  <div className="grid grid-cols-1 gap-3">
+                    {remittanceRates
+                      .filter(rate => 
+                        rate.name.toLowerCase().includes(ratesSearchQuery.toLowerCase()) ||
+                        (rate.flag && rate.flag.includes(ratesSearchQuery))
+                      )
+                      .map((rate, idx) => (
+                        <div key={`${rate.id}-${idx}`} className="p-4 bg-white hover:bg-slate-50 border border-slate-100 rounded-2xl flex items-center justify-between transition shadow-sm">
+                          <div className="flex items-center gap-4">
+                            <span className="text-3xl leading-none">{rate.flag}</span>
+                            <div className="text-left">
+                              <p className="font-black text-slate-900">{rate.name}</p>
+                              <span className="text-[10px] text-slate-400 font-bold uppercase">{rate.multiplier || '1 একক'}</span>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[9px] text-slate-400 font-black block uppercase tracking-tighter">লাইভ রেট</span>
+                            <strong className="text-lg font-black font-mono text-emerald-700">৳ {(Number(rate.value) || 0).toFixed(2)}</strong>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <span className="text-[8px] text-slate-400 font-bold block uppercase">লাইভ রেট</span>
-                          <strong className="text-xs font-black font-mono text-emerald-700">৳ {(Number(rate.value) || 0).toFixed(2)}</strong>
-                        </div>
+                      ))}
+                    {remittanceRates.length === 0 && (
+                      <div className="py-12 text-center text-slate-400 space-y-2">
+                        <Globe className="w-12 h-12 mx-auto opacity-20" />
+                        <p className="text-sm font-bold">কোনো দেশের তথ্য পাওয়া যায়নি।</p>
                       </div>
-                    ))}
-                  {remittanceRates.length === 0 && (
-                    <p className="text-center text-xs text-slate-400 italic py-6">কোনো দেশের তথ্য পাওয়া যায়নি।</p>
-                  )}
-                </div>
+                    )}
+                  </div>
 
-                {/* Live Converter Calculator */}
-                <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-2xl space-y-2.5">
-                  <h4 className="text-[10px] text-emerald-800 font-black uppercase tracking-wider flex items-center gap-1">
-                    <span>🧮</span> রেমিট্যান্স ক্যালকুলেটর (সহজ হিসাব)
-                  </h4>
-                  <div className="grid grid-cols-2 gap-2 text-left">
-                    <div>
-                      <label className="text-[9px] text-slate-500 font-bold block mb-1">দেশ নির্বাচন করুন</label>
-                      <select 
-                        id="calc-country-select"
-                        className="w-full p-2 bg-white border border-slate-200 rounded-lg text-[11px] font-semibold"
-                        onChange={(e) => {
-                          const r = remittanceRates.find(x => x.id === e.target.value);
-                          if (r) {
-                            (document.getElementById('calc-rate-val') as HTMLInputElement).value = String(r.value);
-                            const amountInput = document.getElementById('calc-foreign-amt') as HTMLInputElement;
+                  {/* Live Converter Calculator */}
+                  <div className="bg-emerald-50/50 border border-emerald-100 p-6 rounded-[2rem] space-y-4">
+                    <h4 className="text-xs text-emerald-900 font-black uppercase tracking-widest flex items-center gap-2">
+                      <span>🧮</span> রেমিট্যান্স ক্যালকুলেটর
+                    </h4>
+                    <div className="grid grid-cols-1 gap-4 text-left">
+                      <div className="space-y-1">
+                        <label className="text-[10px] text-slate-500 font-black uppercase ml-1">দেশ নির্বাচন করুন</label>
+                        <select 
+                          id="calc-country-select"
+                          className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-bold outline-none focus:ring-4 focus:ring-emerald-500/10 transition-all"
+                          onChange={(e) => {
+                            const r = remittanceRates.find(x => x.id === e.target.value);
+                            if (r) {
+                              (document.getElementById('calc-rate-val') as HTMLInputElement).value = String(r.value);
+                              const amountInput = document.getElementById('calc-foreign-amt') as HTMLInputElement;
+                              const resultSpan = document.getElementById('calc-bdt-res') as HTMLElement;
+                              if (amountInput && resultSpan) {
+                                const bdt = Number(amountInput.value) * r.value;
+                                resultSpan.innerText = `৳ ${bdt.toFixed(2)}`;
+                              }
+                            }
+                          }}
+                        >
+                          <option value="">দেশ সিলেক্ট করুন</option>
+                          {remittanceRates.map((r, idx) => (
+                            <option key={`${r.id}-${idx}`} value={r.id}>{r.flag} {r.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] text-slate-500 font-black uppercase ml-1">কারেন্সির পরিমাণ</label>
+                        <input
+                          type="number"
+                          id="calc-foreign-amt"
+                          placeholder="উদাঃ 500"
+                          defaultValue="100"
+                          onChange={(e) => {
+                            const rateVal = Number((document.getElementById('calc-rate-val') as HTMLInputElement)?.value || 0);
+                            const amt = Number(e.target.value);
                             const resultSpan = document.getElementById('calc-bdt-res') as HTMLElement;
-                            if (amountInput && resultSpan) {
-                              const bdt = Number(amountInput.value) * r.value;
+                            if (resultSpan) {
+                              const bdt = amt * rateVal;
                               resultSpan.innerText = `৳ ${bdt.toFixed(2)}`;
                             }
-                          }
-                        }}
-                      >
-                        <option value="">দেশ সিলেক্ট করুন</option>
-                        {remittanceRates.map((r, idx) => (
-                          <option key={`${r.id}-${idx}`} value={r.id}>{r.flag} {r.name}</option>
-                        ))}
-                      </select>
+                          }}
+                          className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-mono font-bold outline-none focus:ring-4 focus:ring-emerald-500/10 transition-all"
+                        />
+                        <input type="hidden" id="calc-rate-val" defaultValue="0" />
+                      </div>
                     </div>
-                    <div>
-                      <label className="text-[9px] text-slate-500 font-bold block mb-1">কারেন্সির পরিমাণ</label>
-                      <input
-                        type="number"
-                        id="calc-foreign-amt"
-                        placeholder="উদাঃ 500"
-                        defaultValue="100"
-                        onChange={(e) => {
-                          const rateVal = Number((document.getElementById('calc-rate-val') as HTMLInputElement)?.value || 0);
-                          const amt = Number(e.target.value);
-                          const resultSpan = document.getElementById('calc-bdt-res') as HTMLElement;
-                          if (resultSpan) {
-                            const bdt = amt * rateVal;
-                            resultSpan.innerText = `৳ ${bdt.toFixed(2)}`;
-                          }
-                        }}
-                        className="w-full p-2 bg-white border border-slate-200 rounded-lg text-[11px] font-semibold focus:outline-none"
-                      />
-                      <input type="hidden" id="calc-rate-val" defaultValue="0" />
+                    <div className="bg-white p-5 border border-emerald-100 rounded-2xl text-center shadow-sm">
+                      <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block mb-1">বাংলাদেশি টাকা পাবেন (BDT)</span>
+                      <strong id="calc-bdt-res" className="text-2xl font-black font-mono text-emerald-700 leading-none">৳ 0.00</strong>
                     </div>
-                  </div>
-                  <div className="bg-white p-2.5 border border-slate-150 rounded-xl text-center shadow-3xs">
-                    <span className="text-[9px] text-slate-400 font-bold block">বাংলাদেশি টাকা পাবেন (BDT)</span>
-                    <strong id="calc-bdt-res" className="text-xs font-black font-mono text-emerald-700">৳ 0.00</strong>
                   </div>
                 </div>
-              </div>
 
-              <div className="bg-slate-50 px-4 py-3 border-t border-slate-100 text-center">
-                <button
-                  onClick={() => setIsMoreRatesOpen(false)}
-                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition cursor-pointer shadow-sm"
-                >
-                  বন্ধ করুন
-                </button>
-              </div>
+                <div className="p-6 bg-slate-50 border-t border-slate-100 shrink-0">
+                  <button
+                    onClick={() => setIsMoreRatesOpen(false)}
+                    className="w-full py-4 bg-[#004a2c] hover:bg-[#003a22] text-white rounded-2xl text-sm font-black transition cursor-pointer shadow-lg shadow-emerald-900/20"
+                  >
+                    বন্ধ করুন
+                  </button>
+                </div>
+              </motion.div>
             </div>
-          </div>
-        )}
+          )}
+        </AnimatePresence>
 
         {/* Save Card Nickname Modal */}
-        {showSaveCardModal && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
-            <div className="bg-white border border-slate-200 p-4 rounded-2.5xl w-full max-w-xs space-y-3 shadow-2xl text-left">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                <h4 className="text-xs font-black text-slate-800 flex items-center gap-1">
-                  ⭐ প্রিয় কার্ড হিসেবে সেভ করুন
-                </h4>
-                <button onClick={() => setShowSaveCardModal(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              <p className="text-[10px] text-slate-500 font-bold">
-                কার্ড নম্বর: <span className="font-mono text-slate-900 font-black tracking-wider">{cardAddNum}</span>
-              </p>
-              <div className="space-y-1">
-                <label className="block text-[10px] font-bold text-slate-600">কার্ডের নাম/লেবেল (যেমন: ভাইয়ের কার্ড, সেজো ভাই)</label>
-                <input
-                  type="text"
-                  value={saveCardNicknameInput}
-                  onChange={(e) => setSaveCardNicknameInput(e.target.value)}
-                  placeholder="যেমন: ভাইয়ের কার্ড"
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold focus:border-amber-500 text-slate-800"
-                  autoFocus
-                />
-              </div>
-              <div className="flex gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowSaveCardModal(false)}
-                  className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer"
-                >
-                  বাতিল
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSaveCurrentCardToFavorites()}
-                  className="flex-1 py-2 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs rounded-xl cursor-pointer shadow-sm active:scale-95"
-                >
-                  সেভ করুন ⭐
-                </button>
-              </div>
+        <AnimatePresence>
+          {showSaveCardModal && (
+            <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+              <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+              <motion.div 
+                initial={{ y: "100%" }} 
+                animate={{ y: 0 }} 
+                exit={{ y: "100%" }} 
+                transition={{ type: "spring", damping: 25, stiffness: 200 }} 
+                className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden text-left"
+              >
+                <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between shrink-0">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-white/10 rounded-xl">
+                      <Bookmark className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-lg">প্রিয় কার্ড সেভ করুন</h3>
+                      <p className="text-[10px] text-emerald-200 uppercase tracking-widest font-bold">Save to Favorites</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setShowSaveCardModal(false)} className="p-2 hover:bg-white/10 rounded-full transition cursor-pointer">
+                    <X className="w-6 h-6" />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                  <div className="bg-slate-50 border border-slate-200 p-6 rounded-[2rem] space-y-4">
+                    <div className="text-center space-y-1">
+                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">কার্ড নম্বর</p>
+                      <p className="font-mono text-2xl font-black text-slate-900 tracking-[0.1em]">{cardAddNum}</p>
+                    </div>
+
+                    <div className="space-y-1.5 pt-2">
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider ml-1">কার্ডের নাম/লেবেল (যেমন: ভাইয়ের কার্ড)</label>
+                      <input
+                        type="text"
+                        value={saveCardNicknameInput}
+                        onChange={(e) => setSaveCardNicknameInput(e.target.value)}
+                        placeholder="যেমন: ভাইয়ের কার্ড"
+                        className="w-full px-5 py-4 bg-white border-2 border-slate-200 focus:border-[#004a2c] rounded-2xl text-base font-bold outline-none focus:ring-4 focus:ring-emerald-500/10 transition-all text-slate-900"
+                        autoFocus
+                      />
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-amber-50 border border-amber-100 rounded-2xl flex items-start gap-3">
+                    <Info className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                    <p className="text-xs text-amber-900 font-bold leading-relaxed">কার্ডটি সেভ করে রাখলে পরবর্তীতে পুনরায় কার্ড নম্বর টাইপ করার প্রয়োজন হবে না।</p>
+                  </div>
+                </div>
+
+                <div className="p-6 bg-slate-50 border-t border-slate-200 flex gap-4 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setShowSaveCardModal(false)}
+                    className="flex-1 py-4 bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 rounded-2xl font-black text-sm transition cursor-pointer"
+                  >
+                    বাতিল
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSaveCurrentCardToFavorites()}
+                    className="flex-1 py-4 bg-amber-500 hover:bg-amber-600 text-white font-black text-sm rounded-2xl cursor-pointer shadow-lg shadow-amber-900/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+                  >
+                    সেভ করুন ⭐
+                  </button>
+                </div>
+              </motion.div>
             </div>
-          </div>
-        )}
+          )}
+        </AnimatePresence>
 
         {/* QR Code Fullscreen Viewer Modal */}
-        {previewQrModalUrl && (
-          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
-            <div className="bg-white rounded-3xl p-5 max-w-sm w-full space-y-4 text-center relative shadow-2xl border border-slate-100">
-              <div className="flex justify-between items-center border-b border-slate-100 pb-2">
-                <span className="text-xs font-black text-indigo-950 flex items-center gap-1.5 uppercase tracking-wider">
-                  📷 লেনদেন কিউআর কোড স্ক্যানার ভিউ
-                </span>
-                <button 
-                  onClick={() => setPreviewQrModalUrl(null)}
-                  className="w-7 h-7 bg-slate-100 hover:bg-red-50 hover:text-red-600 rounded-full flex items-center justify-center font-bold text-xs text-slate-600 transition cursor-pointer"
-                >
-                  ✕
-                </button>
-              </div>
-              <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
-                <img src={previewQrModalUrl} alt="Bank Scan QR" className="max-h-80 mx-auto rounded-xl object-contain shadow-sm" />
-              </div>
-              <p className="text-[10.5px] text-slate-600 font-bold font-sans leading-relaxed">
-                আপনার মোবাইল ওয়ালেট ও লেনদেন বা আন্তর্জাতিক ব্যাংক অ্যাপ থেকে কিউআর কোডটি স্ক্যান করে সহজে পেমেন্ট সম্পন্ন করুন।
-              </p>
-              <button 
-                onClick={() => setPreviewQrModalUrl(null)}
-                className="w-full py-2.5 bg-indigo-900 hover:bg-indigo-950 text-white font-extrabold text-xs rounded-xl shadow-sm uppercase font-sans cursor-pointer transition active:scale-95"
+        <AnimatePresence>
+          {previewQrModalUrl && (
+            <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+              <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+              <motion.div 
+                initial={{ y: "100%" }} 
+                animate={{ y: 0 }} 
+                exit={{ y: "100%" }} 
+                transition={{ type: "spring", damping: 25, stiffness: 200 }} 
+                className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden text-center"
               >
-                বন্ধ করুন (Close)
-              </button>
+                <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between shrink-0">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-white/10 rounded-xl">
+                      <Camera className="w-5 h-5 text-white" />
+                    </div>
+                    <h3 className="font-bold text-lg">কিউআর কোড স্ক্যানার ভিউ</h3>
+                  </div>
+                  <button onClick={() => setPreviewQrModalUrl(null)} className="p-2 hover:bg-white/10 rounded-full transition cursor-pointer">
+                    <X className="w-6 h-6" />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                  <div className="bg-slate-50 p-8 rounded-[2.5rem] border border-slate-100 shadow-inner inline-block mx-auto">
+                    <img src={previewQrModalUrl} alt="Bank Scan QR" className="max-h-[300px] w-auto mx-auto rounded-2xl object-contain shadow-2xl ring-8 ring-white" />
+                  </div>
+
+                  <div className="bg-emerald-50 border border-emerald-100 p-6 rounded-2xl space-y-2">
+                    <p className="text-sm text-emerald-900 font-bold leading-relaxed">
+                      আপনার মোবাইল ওয়ালেট ও লেনদেন বা আন্তর্জাতিক ব্যাংক অ্যাপ থেকে কিউআর কোডটি স্ক্যান করে সহজে পেমেন্ট সম্পন্ন করুন।
+                    </p>
+                    <p className="text-[10px] text-emerald-600 font-black uppercase tracking-widest pt-1 border-t border-emerald-200/50">
+                      100% Secured Payment Gateway
+                    </p>
+                  </div>
+                </div>
+
+                <div className="p-6 bg-slate-50 border-t border-slate-200 shrink-0">
+                  <button 
+                    onClick={() => setPreviewQrModalUrl(null)}
+                    className="w-full py-4 bg-indigo-900 hover:bg-indigo-950 text-white font-extrabold text-sm rounded-2xl shadow-lg shadow-indigo-900/20 uppercase cursor-pointer transition active:scale-95"
+                  >
+                    বন্ধ করুন (Close)
+                  </button>
+                </div>
+              </motion.div>
             </div>
-          </div>
-        )}
+          )}
+        </AnimatePresence>
+
+        {/* BNB Send Money Animated Transfer Screen Modal */}
+        <BNBTransferAnimationModal
+          isOpen={isTransferAnimOpen}
+          senderName={transferAnimData.senderName}
+          senderPhone={transferAnimData.senderPhone}
+          receiverName={transferAnimData.receiverName}
+          receiverPhone={transferAnimData.receiverPhone}
+          amount={transferAnimData.amount}
+          txId={transferAnimData.txId}
+          onComplete={() => {
+            setIsTransferAnimOpen(false);
+            setIsReceiptOpen(true);
+          }}
+        />
 
         {/* Digital Payment Receipt Modal */}
         <BNBPaymentReceiptModal

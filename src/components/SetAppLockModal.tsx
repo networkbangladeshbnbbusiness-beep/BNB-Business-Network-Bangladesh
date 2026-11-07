@@ -86,162 +86,171 @@ export default function SetAppLockModal({
 
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex flex-col bg-[#0b6623] w-screen h-screen overflow-y-auto p-3 sm:p-6 font-sans text-slate-800">
-        <div className="flex items-center justify-center my-auto w-full">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.98, y: 10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.98, y: 10 }}
-            className="bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-100 relative text-left overflow-hidden"
-          >
-          {/* Close button */}
-          <button
-            onClick={onClose}
-            className="absolute top-3 right-3 p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors cursor-pointer"
-          >
-            <X className="w-4 h-4" />
-          </button>
-
+      <div className="fixed inset-0 z-[99999] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+        <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+        
+        <motion.div
+          initial={{ y: "100%" }}
+          animate={{ y: 0 }}
+          exit={{ y: "100%" }}
+          transition={{ type: "spring", damping: 25, stiffness: 200 }}
+          className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
+        >
           {/* Header */}
-          <div className="flex items-center gap-2.5 mb-3">
-            <div className={`w-9 h-9 rounded-xl ${isMandatoryOnLogout ? 'bg-rose-50 border-rose-200 text-rose-600' : 'bg-emerald-50 border-emerald-200 text-emerald-600'} border flex items-center justify-center shrink-0`}>
-              <ShieldCheck className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-1">
-                {isMandatoryOnLogout
-                  ? (isBn ? '🔒 নিরাপদ লগআউট ও পিন লক' : '🔒 Secure Logout & PIN Lock')
-                  : (isBn ? '🔒 অ্যাপ পিন লক সেটআপ' : '🔒 App PIN Lock Setup')}
-              </h3>
-              <p className="text-[10px] text-slate-500 font-medium">
-                {isMandatoryOnLogout
-                  ? (isBn ? 'লগআউটের পর পুনরায় এই 4 ডিজিট পিন দিয়ে লগইন করতে হবে' : 'You will need this 4-digit PIN to log in again')
-                  : (isBn ? 'সিকিউরিটি পিন (4 ডিজিট)' : 'Security PIN (4 Digits)')}
-              </p>
-            </div>
-          </div>
-
-          {/* Warning / Instructions Box */}
-          <div className={`${isMandatoryOnLogout ? 'bg-rose-50/80 border-rose-200 text-rose-900' : 'bg-amber-50/80 border-amber-200 text-amber-900'} border p-2.5 rounded-xl text-[10.5px] leading-relaxed mb-3 flex items-start gap-2 shadow-xs`}>
-            <AlertTriangle className={`w-3.5 h-3.5 ${isMandatoryOnLogout ? 'text-rose-600' : 'text-amber-600'} shrink-0 mt-0.5`} />
-            <div>
-              {isMandatoryOnLogout ? (
-                <span>
-                  {isBn ? (
-                    <><strong>বাধ্যতামূলক নিয়ম:</strong> লগআউট করতে 4 ডিজিট পিন সেট/কনফার্ম করুন। পুনরায় অ্যাপে প্রবেশ করতে <strong>হুবহু এই পিনটি</strong> প্রয়োজন হবে।</>
-                  ) : (
-                    <><strong>Mandatory Rule:</strong> Set/confirm a 4-digit PIN to log out. You will need <strong>this exact PIN</strong> to re-enter the app.</>
-                  )}
-                </span>
-              ) : (
-                <span>
-                  {isBn ? (
-                    <><strong>গুরুত্বপূর্ণ নিয়ম:</strong> 4 ডিজিট সিকিউরিটি পিন সেট করুন। অ্যাপ লক আনলক করতে এই পিনটি দিতে হবে।</>
-                  ) : (
-                    <><strong>Important:</strong> Set a 4-digit security PIN. You will need this PIN to unlock the app.</>
-                  )}
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Error Message */}
-          {error && (
-            <div className="bg-rose-50 border border-rose-200 text-rose-700 p-2 rounded-xl text-[11px] font-bold mb-3 flex items-center gap-1.5">
-              <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-rose-500" />
-              <span>{error}</span>
-            </div>
-          )}
-
-          {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-2.5">
-            {/* Input 1 */}
-            <div>
-              <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                {isBn ? '4 ডিজিট পিন' : '4-Digit PIN'} <span className="text-rose-500">*</span>
-              </label>
-              <div className="relative">
-                <input
-                  type={showCode ? 'text' : 'password'}
-                  inputMode="numeric"
-                  pattern="\d{4}"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                  maxLength={4}
-                  placeholder="••••"
-                  className="w-full pl-8 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-all tracking-widest"
-                  required
-                />
-                <KeyRound className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
-                <button
-                  type="button"
-                  onClick={() => setShowCode(!showCode)}
-                  className="absolute right-2.5 top-2 p-0.5 text-slate-400 hover:text-slate-600 rounded cursor-pointer"
-                >
-                  {showCode ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                </button>
+          <div className="bg-[#004a2c] p-5 text-white relative flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-white/15 flex items-center justify-center border border-white/20">
+                <ShieldCheck className="w-6 h-6 text-emerald-200" />
+              </div>
+              <div>
+                <h3 className="text-lg font-black text-white">
+                  {isMandatoryOnLogout
+                    ? (isBn ? 'নিরাপদ লগআউট ও পিন লক' : 'Secure Logout & PIN Lock')
+                    : (isBn ? 'অ্যাপ পিন লক সেটআপ' : 'App PIN Lock Setup')}
+                </h3>
+                <p className="text-[10px] text-emerald-100/70 font-medium tracking-wide uppercase">Application Security Module</p>
               </div>
             </div>
-
-            {/* Input 2 */}
-            <div>
-              <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                {isBn ? 'পিন পুনরায় নিশ্চিত করুন' : 'Confirm 4-Digit PIN'} <span className="text-rose-500">*</span>
-              </label>
-              <div className="relative">
-                <input
-                  type={showConfirmCode ? 'text' : 'password'}
-                  inputMode="numeric"
-                  pattern="\d{4}"
-                  value={confirmCode}
-                  onChange={(e) => setConfirmCode(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                  maxLength={4}
-                  placeholder="••••"
-                  className="w-full pl-8 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-all tracking-widest"
-                  required
-                />
-                <Lock className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
-                <button
-                  type="button"
-                  onClick={() => setShowConfirmCode(!showConfirmCode)}
-                  className="absolute right-2.5 top-2 p-0.5 text-slate-400 hover:text-slate-600 rounded cursor-pointer"
-                >
-                  {showConfirmCode ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                </button>
-              </div>
-            </div>
-
-            {/* Submit & Cancel Actions */}
-            <div className="pt-1.5 flex items-center gap-2">
+            {!isMandatoryOnLogout && (
               <button
                 type="button"
                 onClick={onClose}
-                disabled={loading}
-                className="w-1/3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-all cursor-pointer text-center"
+                className="p-2 text-white/80 hover:text-white rounded-full bg-white/10 hover:bg-white/20 transition cursor-pointer"
               >
-                {isBn ? 'বাতিল' : 'Cancel'}
+                <X className="w-5 h-5" />
               </button>
-              <button
-                type="submit"
-                disabled={loading}
-                className={`w-2/3 py-2 px-3 ${isMandatoryOnLogout ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/20' : 'bg-emerald-700 hover:bg-emerald-800 shadow-emerald-700/20'} text-white font-extrabold rounded-xl text-xs shadow-xs transition-all cursor-pointer flex items-center justify-center gap-1.5`}
+            )}
+          </div>
+
+          {/* Body */}
+          <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div className="space-y-4">
+              <div className={`${isMandatoryOnLogout ? 'bg-rose-50 border-rose-100' : 'bg-amber-50 border-amber-100'} rounded-2xl p-5 flex gap-4 shadow-sm transition-colors`}>
+                <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-xs ${isMandatoryOnLogout ? 'bg-white text-rose-500' : 'bg-white text-amber-500'}`}>
+                  <AlertTriangle className="w-6 h-6" />
+                </div>
+                <div className="space-y-1">
+                  <h4 className={`text-sm font-black uppercase tracking-wider ${isMandatoryOnLogout ? 'text-rose-900' : 'text-amber-900'}`}>
+                    {isBn ? 'গুরুত্বপূর্ণ সতর্কতা:' : 'Important Notice:'}
+                  </h4>
+                  <p className={`text-xs sm:text-sm font-bold leading-relaxed ${isMandatoryOnLogout ? 'text-rose-800' : 'text-amber-800'}`}>
+                    {isMandatoryOnLogout ? (
+                      isBn ? 'লগআউট করতে 4 ডিজিট পিন সেট/কনফার্ম করুন। পুনরায় অ্যাপে প্রবেশ করতে হুবহু এই পিনটি প্রয়োজন হবে।' : 'Set/confirm a 4-digit PIN to log out. You will need this exact PIN to re-enter the app.'
+                    ) : (
+                      isBn ? '4 ডিজিট সিকিউরিটি পিন সেট করুন। অ্যাপ লক আনলক করতে এই পিনটি দিতে হবে।' : 'Set a 4-digit security PIN. You will need this PIN to unlock the app.'
+                    )}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Error Message */}
+            {error && (
+              <motion.div
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-rose-50 border border-rose-200 text-rose-800 text-xs p-4 rounded-2xl font-bold flex items-start gap-2 shadow-sm"
               >
-                {loading ? (
-                  <span className="inline-block animate-spin rounded-full h-3.5 w-3.5 border-2 border-white border-t-transparent" />
-                ) : (
-                  <>
-                    <Lock className="w-3.5 h-3.5" />
+                <AlertTriangle className="w-5 h-5 shrink-0 text-rose-600" />
+                <span>{error}</span>
+              </motion.div>
+            )}
+
+            {/* PIN Inputs */}
+            <form id="app-lock-form" onSubmit={handleSubmit} className="space-y-6">
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="block text-xs font-black text-slate-700 uppercase tracking-wider">
+                    {isBn ? 'নতুন ৪ ডিজিট পিন দিন' : 'Enter 4-Digit PIN'}
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showCode ? 'text' : 'password'}
+                      inputMode="numeric"
+                      pattern="\d{4}"
+                      value={code}
+                      onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                      maxLength={4}
+                      placeholder="••••"
+                      className="w-full pl-12 pr-12 py-4 bg-slate-50 border-2 border-slate-200 rounded-2xl text-xl font-black text-slate-900 focus:bg-white focus:outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-600 transition-all tracking-[1em] text-center"
+                      required
+                    />
+                    <KeyRound className="w-5 h-5 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <button
+                      type="button"
+                      onClick={() => setShowCode(!showCode)}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded cursor-pointer"
+                    >
+                      {showCode ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-xs font-black text-slate-700 uppercase tracking-wider">
+                    {isBn ? 'পুনরায় নিশ্চিত করুন' : 'Confirm PIN'}
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showConfirmCode ? 'text' : 'password'}
+                      inputMode="numeric"
+                      pattern="\d{4}"
+                      value={confirmCode}
+                      onChange={(e) => setConfirmCode(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                      maxLength={4}
+                      placeholder="••••"
+                      className="w-full pl-12 pr-12 py-4 bg-slate-50 border-2 border-slate-200 rounded-2xl text-xl font-black text-slate-900 focus:bg-white focus:outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-600 transition-all tracking-[1em] text-center"
+                      required
+                    />
+                    <Lock className="w-5 h-5 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmCode(!showConfirmCode)}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded cursor-pointer"
+                    >
+                      {showConfirmCode ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </form>
+          </div>
+
+          {/* Footer */}
+          <div className="p-6 bg-slate-50 border-t border-slate-100 grid grid-cols-3 gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={loading || isMandatoryOnLogout}
+              className={`py-4 bg-white hover:bg-slate-100 text-slate-600 font-black rounded-2xl border border-slate-200 transition-all active:scale-95 cursor-pointer text-center text-sm ${isMandatoryOnLogout ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              {isBn ? 'বাতিল' : 'Cancel'}
+            </button>
+            <button
+              type="submit"
+              form="app-lock-form"
+              disabled={loading || code.length !== 4 || confirmCode.length !== 4}
+              className={`col-span-2 py-4 px-6 ${isMandatoryOnLogout ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/20' : 'bg-emerald-700 hover:bg-emerald-800 shadow-emerald-700/20'} text-white font-black rounded-2xl text-base shadow-lg transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-2 disabled:bg-slate-300 disabled:shadow-none disabled:cursor-not-allowed`}
+            >
+              {loading ? (
+                <>
+                  <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <span>সংরক্ষণ হচ্ছে...</span>
+                </>
+              ) : (
+                <>
+                  <Lock className="w-5 h-5" />
+                  <span>
                     {isMandatoryOnLogout
                       ? (isBn ? 'লক করে লগআউট করুন' : 'Lock & Log Out')
-                      : (isBn ? 'অ্যাপ লক করুন' : 'Lock App')}
-                  </>
-                )}
-              </button>
-            </div>
-          </form>
+                      : (isBn ? 'অ্যাপ লক সম্পন্ন করুন' : 'Setup App Lock')}
+                  </span>
+                </>
+              )}
+            </button>
+          </div>
         </motion.div>
       </div>
-    </div>
-  </AnimatePresence>
+    </AnimatePresence>
   );
 }

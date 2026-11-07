@@ -227,6 +227,9 @@ export interface DispatchReport {
 export function AdminShopSection(props: any) {
   const {
     adminTab,
+    currentUser,
+    onBack,
+    appConfig,
     y,
     text,
     left,
@@ -278,8 +281,19 @@ export function AdminShopSection(props: any) {
 
   return (
     <>
-        {adminTab === 'shop_admin' && (
+        {(adminTab === 'shop_admin' || adminTab === 'safi_admin') && (
           <div className="space-y-6">
+            {/* Live Safi Shop Admin Management Portal */}
+            {currentUser && (
+              <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs">
+                <SafiPremiumShop
+                  user={currentUser}
+                  onClose={onBack || (() => {})}
+                  appConfig={appConfig || {}}
+                  isAdminMode={true}
+                />
+              </div>
+            )}
             <div className="bg-white border border-slate-200 p-6 rounded-3xl text-left text-slate-800">
               <h2 className="text-base sm:text-lg font-black text-rose-450 flex items-center gap-2">
                 🛒 সমবায় সুপার শপ এডমিন প্যানেল (Co-Op Shop Catalog Manager)

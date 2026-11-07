@@ -125,65 +125,54 @@ export function calculateSamityFine(dayOfMonth: number, totalDaysElapsed?: numbe
 
 /**
  * Calculates accurate overdue days and fine for any given unpaid month.
- * Handles both the current month and past overdue months.
+ * Enforces:
+ * 1) Global Fine Switch (appConfig.autoFineEnabled !== false && appConfig.lateFineEnabled !== false)
+ * 2) Individual Member Fine Switch (user.fineEnabled !== false)
+ * 3) Running Current Month Rule (only calculates fine for current running month)
  */
-export function calculateOverdueDaysAndFine(targetYear: number, targetMonthIdx: number): { daysLate: number; fineAmount: number; statusText: string } {
+export function calculateOverdueDaysAndFine(
+  targetYear: number, 
+  targetMonthIdx: number, 
+  appConfigObj?: any, 
+  userObj?: User
+): { daysLate: number; fineAmount: number; statusText: string } {
+  // 1. Check Global Fine Switch
+  if (appConfigObj && (appConfigObj.autoFineEnabled === false || appConfigObj.lateFineEnabled === false)) {
+    return { daysLate: 0, fineAmount: 0, statusText: 'গ্লোবাল জরিমানা সিস্টেম বন্ধ (OFF)' };
+  }
+
+  // 2. Check Individual Member Fine Switch
+  if (userObj && userObj.fineEnabled === false) {
+    return { daysLate: 0, fineAmount: 0, statusText: 'সদস্যের জরিমানা মওকুফ সক্রিয় (OFF)' };
+  }
+
   const now = new Date();
   const currentYear = now.getFullYear();
   const currentMonthIdx = now.getMonth();
   const currentDay = now.getDate();
 
-  // If target month is current month:
-  if (targetYear === currentYear && targetMonthIdx === currentMonthIdx) {
-    const res = calculateSamityFine(currentDay);
-    return { daysLate: res.daysLate, fineAmount: res.fineAmount, statusText: res.statusText };
+  // Rule: Fine applies ONLY to current running month (রানিং মাস)!
+  if (targetYear !== currentYear || targetMonthIdx !== currentMonthIdx) {
+    return { daysLate: 0, fineAmount: 0, statusText: 'শুধুমাত্র রানিং বর্তমান মাসে জরিমানা গণনা করা হয় (অন্য মাসের জরিমানা নেই)' };
   }
 
-  // If target month is in future:
-  if (targetYear > currentYear || (targetYear === currentYear && targetMonthIdx > currentMonthIdx)) {
-    return { daysLate: 0, fineAmount: 0, statusText: 'ভবিষ্যৎ মাস (কোনো জরিমানা নেই)' };
-  }
-
-  // If target month is in past: calculate total elapsed days from the 15th of that target month
-  const dueDate = new Date(targetYear, targetMonthIdx, 15);
-  const diffMs = now.getTime() - dueDate.getTime();
-  const daysLate = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
-
-  if (daysLate <= 0) {
-    return { daysLate: 0, fineAmount: 0, statusText: '১-১৫ তারিখ: নিয়মিত কিস্তির সময় (কোনো জরিমানা নেই)' };
-  }
-
-  // ১৬ তারিখ থেকে প্রথম ৩০ দিন: প্রতিদিন ৳১ জরিমানা
-  if (daysLate <= 30) {
-    const fine = daysLate * 1;
-    return { 
-      daysLate, 
-      fineAmount: fine, 
-      statusText: `১৬ তারিখ থেকে প্রথম ৩০ দিন: প্রতিদিন ৳১ জরিমানা (বকেয়া: ${daysLate} দিন = ৳${fine})` 
-    };
-  }
-
-  // ৩০ দিন অতিক্রান্ত হলে: প্রতিদিন ৳১০ জরিমানা
-  const daysAt10Rate = daysLate - 30;
-  const fine = (30 * 1) + (daysAt10Rate * 10);
-  return { 
-    daysLate, 
-    fineAmount: fine, 
-    statusText: `৩০ দিন অতিক্রান্ত: প্রতিদিন ৳১০ জরিমানা (বকেয়া: ${daysLate} দিন = ৳${fine})` 
-  };
+  const res = calculateSamityFine(currentDay);
+  return { daysLate: res.daysLate, fineAmount: res.fineAmount, statusText: res.statusText };
 }
 
 /**
  * Returns member category monthly rate:
- * 🔴 ওনার: ৳৪,০০০
- * 🟡 শেয়ার হোল্ডার: ৳২,০০০
- * ⚪ ইনভেস্টার: ৳১,০০০
+ * 🔴 ওনার: ৳৫,০০০
+ * 🔵 শেয়ার হোল্ডার: ৳৩,০০০
+ * 🟢 ইনভেস্টার: ৳২,০০০
+ * 🟡 সাপোর্টার: ৳১,০০০
  */
 export function getUserMonthlyInstallmentRate(user: User): number {
   if (!user) return 1000;
-  if (user.memberCategory === 'owner') return 4000;
-  if (user.memberCategory === 'shareholder') return 2000;
-  if (user.memberCategory === 'investor') return 1000;
+  if (user.memberCategory === 'owner') return 5000;
+  if (user.memberCategory === 'shareholder') return 3000;
+  if (user.memberCategory === 'investor') return 2000;
+  if (user.memberCategory === 'supporter') return 1000;
   if (user.monthlySavingsTarget && Number(user.monthlySavingsTarget) > 0) {
     return Number(user.monthlySavingsTarget);
   }
@@ -951,7 +940,8 @@ export async function processQuarterlyInstallmentPayment(
   quarterId: string,
   deductFromMainBalance: boolean = true,
   payerUser?: User,
-  paymentSource: 'payer' | 'target' = 'payer'
+  paymentSource: 'payer' | 'target' = 'payer',
+  customAmount?: number
 ): Promise<{ success: boolean; message: string; newBalance?: number; newSavings?: number }> {
   if (!targetUser || !targetUser.uid) {
     return { success: false, message: 'অবৈধ ব্যবহারকারী প্রোফাইল।' };
@@ -973,11 +963,9 @@ export async function processQuarterlyInstallmentPayment(
       const isOwner = freshTarget.memberCategory === 'owner';
       const isShareholder = freshTarget.memberCategory === 'shareholder';
 
-      if (!isOwner && !isShareholder) {
-        throw new Error('ত্রৈমাসিক অতিরিক্ত কিস্তি শুধুমাত্র ওনার (৳১০,০০০) এবং শেয়ার হোল্ডার (৳৫,০০০) সদস্যদের জন্য প্রযোজ্য।');
-      }
-
-      const qRate = isOwner ? 10000 : 5000;
+      const qRate = (typeof customAmount === 'number' && customAmount > 0) 
+        ? customAmount 
+        : (isOwner ? 10000 : isShareholder ? 5000 : 10000);
       const qExisting: string[] = Array.isArray(freshTarget.samityQuarterlyPaidMonths) ? freshTarget.samityQuarterlyPaidMonths : [];
 
       if (qExisting.includes(qKey)) {
@@ -1022,12 +1010,18 @@ export async function processQuarterlyInstallmentPayment(
       const newSavings = currentSavings + qRate;
       const newShares = Math.floor(newSavings / 1000);
       const updatedQMonths = [...new Set([...qExisting, qKey])];
+      const qAmountsExisting = freshTarget.samityQuarterlyPaidAmounts || {};
+      const updatedQAmounts = {
+        ...qAmountsExisting,
+        [qKey]: qRate
+      };
 
       transaction.update(targetUserRef, {
         savings: newSavings,
         dpsBalance: newSavings,
         shares: newShares,
         samityQuarterlyPaidMonths: updatedQMonths,
+        samityQuarterlyPaidAmounts: updatedQAmounts,
         updatedAt: new Date().toISOString()
       });
 
@@ -1252,12 +1246,18 @@ export async function processMultipleQuarterlyInstallmentsPayment(
       const newSavings = currentSavings + totalRequired;
       const newShares = Math.floor(newSavings / 1000);
       const updatedQMonths = [...new Set([...qExisting, ...targetKeysToPay.map(t => t.key)])];
+      const qAmountsExisting = freshTarget.samityQuarterlyPaidAmounts || {};
+      const updatedQAmounts = { ...qAmountsExisting };
+      targetKeysToPay.forEach(t => {
+        updatedQAmounts[t.key] = qRatePerMonth;
+      });
 
       transaction.update(targetUserRef, {
         savings: newSavings,
         dpsBalance: newSavings,
         shares: newShares,
         samityQuarterlyPaidMonths: updatedQMonths,
+        samityQuarterlyPaidAmounts: updatedQAmounts,
         updatedAt: new Date().toISOString()
       });
 

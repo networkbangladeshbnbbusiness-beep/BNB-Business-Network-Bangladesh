@@ -1,3 +1,18 @@
+export interface AutoDonationConfig {
+  enabled: boolean;
+  frequency: 'monthly' | 'custom_yearly' | 'custom_monthly'; // প্রতি মাসে | বছরে ৩/৪/১২ বার | ১২ মাস কাস্টম পরিমাণ
+  amount: number; // ডিফল্ট পরিমাণ (যেমন ১০, ২০, ৩০, ৫০, ১০০ টাকা)
+  dayOfMonth: number; // মাসের কোন তারিখে কাটা হবে (১-২৮)
+  yearlyTimes?: number; // বছরে কত বার (৩, ৪, অথবা ১২ বার)
+  yearlyMonths?: number[]; // কোন কোন মাসে কাটা হবে (১-১২)
+  monthAmounts?: Record<string, number>; // ১২ মাসের প্রতিটির জন্য আলাদা কাস্টম পরিমাণ { '1': 10, '2': 20, ... }
+  isAnonymous?: boolean; // পরিচয় গোপন রেখে দান
+  lastExecutedDate?: string; // YYYY-MM-DD
+  nextExecutionDate?: string; // YYYY-MM-DD
+  totalAutoDonated?: number; // সর্বমোট অটো দান
+  updatedAt?: string;
+}
+
 export interface User {
   id?: string;
   uid: string;
@@ -32,9 +47,10 @@ export interface User {
   profession?: string;
   alternatePhone?: string;
   emergencyPhone?: string;
-  memberCategory?: 'owner' | 'shareholder' | 'investor' | 'regular';
+  memberCategory?: 'owner' | 'shareholder' | 'investor' | 'supporter' | 'regular';
   nominees?: MemberNominee[];
   samityQuarterlyPaidMonths?: string[]; // e.g. ['2026-jan', '2026-apr', '2026-jul', '2026-oct']
+  samityQuarterlyPaidAmounts?: Record<string, number>; // e.g. {'2026-jan': 10000, '2026-apr': 50000}
   nomineeName?: string;
   nomineeRelation?: string;
   nomineePhone?: string;
@@ -42,6 +58,8 @@ export interface User {
   createdByUid?: string;
   createdByMemberId?: string;
   createdByMemberName?: string;
+  autoDonationConfig?: AutoDonationConfig;
+  qardAutoDonationConfig?: AutoDonationConfig;
   referrerMemberId?: string;
   dob?: string;
   division?: string;
@@ -122,6 +140,8 @@ export interface User {
   samityDeactivateReason?: string;
   samityDeactivateRequestedAt?: string;
   samitySwitchStatus?: 'ON' | 'OFF';
+  samityApplicationInstallmentAmount?: number; // Held 1st month installment amount for pending Samity applications
+  fineEnabled?: boolean; // Whether fine calculation is enabled for this member (admin toggleable, default true)
   samityOptOutReason?: string;
   samityOptInReason?: string;
   samityOptOutDate?: string;
@@ -355,6 +375,13 @@ export interface Transaction {
   extraCommission?: number;
   title?: string;
   receiverPhone?: string;
+  donationPurpose?: string;
+  district?: string;
+  thana?: string;
+  categoryLabel?: string;
+  reason?: string;
+  payoutMethod?: string;
+  payoutAccount?: string;
 }
 
 export interface Notice {
@@ -676,6 +703,13 @@ export interface AppConfig {
   telecomHelplineFacebook?: string;
   telecomHelplineNotice?: string;
   samityTerms: string;
+  autoFineEnabled?: boolean; // Global automatic fine system ON/OFF switch
+  lateFineEnabled?: boolean; // Global fine system switch alias
+  fineStartDay?: number;
+  fineDeadlineDay?: number;
+  lateFineAmount?: number;
+  lateFineType?: 'fixed' | 'per_day';
+  lateFineNoticeText?: string;
   samityPolicyConfig?: SamityPolicyConfig;
   tickerText: string;
   noticeText?: string;
@@ -683,6 +717,9 @@ export interface AppConfig {
   samityTicker?: string;
   qardTicker?: string;
   qardConfig?: QardConfig;
+  qardBaseFund?: number;
+  generalCharityTotal?: number;
+  generalCharityDisbursed?: number;
   telecomTicker?: string;
   safiTicker?: string;
   escrowTicker?: string;
@@ -1088,19 +1125,21 @@ export const normalizePaidMonthsArray = (
 
 export const getEffectiveBalance = (userObj: any): number => {
   if (!userObj) return 0;
-  const numBalance = (userObj.balance !== undefined && userObj.balance !== null && userObj.balance !== '' && !isNaN(Number(userObj.balance)))
+  const numBalance = (userObj.balance !== undefined && userObj.balance !== null && userObj.balance !== '' && Number.isFinite(Number(userObj.balance)))
     ? Number(userObj.balance)
     : null;
-  const numMainBalance = (userObj.mainBalance !== undefined && userObj.mainBalance !== null && userObj.mainBalance !== '' && !isNaN(Number(userObj.mainBalance)))
+  const numMainBalance = (userObj.mainBalance !== undefined && userObj.mainBalance !== null && userObj.mainBalance !== '' && Number.isFinite(Number(userObj.mainBalance)))
     ? Number(userObj.mainBalance)
     : null;
 
   if (numBalance !== null && numMainBalance !== null) {
-    // If both exist, balance is the authoritative canonical field
+    // Protect against partial updates or default 0 initialization on one field when the other holds a positive balance
+    if (numBalance <= 0 && numMainBalance > 0) return numMainBalance;
+    if (numMainBalance <= 0 && numBalance > 0) return numBalance;
     return numBalance;
   }
-  if (numBalance !== null) return numBalance;
-  if (numMainBalance !== null) return numMainBalance;
+  if (numBalance !== null) return Math.max(0, numBalance);
+  if (numMainBalance !== null) return Math.max(0, numMainBalance);
   return 0;
 };
 

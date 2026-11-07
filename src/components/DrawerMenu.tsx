@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { User, AppConfig } from '../types';
+import { setStoredLanguage, getStoredLanguage, t as getI18nText, translateDynamicText } from '../lib/i18n';
 import { maskSecretPhone, getMembershipCategory, verifyPinUniversal, hashPinClientAsync, convertBengaliToEnglishDigits } from '../lib/memberUtils';
 import { 
   X, 
@@ -497,15 +498,15 @@ export const DrawerMenu = React.memo(function DrawerMenu({
 
   // Languages handler
   const handleLanguageChange = (lang: string) => {
+    const nextLang = (lang === 'en' ? 'en' : 'bn') as any;
+    setStoredLanguage(nextLang);
+    setLocalAppLanguage(nextLang);
     if (onLanguageChange) {
-      onLanguageChange(lang);
-    } else {
-      setLocalAppLanguage(lang);
-      localStorage.setItem('amb_lang', lang);
+      onLanguageChange(nextLang);
     }
     setFeedback({ 
       type: 'success', 
-      message: lang === 'bn' ? 'ভাষা সফলভাবে বাংলা সেট করা হয়েছে।' : 'English language setup completed! Translation is active.' 
+      message: nextLang === 'bn' ? 'ভাষা সফলভাবে বাংলা সেট করা হয়েছে।' : 'Language successfully switched to English!' 
     });
   };
 
@@ -778,55 +779,62 @@ export const DrawerMenu = React.memo(function DrawerMenu({
       {/* Dynamic Action Modals Overlay */}
       <AnimatePresence>
         {activeSubModal && (
-          <div className="fixed inset-0 bg-black/75 z-60 flex items-center justify-center p-4 backdrop-blur-xs font-sans text-slate-800">
+          <div className="fixed inset-0 z-[150] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            
             <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl border border-slate-150 flex flex-col max-h-[85vh]"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans text-slate-800"
             >
               {/* Modal Header */}
-              <div className="bg-slate-900 text-white p-4.5 flex justify-between items-center shrink-0">
-                <div className="flex items-center gap-2">
-                  {activeSubModal === 'change_password' && <Key className="w-4.5 h-4.5 text-amber-450" />}
-                  {activeSubModal === 'change_pin' && <Lock className="w-4.5 h-4.5 text-amber-450" />}
-                  {activeSubModal === 'biometric' && <Fingerprint className="w-4.5 h-4.5 text-teal-400" />}
-                  {activeSubModal === 'logout_all' && <LogOut className="w-4.5 h-4.5 text-rose-450" />}
-                  {activeSubModal === 'lang_setting' && <Languages className="w-4.5 h-4.5 text-blue-400" />}
-                  {activeSubModal === 'notify_setting' && <Bell className="w-4.5 h-4.5 text-amber-400" />}
-                  {activeSubModal === 'theme_setting' && <Moon className="w-4.5 h-4.5 text-indigo-400" />}
-                  {activeSubModal === 'report_issue' && <AlertTriangle className="w-4.5 h-4.5 text-rose-500" />}
-                  {activeSubModal === 'faq' && <HelpCircle className="w-4.5 h-4.5 text-teal-400" />}
-                  {activeSubModal === 'terms' && <FileText className="w-4.5 h-4.5 text-blue-400" />}
-                  {activeSubModal === 'privacy' && <FileLock2 className="w-4.5 h-4.5 text-emerald-400" />}
-                  {activeSubModal === 'app_version' && <Activity className="w-4.5 h-4.5 text-purple-400" />}
-                  {activeSubModal === 'contact_info' && <Mail className="w-4.5 h-4.5 text-pink-400" />}
-                  {activeSubModal === 'delete_account' && <ShieldCheck className="w-4.5 h-4.5 text-emerald-450" />}
-                  {activeSubModal === 'permissions_info' && <ShieldAlert className="w-4.5 h-4.5 text-teal-400" />}
+              <div className="bg-[#004a2c] text-white p-5 flex justify-between items-center shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-white/10 rounded-xl">
+                    {activeSubModal === 'change_password' && <Key className="w-5 h-5 text-amber-400" />}
+                    {activeSubModal === 'change_pin' && <Lock className="w-5 h-5 text-amber-400" />}
+                    {activeSubModal === 'biometric' && <Fingerprint className="w-5 h-5 text-teal-400" />}
+                    {activeSubModal === 'logout_all' && <LogOut className="w-5 h-5 text-rose-400" />}
+                    {activeSubModal === 'lang_setting' && <Languages className="w-5 h-5 text-blue-400" />}
+                    {activeSubModal === 'notify_setting' && <Bell className="w-5 h-5 text-amber-400" />}
+                    {activeSubModal === 'theme_setting' && <Moon className="w-5 h-5 text-indigo-400" />}
+                    {activeSubModal === 'report_issue' && <AlertTriangle className="w-5 h-5 text-rose-500" />}
+                    {activeSubModal === 'faq' && <HelpCircle className="w-5 h-5 text-teal-400" />}
+                    {activeSubModal === 'terms' && <FileText className="w-5 h-5 text-blue-400" />}
+                    {activeSubModal === 'privacy' && <FileLock2 className="w-5 h-5 text-emerald-400" />}
+                    {activeSubModal === 'app_version' && <Activity className="w-5 h-5 text-purple-400" />}
+                    {activeSubModal === 'contact_info' && <Mail className="w-5 h-5 text-pink-400" />}
+                    {activeSubModal === 'delete_account' && <ShieldCheck className="w-5 h-5 text-emerald-400" />}
+                    {activeSubModal === 'permissions_info' && <ShieldAlert className="w-5 h-5 text-teal-400" />}
+                  </div>
                   
-                  <h3 className="text-xs font-black tracking-wide uppercase">
-                    {activeSubModal === 'change_password' && 'পাসওয়ার্ড পরিবর্তন'}
-                    {activeSubModal === 'change_pin' && 'সিকিউরিটি পিন পরিবর্তন'}
-                    {activeSubModal === 'biometric' && 'বায়োমেট্রিক অথেন্টিকেশন'}
-                    {activeSubModal === 'logout_all' && 'সকল ডিভাইস লগআউট'}
-                    {activeSubModal === 'lang_setting' && 'অ্যাপের ভাষা পরিবর্তন'}
-                    {activeSubModal === 'notify_setting' && 'নোটিফিকেশন অ্যালার্ট'}
-                    {activeSubModal === 'theme_setting' && 'থিম পরিবর্তন সেটিংস'}
-                    {activeSubModal === 'report_issue' && 'সমস্যা বা ত্রুটি রিপোর্ট'}
-                    {activeSubModal === 'faq' && 'সচরাচর জিজ্ঞাসিত প্রশ্নাবলী'}
-                    {activeSubModal === 'terms' && 'ব্যবহারকারীর শর্তাবলী'}
-                    {activeSubModal === 'privacy' && 'গোপনীয়তা নীতিমালা'}
-                    {activeSubModal === 'app_version' && 'অ্যাপের রিলিজ ভার্সন'}
-                    {activeSubModal === 'contact_info' && 'যোগাযোগ ও সাপোর্ট টিম'}
-                    {activeSubModal === 'delete_account' && 'আজীবন স্থায়ী অ্যাকাউন্ট সনদ'}
-                    {activeSubModal === 'permissions_info' && 'অ্যাপ পারমিশন ও ডেটা সেফটি'}
-                  </h3>
+                  <div>
+                    <h3 className="text-lg font-black leading-tight text-white">
+                      {activeSubModal === 'change_password' && 'পাসওয়ার্ড পরিবর্তন'}
+                      {activeSubModal === 'change_pin' && 'সিকিউরিটি পিন পরিবর্তন'}
+                      {activeSubModal === 'biometric' && 'বায়োমেট্রিক অথেন্টিকেশন'}
+                      {activeSubModal === 'logout_all' && 'সকল ডিভাইস লগআউট'}
+                      {activeSubModal === 'lang_setting' && 'অ্যাপের ভাষা পরিবর্তন'}
+                      {activeSubModal === 'notify_setting' && 'নোটিফিকেশন অ্যালার্ট'}
+                      {activeSubModal === 'theme_setting' && 'থিম পরিবর্তন সেটিংস'}
+                      {activeSubModal === 'report_issue' && 'সমস্যা বা ত্রুটি রিপোর্ট'}
+                      {activeSubModal === 'faq' && 'সচরাচর জিজ্ঞাসিত প্রশ্নাবলী'}
+                      {activeSubModal === 'terms' && 'ব্যবহারকারীর শর্তাবলী'}
+                      {activeSubModal === 'privacy' && 'গোপনীয়তা নীতিমালা'}
+                      {activeSubModal === 'app_version' && 'অ্যাপের রিলিজ ভার্সন'}
+                      {activeSubModal === 'contact_info' && 'যোগাযোগ ও সাপোর্ট টিম'}
+                      {activeSubModal === 'delete_account' && 'আজীবন স্থায়ী অ্যাকাউন্ট সনদ'}
+                      {activeSubModal === 'permissions_info' && 'অ্যাপ পারমিশন ও ডেটা সেফটি'}
+                    </h3>
+                  </div>
                 </div>
                 <button 
                   onClick={() => setActiveSubModal(null)}
-                  className="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded-full transition-colors cursor-pointer"
+                  className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
                 >
-                  <X className="w-5 h-5" />
+                  <X className="w-6 h-6 text-white" />
                 </button>
               </div>
 

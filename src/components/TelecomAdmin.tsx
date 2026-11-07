@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Offer, AppConfig, Transaction } from '../types';
+import { User, Offer, AppConfig, Transaction, getEffectiveBalance } from '../types';
 import { db } from '../lib/firebase';
 import { 
   collection, 
@@ -9,7 +9,8 @@ import {
   setDoc,
   getDocs, 
   deleteDoc, 
-  onSnapshot 
+  onSnapshot,
+  runTransaction
 } from 'firebase/firestore';
 import { 
   Sliders, 
@@ -935,7 +936,7 @@ export default function TelecomAdmin({
       let walletLabel = 'টেলিকম ব্যালেন্স';
 
       if (adjustWalletType === 'balance') {
-        currentBal = targetUser.balance || 0;
+        currentBal = getEffectiveBalance(targetUser);
         balanceField = 'balance';
         walletLabel = 'মূল ড্যাশবোর্ড ব্যালেন্স';
       } else if (adjustWalletType === 'superShopBalance') {
@@ -956,26 +957,42 @@ export default function TelecomAdmin({
       let notifTitle = '';
       let notifBody = '';
 
-      if (adjustActionType === 'deduct') {
-        finalBal = currentBal - amount;
-        txType = 'withdraw';
-        txLabel = adjustWalletType === 'balance' ? 'অ্যাডমিন চার্জ কর্তন' : adjustWalletType === 'superShopBalance' ? 'শপ চার্জ কর্তন' : 'টেলিকম চার্জ কর্তন';
-        paymentMethod = 'Telecom Admin Debit';
-        description = `টেলিকম প্যানেল কর্তনঃ ${adjustReason}। পূর্বের ${walletLabel}ঃ ৳${currentBal} | নতুন ${walletLabel}ঃ ৳${finalBal}।`;
-        notifTitle = `⚠️ ${walletLabel} কর্তন করা হয়েছে`;
-        notifBody = `প্রিয় গ্রাহক, আপনার ${walletLabel} হতে এডমিন প্যানেল কর্তৃক ৳${amount} কেটে নেওয়া হয়েছে।\nकारण/নোট: ${adjustReason}`;
-      } else {
-        finalBal = currentBal + amount;
-        txType = 'deposit';
-        txLabel = adjustWalletType === 'balance' ? 'অ্যাডমিন বোনাস' : adjustWalletType === 'superShopBalance' ? 'শপ বোনাস' : 'টেলিকম বোনাস';
-        paymentMethod = 'Telecom Admin Bonus';
-        description = `টেলিকম প্যানেল বোনাসঃ ${adjustReason}। পূর্বের ${walletLabel}ঃ ৳${currentBal} | নতুন ${walletLabel}ঃ ৳${finalBal}।`;
-        notifTitle = `🎉 ${walletLabel} বোনাস যুক্ত হয়েছে!`;
-        notifBody = `প্রিয় গ্রাহক, আমাদের টেলিকম এডমিন প্যানেল থেকে আপনার ${walletLabel}-এ ৳${amount} বোনাস যুক্ত করা হয়েছে।\nবোনাস নোট: ${adjustReason}`;
-      }
+      const userRef = doc(db, 'users', targetUser.uid);
+      await runTransaction(db, async (t) => {
+        const uSnap = await t.get(userRef);
+        const uData = uSnap.exists() ? uSnap.data() : targetUser;
+        if (adjustWalletType === 'balance') {
+          currentBal = getEffectiveBalance(uData);
+        } else if (adjustWalletType === 'superShopBalance') {
+          currentBal = Number(uData.superShopBalance) || 0;
+        } else {
+          currentBal = Number(uData.telecomBalance) || 0;
+        }
 
-      // Update Firestore balance
-      await updateDoc(doc(db, 'users', targetUser.uid), { [balanceField]: finalBal });
+        if (adjustActionType === 'deduct') {
+          finalBal = Math.max(0, currentBal - amount);
+          txType = 'withdraw';
+          txLabel = adjustWalletType === 'balance' ? 'অ্যাডমিন চার্জ কর্তন' : adjustWalletType === 'superShopBalance' ? 'শপ চার্জ কর্তন' : 'টেলিকম চার্জ কর্তন';
+          paymentMethod = 'Telecom Admin Debit';
+          description = `টেলিকম প্যানেল কর্তনঃ ${adjustReason}। পূর্বের ${walletLabel}ঃ ৳${currentBal} | নতুন ${walletLabel}ঃ ৳${finalBal}।`;
+          notifTitle = `⚠️ ${walletLabel} কর্তন করা হয়েছে`;
+          notifBody = `প্রিয় গ্রাহক, আপনার ${walletLabel} হতে এডমিন প্যানেল কর্তৃক ৳${amount} কেটে নেওয়া হয়েছে।\nকারণ/নোট: ${adjustReason}`;
+        } else {
+          finalBal = currentBal + amount;
+          txType = 'deposit';
+          txLabel = adjustWalletType === 'balance' ? 'অ্যাডমিন বোনাস' : adjustWalletType === 'superShopBalance' ? 'শপ বোনাস' : 'টেলিকম বোনাস';
+          paymentMethod = 'Telecom Admin Bonus';
+          description = `টেলিকম প্যানেল বোনাসঃ ${adjustReason}। পূর্বের ${walletLabel}ঃ ৳${currentBal} | নতুন ${walletLabel}ঃ ৳${finalBal}।`;
+          notifTitle = `🎉 ${walletLabel} বোনাস যুক্ত হয়েছে!`;
+          notifBody = `প্রিয় গ্রাহক, আমাদের টেলিকম এডমিন প্যানেল থেকে আপনার ${walletLabel}-এ ৳${amount} বোনাস যুক্ত করা হয়েছে।\nবোনাস নোট: ${adjustReason}`;
+        }
+
+        if (balanceField === 'balance') {
+          t.update(userRef, { balance: finalBal, mainBalance: finalBal });
+        } else {
+          t.update(userRef, { [balanceField]: finalBal });
+        }
+      });
 
       // Create Transaction Log
       await addDoc(collection(db, 'transactions'), {

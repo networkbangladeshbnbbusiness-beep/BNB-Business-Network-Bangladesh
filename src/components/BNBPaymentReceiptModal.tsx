@@ -4,8 +4,10 @@ import {
   Check, 
   X, 
   ArrowLeft,
-  Clock
+  Clock,
+  FileText
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 
 export interface PaymentReceiptData {
   transactionId?: string;
@@ -75,26 +77,24 @@ export const BNBPaymentReceiptModal: React.FC<BNBPaymentReceiptModalProps> = ({
   const receiptRef = useRef<HTMLDivElement>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
-  if (!isOpen || !data) return null;
+  const isPending = data?.status === 'pending';
+  const isFailed = data?.status === 'failed' || data?.status === 'rejected';
+  const isSuccess = data?.status === 'success' || data?.status === 'completed' || (data && !isPending && !isFailed);
 
-  const isPending = data.status === 'pending';
-  const isFailed = data.status === 'failed' || data.status === 'rejected';
-  const isSuccess = data.status === 'success' || data.status === 'completed' || (!isPending && !isFailed);
-
-  const amountNum = Number(data.amount || 0);
-  const feeNum = Number(data.fee || 0);
-  const totalNum = Number(data.totalAmount || (amountNum + feeNum));
+  const amountNum = Number(data?.amount || 0);
+  const feeNum = Number(data?.fee || 0);
+  const totalNum = Number(data?.totalAmount || (amountNum + feeNum));
 
   const amountFormatted = amountNum.toFixed(2);
   const feeFormatted = feeNum.toFixed(2);
   const totalFormatted = totalNum.toFixed(2);
 
-  const displayPhone = data.senderPhone || data.phone || data.userPhone || '01600664081';
-  const receiverName = data.beneficiaryName || data.accountName || 'Md rasel mia';
-  const receiverId = data.beneficiaryAccount || 'BNB00000001';
-  const txId = data.transactionId || 'DJDOVRAY8U';
+  const displayPhone = data?.senderPhone || data?.phone || data?.userPhone || '01600664081';
+  const receiverName = data?.beneficiaryName || data?.accountName || 'Md rasel mia';
+  const receiverId = data?.beneficiaryAccount || 'BNB00000001';
+  const txId = data?.transactionId || 'DJDOVRAY8U';
 
-  const rawDate = data.transactionDate || data.createdAt;
+  const rawDate = data?.transactionDate || data?.createdAt;
   const displayDate = rawDate 
     ? (new Date(rawDate).toString() !== 'Invalid Date' 
         ? new Date(rawDate).toLocaleString('en-US', {
@@ -160,184 +160,176 @@ export const BNBPaymentReceiptModal: React.FC<BNBPaymentReceiptModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-white p-3 sm:p-4 overflow-y-auto w-full h-full min-h-screen text-[#08502d] font-sans animate-fade-in">
-      
-      {/* Full white background container */}
-      <div className="relative w-full max-w-md bg-white min-h-screen sm:min-h-0 overflow-hidden flex flex-col p-4 sm:p-5 my-auto space-y-3">
-        
-        {/* Top Floating Close Button */}
-        <button
-          type="button"
-          onClick={onClose}
-          className="absolute top-3.5 right-3.5 z-20 w-8 h-8 rounded-full bg-emerald-50 hover:bg-emerald-100 active:scale-95 text-[#08502d] flex items-center justify-center transition cursor-pointer border border-emerald-200"
-          title="বন্ধ করুন"
-        >
-          <X className="w-4.5 h-4.5" />
-        </button>
+    <AnimatePresence>
+      {isOpen && data && (
+        <div className="fixed inset-0 z-[100000] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+          {/* Notification Clear Space (Top margin) */}
+          <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
 
-        {/* 1. Official Logo & Header Heading */}
-        <div className="text-center pt-1 space-y-1.5">
-          {/* Centered Official Logo */}
-          <div className="flex justify-center pb-0.5">
-            <img 
-              src={logoSrc} 
-              alt="BNB Official Logo" 
-              className="w-28 h-28 sm:w-36 sm:h-36 object-contain"
-              onError={(e) => {
-                (e.target as HTMLImageElement).src = '/app_icon.png';
-              }}
-            />
-          </div>
-
-          {/* Heading in green text */}
-          <h2 className="text-xl sm:text-2xl font-black text-[#08502d] tracking-tight">
-            {isPending 
-              ? 'লেনদেন আবেদনটি জমা হয়েছে!' 
-              : isFailed 
-                ? 'লেনদেন আবেদনটি বাতিল হয়েছে!' 
-                : 'লেনদেন সফলভাবে সম্পন্ন হয়েছে!'}
-          </h2>
-
-          {/* Date & Time Pill Badge */}
-          <div className="flex justify-center my-1.5">
-            <div className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-[#045d36] text-white rounded-full text-xs font-bold font-mono shadow-xs">
-              <Clock className="w-3.5 h-3.5 text-emerald-200" />
-              <span>তারিখ: {displayDate}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* 2. THE RECEIPT CONTAINER (Green outline box with all green texts) */}
-        <div 
-          ref={receiptRef}
-          className="border-2 border-[#166534] rounded-2xl p-3.5 sm:p-4 bg-white space-y-2.5 text-xs sm:text-[13px] font-sans shadow-2xs"
-        >
-          {/* Row 1: Receiver */}
-          <div className="flex justify-between items-center py-1 border-b border-emerald-100/60 gap-2">
-            <span className="font-extrabold text-[#08502d] whitespace-nowrap">গ্রাহক (Receiver):</span>
-            <div className="font-black text-[#08502d] text-right flex items-center justify-end gap-1">
-              <span>{receiverName}</span>
-              {receiverId && (
-                <span className="text-[#166534] font-bold text-xs">(আইডি: {receiverId})</span>
-              )}
-              <button
-                type="button"
-                onClick={() => handleCopy(`${receiverName} ${receiverId}`, 'receiver')}
-                className="p-0.5 hover:bg-emerald-50 rounded text-[#166534] transition cursor-pointer"
-                title="কপি করুন"
-              >
-                {copiedField === 'receiver' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-              </button>
-            </div>
-          </div>
-
-          {/* Row 2: Mobile Number */}
-          <div className="flex justify-between items-center py-1 border-b border-emerald-100/60 gap-2">
-            <span className="font-extrabold text-[#08502d] whitespace-nowrap">মোবাইল নম্বর:</span>
-            <div className="font-mono font-black text-[#08502d] flex items-center gap-1">
-              <span>{displayPhone}</span>
-              <button
-                type="button"
-                onClick={() => handleCopy(displayPhone, 'phone')}
-                className="p-0.5 hover:bg-emerald-50 rounded text-[#166534] transition cursor-pointer"
-                title="কপি করুন"
-              >
-                {copiedField === 'phone' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-              </button>
-            </div>
-          </div>
-
-          {/* Row 3: Amount */}
-          <div className="flex justify-between items-center py-1 border-b border-emerald-100/60 gap-2">
-            <span className="font-extrabold text-[#08502d] whitespace-nowrap">লেনদেন পরিমাণ (Amount):</span>
-            <span className="font-mono font-black text-[#08502d] text-sm">
-              ৳{amountFormatted} BDT
-            </span>
-          </div>
-
-          {/* Row 4: Service Charge */}
-          <div className="flex justify-between items-center py-1 border-b border-emerald-100/60 gap-2">
-            <span className="font-extrabold text-[#08502d] whitespace-nowrap">সার্ভিস চার্জ (Charge):</span>
-            <span className="font-extrabold text-[#166534]">
-              {feeNum > 0 ? `৳${feeFormatted} BDT` : '৳0.00 (ফ্রি)'}
-            </span>
-          </div>
-
-          {/* Row 5: Total Deducted */}
-          <div className="flex justify-between items-center py-1 border-b border-emerald-100/60 gap-2">
-            <span className="font-black text-[#08502d] whitespace-nowrap">মোট কেটে নেওয়া হয়েছে:</span>
-            <span className="font-mono font-black text-[#08502d] text-sm">
-              ৳{totalFormatted} BDT
-            </span>
-          </div>
-
-          {/* Dashed Line */}
-          <div className="border-b border-dashed border-[#166534] my-2" />
-
-          {/* Row 6: TxID Green Pill Box */}
-          <div className="flex justify-between items-center py-1 gap-2">
-            <span className="font-extrabold text-[#08502d] whitespace-nowrap">ট্রানজেকশন আইডি (TxID):</span>
-            <div className="bg-[#e6f9f0] border border-[#166534] rounded-lg px-2.5 py-1 flex items-center gap-1.5 text-[#166534] font-mono font-black text-xs sm:text-sm shadow-2xs">
-              <span>{txId}</span>
-              <button
-                type="button"
-                onClick={() => handleCopy(txId, 'txid')}
-                className="p-0.5 hover:bg-[#c2f2dc] rounded text-[#166534] transition cursor-pointer"
-                title="ট্রানজেকশন আইডি কপি করুন"
-              >
-                {copiedField === 'txid' ? <Check className="w-3.5 h-3.5 text-emerald-700" /> : <Copy className="w-3.5 h-3.5" />}
-              </button>
-            </div>
-          </div>
-
-          {/* Row 7: Status Green Pill Box */}
-          <div className="flex justify-between items-center py-1 gap-2">
-            <span className="font-extrabold text-[#08502d] whitespace-nowrap">লেনদেন স্ট্যাটাস (Status):</span>
-            <div className="bg-[#e6f9f0] border border-[#166534] rounded-full px-3 py-1 text-[#166534] font-black text-xs">
-              {isFailed ? 'বাতিল (Failed)' : isPending ? 'অপেক্ষমাণ (Pending)' : 'সফল (Success)'}
-            </div>
-          </div>
-
-          {/* Footer Seal inside Box */}
-          <div className="pt-2 text-center border-t border-emerald-100 text-[9.5px] font-bold text-[#166534] uppercase tracking-wider">
-            BUSINESS NETWORK BANGLADESH (BNB) • ডিজিটাল লেনদেন সীমিত
-          </div>
-        </div>
-
-        {/* Toast Feedback */}
-        {copiedField === 'all_text' && (
-          <div className="bg-[#08502d] text-white text-xs font-bold py-2 px-3 rounded-xl text-center shadow-lg border border-emerald-700 animate-in fade-in zoom-in duration-150 flex items-center justify-center gap-1.5">
-            <Check className="w-4 h-4 text-emerald-300" />
-            <span>✓ রসিদের সমস্ত তথ্য কপি করা হয়েছে!</span>
-          </div>
-        )}
-
-        {/* 3. Solid Green Replica Action Buttons (Only 2 Main Buttons) */}
-        <div className="grid grid-cols-2 gap-2 pt-2">
-          {/* Left Button: পোড়ে ফিরে যান */}
-          <button
-            type="button"
-            onClick={onClose}
-            className="py-3 px-2 rounded-xl bg-[#0d7a46] hover:bg-[#0a6338] active:scale-95 text-white text-xs sm:text-sm font-extrabold flex items-center justify-center gap-1.5 transition shadow-md cursor-pointer"
+          <motion.div 
+            initial={{ y: "100%" }} 
+            animate={{ y: 0 }} 
+            exit={{ y: "100%" }} 
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden text-left"
           >
-            <ArrowLeft className="w-4 h-4" />
-            <span>পোড়ে ফিরে যান</span>
-          </button>
+            {/* Header */}
+            <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-white/10 rounded-xl">
+                  <FileText className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-lg">লেনদেন রসিদ</h3>
+                  <p className="text-[10px] text-emerald-200 uppercase tracking-widest font-bold">Transaction Receipt</p>
+                </div>
+              </div>
+              <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition cursor-pointer">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
 
-          {/* Right Button: লেখা কপি করুন */}
-          <button
-            type="button"
-            onClick={handleCopyAllText}
-            className="py-3 px-2 rounded-xl bg-[#0d7a46] hover:bg-[#0a6338] active:scale-95 text-white text-xs sm:text-sm font-extrabold flex items-center justify-center gap-1.5 transition shadow-md cursor-pointer"
-          >
-            <Copy className="w-4 h-4" />
-            <span>লেখা কপি করুন</span>
-          </button>
+            {/* Receipt Body */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {/* 1. Official Logo & Header Heading */}
+              <div className="text-center space-y-4">
+                {/* Centered Official Logo */}
+                <div className="flex justify-center">
+                  <img 
+                    src={logoSrc} 
+                    alt="BNB Official Logo" 
+                    className="w-24 h-24 sm:w-32 sm:h-32 object-contain"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = '/app_icon.png';
+                    }}
+                  />
+                </div>
+
+                {/* Heading in green text */}
+                <h2 className="text-xl sm:text-2xl font-black text-[#004a2c] tracking-tight leading-tight">
+                  {isPending 
+                    ? 'লেনদেন আবেদনটি জমা হয়েছে!' 
+                    : isFailed 
+                      ? 'লেনদেন আবেদনটি বাতিল হয়েছে!' 
+                      : 'লেনদেন সফলভাবে সম্পন্ন হয়েছে!'}
+                </h2>
+
+                {/* Date & Time Pill Badge */}
+                <div className="flex justify-center">
+                  <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-emerald-50 text-emerald-800 border border-emerald-100 rounded-full text-[11px] font-bold font-mono">
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>তারিখ: {displayDate}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. THE RECEIPT CONTAINER */}
+              <div 
+                ref={receiptRef}
+                className="border-2 border-emerald-100 rounded-[2rem] p-6 bg-slate-50/50 space-y-4 text-sm sm:text-base font-sans max-w-lg mx-auto w-full"
+              >
+                {/* Row 1: Receiver */}
+                <div className="flex justify-between items-center py-2 border-b border-emerald-100/60 gap-3">
+                  <span className="font-bold text-slate-500 text-xs uppercase tracking-wider">গ্রাহক (Receiver)</span>
+                  <div className="font-black text-slate-900 text-right flex items-center justify-end gap-1.5 min-w-0">
+                    <span className="truncate">{receiverName}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(`${receiverName} ${receiverId}`, 'receiver')}
+                      className="p-1 hover:bg-emerald-100 rounded text-emerald-600 transition cursor-pointer shrink-0"
+                    >
+                      {copiedField === 'receiver' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Row 2: Mobile Number */}
+                <div className="flex justify-between items-center py-2 border-b border-emerald-100/60 gap-3">
+                  <span className="font-bold text-slate-500 text-xs uppercase tracking-wider">মোবাইল নম্বর</span>
+                  <div className="font-mono font-black text-slate-900 flex items-center gap-1.5">
+                    <span>{displayPhone}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(displayPhone, 'phone')}
+                      className="p-1 hover:bg-emerald-100 rounded text-emerald-600 transition cursor-pointer"
+                    >
+                      {copiedField === 'phone' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Row 3: Amount */}
+                <div className="flex justify-between items-center py-2 border-b border-emerald-100/60 gap-3">
+                  <span className="font-bold text-slate-500 text-xs uppercase tracking-wider">লেনদেন পরিমাণ</span>
+                  <span className="font-mono font-black text-slate-900 text-lg">
+                    ৳{amountFormatted} BDT
+                  </span>
+                </div>
+
+                {/* Row 4: Service Charge */}
+                <div className="flex justify-between items-center py-2 border-b border-emerald-100/60 gap-3">
+                  <span className="font-bold text-slate-500 text-xs uppercase tracking-wider">চার্জ (Charge)</span>
+                  <span className="font-extrabold text-emerald-700">
+                    {feeNum > 0 ? `৳${feeFormatted} BDT` : '৳0.00 (ফ্রি)'}
+                  </span>
+                </div>
+
+                {/* Row 5: Total Deducted */}
+                <div className="flex justify-between items-center py-2 border-b border-emerald-100/60 gap-3">
+                  <span className="font-black text-slate-900 text-xs uppercase tracking-wider">মোট পরিশোধিত</span>
+                  <span className="font-mono font-black text-[#004a2c] text-xl">
+                    ৳{totalFormatted} BDT
+                  </span>
+                </div>
+
+                {/* Row 6: TxID Box */}
+                <div className="flex justify-between items-center py-2 gap-3">
+                  <span className="font-bold text-slate-500 text-xs uppercase tracking-wider">ট্রানজেকশন আইডি</span>
+                  <div className="bg-white border border-emerald-100 rounded-xl px-3 py-1.5 flex items-center gap-2 text-emerald-800 font-mono font-black text-sm shadow-sm">
+                    <span>{txId}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(txId, 'txid')}
+                      className="p-1 hover:bg-emerald-50 rounded text-emerald-600 transition cursor-pointer"
+                    >
+                      {copiedField === 'txid' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Status */}
+                <div className="pt-2 text-center border-t border-emerald-100/60 text-[10px] sm:text-xs font-bold text-emerald-600 uppercase tracking-widest leading-relaxed">
+                  BUSINESS NETWORK BANGLADESH (BNB)
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-lg mx-auto w-full pt-4">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="py-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl text-sm font-black flex items-center justify-center gap-2.5 transition cursor-pointer"
+                >
+                  <ArrowLeft className="w-5 h-5" />
+                  <span>ফিরে যান</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCopyAllText}
+                  className="py-4 bg-[#004a2c] hover:bg-[#003a22] text-white rounded-2xl text-sm font-black flex items-center justify-center gap-2.5 transition shadow-lg shadow-emerald-900/20 cursor-pointer"
+                >
+                  {copiedField === 'all_text' ? <Check className="w-5 h-5" /> : <Copy className="w-5 h-5" />}
+                  <span>রসিদ কপি করুন</span>
+                </button>
+              </div>
+            </div>
+          </motion.div>
         </div>
-
-      </div>
-    </div>
+      )}
+    </AnimatePresence>
   );
 };
 
 export default BNBPaymentReceiptModal;
+

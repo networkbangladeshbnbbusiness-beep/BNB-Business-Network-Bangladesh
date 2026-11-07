@@ -53,81 +53,111 @@ export default function AgentReportModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[99999] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+      <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+      
       <motion.div 
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-white w-full max-w-sm rounded-3xl p-5 border border-slate-150 shadow-xl space-y-4 text-left font-sans"
+        initial={{ y: "100%" }}
+        animate={{ y: 0 }}
+        exit={{ y: "100%" }}
+        transition={{ type: "spring", damping: 25, stiffness: 200 }}
+        className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans"
       >
-        <div className="flex justify-between items-center border-b pb-2">
-          <h3 className="text-xs font-black text-rose-700 flex items-center gap-1.5">
-            <AlertTriangle className="w-4.5 h-4.5 text-rose-500" />
-            {t.reportModalTitle}
-          </h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 font-bold p-1 cursor-pointer transition">
-            <X className="w-4 h-4" />
+        <div className="bg-[#004a2c] text-white px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/10 rounded-xl">
+              <AlertTriangle className="w-5 h-5 text-rose-400" />
+            </div>
+            <div>
+              <h3 className="text-lg font-black">{t.reportModalTitle}</h3>
+              <p className="text-[10px] text-emerald-100/70 font-medium">এজেন্ট: {agent.name}</p>
+            </div>
+          </div>
+          <button 
+            onClick={onClose} 
+            className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
+          >
+            <X className="w-5 h-5" />
           </button>
         </div>
 
-        {reportSuccess ? (
-          <div className="text-center py-6 space-y-3">
-            <CheckCircle className="w-10 h-10 text-emerald-500 mx-auto" />
-            <p className="text-xs text-slate-800 font-bold leading-normal">{t.reportSuccessText}</p>
-            <button 
-              onClick={onClose}
-              className="py-1.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-black rounded-lg transition"
-            >
-              বন্ধ করুন
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <p className="text-[10px] text-slate-500 font-semibold leading-relaxed">
-              এজেন্ট <span className="font-black text-slate-800">{agent.name}</span> এর বিরুদ্ধে ভুল বা আপত্তিজনক কার্যক্রমের জন্য রিপোর্ট দাখিল করুন। অভিযোগটি সরাসরি অ্যাডমিন প্যানেলে যাচাই করা হবে।
-            </p>
-
-            <div className="space-y-3.5 text-xs">
-              <div>
-                <label className="block text-[9px] font-black text-slate-450 uppercase mb-1">{t.reportReasonLabel}</label>
-                <select 
-                  value={reportReason} 
-                  onChange={e => setReportReason(e.target.value)} 
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:border-rose-500"
-                >
-                  <option value="ভুল তথ্য">ভুল তথ্য / ফেক লোকেশন</option>
-                  <option value="খারাপ ব্যবহার">আপত্তিকর বা খারাপ ব্যবহার</option>
-                  <option value="অতিরিক্ত ফি">অতিরিক্ত ফি বা লেনদেনে অনিয়ম</option>
-                  <option value="ফোন বন্ধ">ফোন কল বা হোয়াটসঅ্যাপে যোগাযোগ করা অসম্ভব</option>
-                  <option value="অন্যান্য">অন্যান্য অভিযোগ</option>
-                </select>
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {reportSuccess ? (
+            <div className="flex-1 flex flex-col items-center justify-center py-12 space-y-4 text-center">
+              <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center">
+                <CheckCircle className="w-12 h-12 text-emerald-600" />
               </div>
-
-              <div>
-                <label className="block text-[9px] font-black text-slate-450 uppercase mb-1">{t.reportDetailsLabel}</label>
-                <textarea 
-                  rows={3} 
-                  value={reportDetails} 
-                  onChange={e => setReportDetails(e.target.value)} 
-                  placeholder="অভিযোগের বিস্তারিত এখানে ব্যাখ্যা করুন..." 
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-rose-500 focus:bg-white focus:outline-none"
-                />
+              <div className="space-y-2">
+                <h4 className="text-xl font-black text-slate-900">ধন্যবাদ!</h4>
+                <p className="text-sm text-slate-600 font-medium leading-relaxed max-w-xs mx-auto">
+                  {t.reportSuccessText}
+                </p>
               </div>
+              <button 
+                onClick={onClose}
+                className="mt-4 px-8 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-2xl shadow-lg shadow-emerald-600/20 transition active:scale-95"
+              >
+                বন্ধ করুন
+              </button>
             </div>
+          ) : (
+            <>
+              <div className="bg-rose-50 border border-rose-100 rounded-2xl p-4 flex gap-3">
+                <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shrink-0 shadow-sm">
+                  <AlertTriangle className="w-5 h-5 text-rose-500" />
+                </div>
+                <p className="text-xs text-rose-800 font-bold leading-relaxed">
+                  এজেন্ট <span className="text-slate-900 underline underline-offset-2">{agent.name}</span> এর বিরুদ্ধে ভুল বা আপত্তিজনক কার্যক্রমের জন্য রিপোর্ট দাখিল করুন। অভিযোগটি সরাসরি অ্যাডমিন প্যানেলে যাচাই করা হবে।
+                </p>
+              </div>
 
-            <button 
-              onClick={handleSubmit}
-              disabled={isSubmittingReport}
-              className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 text-white text-xs font-black rounded-xl transition cursor-pointer flex items-center justify-center"
-            >
-              {isSubmittingReport ? (
-                <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              ) : (
-                <span>{t.submitReportBtn}</span>
-              )}
-            </button>
-          </div>
-        )}
+              <div className="space-y-5">
+                <div className="space-y-2">
+                  <label className="block text-xs font-black text-slate-700 uppercase tracking-wider">{t.reportReasonLabel}</label>
+                  <select 
+                    value={reportReason} 
+                    onChange={e => setReportReason(e.target.value)} 
+                    className="w-full px-4 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all"
+                  >
+                    <option value="ভুল তথ্য">ভুল তথ্য / ফেক লোকেশন</option>
+                    <option value="খারাপ ব্যবহার">আপত্তিকর বা খারাপ ব্যবহার</option>
+                    <option value="অতিরিক্ত ফি">অতিরিক্ত ফি বা লেনদেনে অনিয়ম</option>
+                    <option value="ফোন বন্ধ">ফোন কল বা হোয়াটসঅ্যাপে যোগাযোগ করা অসম্ভব</option>
+                    <option value="অন্যান্য">অন্যান্য অভিযোগ</option>
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-xs font-black text-slate-700 uppercase tracking-wider">{t.reportDetailsLabel}</label>
+                  <textarea 
+                    rows={5} 
+                    value={reportDetails} 
+                    onChange={e => setReportDetails(e.target.value)} 
+                    placeholder="অভিযোগের বিস্তারিত এখানে ব্যাখ্যা করুন..." 
+                    className="w-full px-4 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 focus:bg-white focus:outline-none transition-all resize-none"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-4">
+                <button 
+                  onClick={handleSubmit}
+                  disabled={isSubmittingReport}
+                  className="w-full py-4 bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 text-white text-base font-black rounded-2xl shadow-lg shadow-rose-600/20 transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+                >
+                  {isSubmittingReport ? (
+                    <>
+                      <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      <span>দাখিল হচ্ছে...</span>
+                    </>
+                  ) : (
+                    <span>{t.submitReportBtn}</span>
+                  )}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </motion.div>
     </div>
   );

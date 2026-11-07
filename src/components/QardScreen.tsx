@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { User, Transaction, AppConfig } from '../types';
+import { User, Transaction, AppConfig, getEffectiveBalance, AutoDonationConfig } from '../types';
 import { db } from '../lib/firebase';
 import { DEFAULT_QARD_CONFIG } from '../lib/config';
 import { hasCompletedSamityProfile, getMissingProfileFields, getMembershipCategory } from '../lib/memberUtils';
@@ -15,6 +15,7 @@ import {
   addDoc,
   doc,
   updateDoc,
+  runTransaction,
   orderBy,
   onSnapshot,
   serverTimestamp
@@ -61,6 +62,7 @@ import {
   Volume2,
   Copy,
   ClipboardList,
+  MapPin,
   X,
   Gem,
   Landmark,
@@ -136,7 +138,7 @@ const QardBannerSlider = React.memo(function QardBannerSlider({ adSlides }: { ad
 
 export const QardScreen = React.memo(function QardScreen({ user, onBack, syncLiveProfile, appConfig }: QardScreenProps) {
   // Navigation tabs
-  const [activeTab, setActiveTab] = useState<'landing' | 'donate' | 'dashboard' | 'transparency' | 'apply' | 'admin' | 'withdraw' | 'gold_loan'>('landing');
+  const [activeTab, setActiveTab] = useState<'landing' | 'donate' | 'dashboard' | 'transparency' | 'apply' | 'admin' | 'withdraw' | 'gold_loan' | 'general_charity'>('landing');
 
   // States for Gold Loan / স্বর্ণ রেখে জরুরি টাকা
   const [goldLoansList, setGoldLoansList] = useState<any[]>([]);
@@ -156,6 +158,9 @@ export const QardScreen = React.memo(function QardScreen({ user, onBack, syncLiv
 
   // Internal Qard Back Handler
   useBackHandler(() => {
+    if (showAutoDonationModal) { setShowAutoDonationModal(false); return true; }
+    if (showQardAutoDonationModal) { setShowQardAutoDonationModal(false); return true; }
+    if (showFundAnalyticsModal) { setShowFundAnalyticsModal(false); return true; }
     if (showPayForMemberModal) { setShowPayForMemberModal(false); return true; }
     if (showDonorsModal) { setShowDonorsModal(false); return true; }
     if (showBorrowersModal) { setShowBorrowersModal(false); return true; }
@@ -181,6 +186,46 @@ export const QardScreen = React.memo(function QardScreen({ user, onBack, syncLiv
     return false;
   }, true, 25);
 
+  // Auto-Donation State (স্বয়ংক্রিয় বা অটো দান সিডিউলার)
+  const [showAutoDonationModal, setShowAutoDonationModal] = useState(false);
+  const [autoDonationEnabled, setAutoDonationEnabled] = useState(user.autoDonationConfig?.enabled || false);
+  const [autoDonationFrequency, setAutoDonationFrequency] = useState<'monthly' | 'custom_yearly' | 'custom_monthly'>(
+    user.autoDonationConfig?.frequency || 'monthly'
+  );
+  const [autoDonationAmount, setAutoDonationAmount] = useState<number>(user.autoDonationConfig?.amount || 0);
+  const [autoDonationDay, setAutoDonationDay] = useState<number>(user.autoDonationConfig?.dayOfMonth || 1);
+  const [autoDonationYearlyTimes, setAutoDonationYearlyTimes] = useState<number>(user.autoDonationConfig?.yearlyTimes || 4);
+  const [autoDonationMonthAmounts, setAutoDonationMonthAmounts] = useState<Record<string, number>>(
+    user.autoDonationConfig?.monthAmounts || {
+      '1': 0, '2': 0, '3': 0, '4': 0, '5': 0, '6': 0,
+      '7': 0, '8': 0, '9': 0, '10': 0, '11': 0, '12': 0,
+    }
+  );
+  const [autoDonationAnonymous, setAutoDonationAnonymous] = useState(user.autoDonationConfig?.isAnonymous ?? false);
+  const [autoDonationSaving, setAutoDonationSaving] = useState(false);
+  const [autoDonationNotice, setAutoDonationNotice] = useState('');
+
+  // Qard Hasana Auto-Donation State
+  const [showQardAutoDonationModal, setShowQardAutoDonationModal] = useState(false);
+  const [qardAutoDonationEnabled, setQardAutoDonationEnabled] = useState(user.qardAutoDonationConfig?.enabled || false);
+  const [qardAutoDonationFrequency, setQardAutoDonationFrequency] = useState<'monthly' | 'custom_yearly' | 'custom_monthly'>(
+    user.qardAutoDonationConfig?.frequency || 'monthly'
+  );
+  const [qardAutoDonationAmount, setQardAutoDonationAmount] = useState<number>(user.qardAutoDonationConfig?.amount || 0);
+  const [qardAutoDonationDay, setQardAutoDonationDay] = useState<number>(user.qardAutoDonationConfig?.dayOfMonth || 1);
+  const [qardAutoDonationMonthAmounts, setQardAutoDonationMonthAmounts] = useState<Record<string, number>>(
+    user.qardAutoDonationConfig?.monthAmounts || {
+      '1': 0, '2': 0, '3': 0, '4': 0, '5': 0, '6': 0,
+      '7': 0, '8': 0, '9': 0, '10': 0, '11': 0, '12': 0,
+    }
+  );
+  const [qardAutoDonationAnonymous, setQardAutoDonationAnonymous] = useState(user.qardAutoDonationConfig?.isAnonymous ?? false);
+  const [qardAutoDonationSaving, setQardAutoDonationSaving] = useState(false);
+  const [qardAutoDonationNotice, setQardAutoDonationNotice] = useState('');
+
+  const [showFundAnalyticsModal, setShowFundAnalyticsModal] = useState(false);
+  const [fundAnalyticsActiveTab, setFundAnalyticsActiveTab] = useState<'districts' | 'donors' | 'disbursed'>('districts');
+  const [districtSearchQuery, setDistrictSearchQuery] = useState('');
   const [showDonorsModal, setShowDonorsModal] = useState(false);
   const [showBorrowersModal, setShowBorrowersModal] = useState(false);
   const [donorsSearchQuery, setDonorsSearchQuery] = useState('');
@@ -388,11 +433,57 @@ BNB Business Co-operative Welfare Fund
   const [txModalSearch, setTxModalSearch] = useState('');
   const [qardTotalFund, setQardTotalFund] = useState(0);
   const [qardActiveLoansAmount, setQardActiveLoansAmount] = useState(0);
+  const [generalCharityTotal, setGeneralCharityTotal] = useState(0);
+  const [generalCharityDisbursed, setGeneralCharityDisbursed] = useState(0);
   const [beneficiaryCount, setBeneficiaryCount] = useState(1);
   const [uniqueDonors, setUniqueDonors] = useState<string[]>([]);
   const [allDonationsCount, setAllDonationsCount] = useState(0);
 
   const qardAvailableFund = Math.max(0, qardTotalFund - qardActiveLoansAmount);
+
+  // 64 Bangladesh districts live transactions aggregation (Strictly for General Charity, Zero fake data)
+  const districtRankingList = React.useMemo(() => {
+    const allDistricts = [
+      'ঢাকা', 'চট্টগ্রাম', 'বগুড়া', 'সিলেট', 'কুমিল্লা', 'রাজশাহী', 'ময়মনসিংহ', 'রংপুর',
+      'খুলনা', 'বরিশাল', 'গাজীপুর', 'নারায়ণগঞ্জ', 'ফরিদপুর', 'টাঙ্গাইল', 'যশোর', 'পাবনা',
+      'দিনাজপুর', 'ব্রাহ্মণবাড়িয়া', 'নোয়াখালী', 'কক্সবাজার', 'কুষ্টিয়া', 'কিশোরগঞ্জ', 'জামালপুর', 'পটুয়াখালী',
+      'সাতক্ষীরা', 'হবিগঞ্জ', 'মৌলভীবাজার', 'সুনামগঞ্জ', 'চাঁদপুর', 'ফেনী', 'লক্ষ্মীপুর', 'সিরাজগঞ্জ',
+      'নওগাঁ', 'নাটোর', 'গাইবান্ধা', 'কুড়িগ্রাম', 'নীলফামারী', 'নেত্রকোণা', 'শেরপুর', 'ভোলা',
+      'পিরোজপুর', 'বরগুনা', 'ঝালকাঠি', 'ঝিনাইদহ', 'বাগেরহাট', 'চুয়াডাঙ্গা', 'মেহেরপুর', 'মাগুরা',
+      'নড়াইল', 'মানিকগঞ্জ', 'মুন্সীগঞ্জ', 'নরসিংদী', 'রাজবাড়ী', 'মাদারীপুর', 'গোপালগঞ্জ', 'শরীয়তপুর',
+      'চাঁপাইনবাবগঞ্জ', 'জয়পুরহাট', 'লালমনিরহাট', 'ঠাকুরগাঁও', 'পঞ্চগড়', 'বান্দরবান', 'রাঙ্গামাটি', 'খাগড়াছড়ি'
+    ];
+
+    const districtStatsMap: Record<string, { name: string; donorsCount: number; totalDonated: number; aidAllocation: number }> = {};
+    allDistricts.forEach(d => {
+      districtStatsMap[d] = {
+        name: d,
+        donorsCount: 0,
+        totalDonated: 0,
+        aidAllocation: 0
+      };
+    });
+
+    // Strictly REAL general charity donation transactions (Qard Hasana is nationwide, not district-based)
+    const charityTxs = qardHistory.filter(t => 
+      (t.type === 'general_charity_donation' || t.category === 'general_charity' || t.donationPurpose === 'general_charity') && 
+      t.status === 'success'
+    );
+
+    charityTxs.forEach(t => {
+      const uInfo = usersMap[t.userId] || (t.userPhone ? usersMap[t.userPhone] : null);
+      const memberDistrict = t.district || (uInfo as any)?.district || (uInfo as any)?.thana || 'ঢাকা';
+      const matchedName = allDistricts.find(d => memberDistrict.includes(d)) || 'ঢাকা';
+      const amt = Number(t.amount) || 0;
+      if (districtStatsMap[matchedName]) {
+        districtStatsMap[matchedName].donorsCount += 1;
+        districtStatsMap[matchedName].totalDonated += amt;
+        districtStatsMap[matchedName].aidAllocation += amt;
+      }
+    });
+
+    return Object.values(districtStatsMap).sort((a, b) => b.totalDonated - a.totalDonated);
+  }, [qardHistory, usersMap]);
 
   // Form states - Donation
   const [donationType, setDonationType] = useState<'one_time' | 'monthly'>('one_time');
@@ -578,7 +669,15 @@ BNB Business Co-operative Welfare Fund
     try {
       const q = query(
         collection(db, 'transactions'),
-        where('type', 'in', ['qard_donation', 'qard_loan_request', 'qard_loan_disbursment', 'qard_loan_repayment', 'qard_withdrawal'])
+        where('type', 'in', [
+          'qard_donation',
+          'general_charity_donation',
+          'general_charity_disbursed',
+          'qard_loan_request',
+          'qard_loan_disbursment',
+          'qard_loan_repayment',
+          'qard_withdrawal'
+        ])
       );
       const snap = await getDocs(q);
       const allList: Transaction[] = [];
@@ -596,20 +695,33 @@ BNB Business Co-operative Welfare Fund
       // Keep qardHistory populated with all public records
       setQardHistory(allList);
 
-      const starterAmount = 0;
-      const totalDonations = allList
-        .filter(t => t.type === 'qard_donation' && t.status === 'success')
-        .reduce((sum, t) => sum + t.amount, 0);
-      setQardTotalFund(starterAmount + totalDonations);
+      const baseQard = appConfig?.qardBaseFund !== undefined ? Number(appConfig.qardBaseFund) : 0;
+      const totalQardDonations = allList
+        .filter(t => (t.type === 'qard_donation' || t.category === 'qard_donation') && t.status === 'success' && t.donationPurpose !== 'general_charity')
+        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+      setQardTotalFund(baseQard + totalQardDonations);
 
       const totalDisbursed = allList
         .filter(t => t.type === 'qard_loan_disbursment' && t.status === 'success')
-        .reduce((sum, t) => sum + t.amount, 0);
+        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
       const totalRepaid = allList
         .filter(t => t.type === 'qard_loan_repayment' && t.status === 'success')
-        .reduce((sum, t) => sum + t.amount, 0);
+        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
 
       setQardActiveLoansAmount(Math.max(0, totalDisbursed - totalRepaid));
+
+      // General Charity calculations
+      const baseCharityTotal = appConfig?.generalCharityTotal !== undefined ? Number(appConfig.generalCharityTotal) : 0;
+      const totalCharityDonations = allList
+        .filter(t => (t.type === 'general_charity_donation' || t.category === 'general_charity' || t.donationPurpose === 'general_charity') && t.status === 'success')
+        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+      setGeneralCharityTotal(baseCharityTotal + totalCharityDonations);
+
+      const baseCharityDisbursed = appConfig?.generalCharityDisbursed !== undefined ? Number(appConfig.generalCharityDisbursed) : 0;
+      const totalCharityDisbursed = allList
+        .filter(t => (t.type === 'general_charity_disbursed' || t.category === 'charity_disbursement') && t.status === 'success')
+        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+      setGeneralCharityDisbursed(baseCharityDisbursed + totalCharityDisbursed);
 
       // Calculate beneficiaries
       const uniqueBorrowers = new Set(
@@ -619,10 +731,10 @@ BNB Business Co-operative Welfare Fund
 
       // Calculate unique donors
       const donors = new Set(
-        allList.filter(t => t.type === 'qard_donation' && t.status === 'success').map((t) => t.userId)
+        allList.filter(t => (t.type === 'qard_donation' || t.type === 'general_charity_donation') && t.status === 'success').map((t) => t.userId)
       );
       setUniqueDonors(Array.from(donors));
-      setAllDonationsCount(allList.filter(t => t.type === 'qard_donation' && t.status === 'success').length);
+      setAllDonationsCount(allList.filter(t => (t.type === 'qard_donation' || t.type === 'general_charity_donation') && t.status === 'success').length);
 
     } catch (err) {
       console.error("Qard ledger fetch error:", err);
@@ -705,67 +817,43 @@ BNB Business Co-operative Welfare Fund
         }
       }
 
-      // 2. Overdue Late Fine Automatic Deduction (Day 31+) - দিন প্রতি হাজারে ১০ টাকা করে ৩০ দিন পর থেকে জরিমানা কর্তন
+      // 2. Overdue Late Fine (Day 31+) - Never silently deduct from user's main wallet balance in background; add to dueLoan only
       if (daysElapsed > 30) {
         if (user.lastQardFineDate !== todayKey) {
           const dailyFine = Math.max(10, Math.floor(dueLoan / 1000) * 10);
-          const currentBal = Number(user.balance !== undefined ? user.balance : (user.mainBalance || 0)) || 0;
-          
-          let newBal = currentBal;
-          let newDue = dueLoan;
-          let deductedFromBal = 0;
-          let addedToDue = 0;
-
-          if (currentBal >= dailyFine) {
-            newBal = currentBal - dailyFine;
-            deductedFromBal = dailyFine;
-          } else if (currentBal > 0) {
-            deductedFromBal = currentBal;
-            addedToDue = dailyFine - currentBal;
-            newBal = 0;
-            newDue = dueLoan + addedToDue;
-          } else {
-            addedToDue = dailyFine;
-            newDue = dueLoan + dailyFine;
-          }
+          const newDue = dueLoan + dailyFine;
 
           const userRef = doc(db, 'users', user.uid);
           updateDoc(userRef, {
-            balance: newBal,
-            mainBalance: newBal,
             dueLoan: newDue,
             lastQardFineDate: todayKey,
             totalQardFine: (user.totalQardFine || 0) + dailyFine
           }).then(() => {
-            // Log Fine Deduction Transaction
             addDoc(collection(db, 'transactions'), {
               userId: user.uid,
               userName: user.name,
               memberId: user.memberId || user.phone,
               type: 'qard_fine',
-              typeLabel: 'করযে হাসানা বিলম্ব জরিমানা কর্তন',
+              typeLabel: 'করযে হাসানা বিলম্ব জরিমানা যুক্ত',
               amount: dailyFine,
               status: 'success',
               category: 'qard_late_fine',
-              description: `⚠️ করযে হাসানা ঋণের ৩০ দিন মেয়াদ অতিক্রান্ত হওয়ায় (${daysElapsed - 30}তম দিন ওভারডিউ) আজ ${todayKey}-এ প্রতি হাজারে ১০ টাকা হারে ৳${dailyFine.toLocaleString('en-US')} বিলম্ব জরিমানা ${deductedFromBal > 0 ? `মেইন ওয়ালেট থেকে ৳${deductedFromBal} অটো কর্তন` : ''}${addedToDue > 0 ? `${deductedFromBal > 0 ? ' ও বাকি ' : ''}৳${addedToDue} বকেয়া ঋণে যুক্ত` : ''} করা হয়েছে।`,
-              paymentMethod: deductedFromBal >= dailyFine ? 'AUTO_WALLET_DEDUCT' : 'AUTO_FINE',
+              description: `⚠️ করযে হাসানা ঋণের ৩০ দিন মেয়াদ অতিক্রান্ত হওয়ায় (${daysElapsed - 30}তম দিন ওভারডিউ) আজ ${todayKey}-এ প্রতি হাজারে ১০ টাকা হারে ৳${dailyFine.toLocaleString('en-US')} বিলম্ব জরিমানা বকেয়া ঋণে যুক্ত করা হয়েছে।`,
+              paymentMethod: 'AUTO_FINE',
               receiptNo: `FINE-${Math.floor(100000 + Math.random() * 900000)}`,
               createdAt: nowIso
             });
 
-            // Send Realtime Notification
             addDoc(collection(db, 'user_notifications'), {
               userId: user.uid,
-              title: '⚠️ করযে হাসানা বিলম্ব জরিমানা কর্তন',
-              message: `আপনার করযে হাসানা ঋণের ৩০ দিনের মেয়াদ অতিক্রান্ত হওয়ায় আজ (${todayKey}) নিয়ম অনুযায়ী প্রতি ১,০০০ টাকায় ১০ টাকা হারে ৳${dailyFine.toLocaleString('en-US')} বিলম্ব জরিমানা ${deductedFromBal > 0 ? 'আপনার মেইন ওয়ালেট ব্যালেন্স থেকে অটোমেটিক কর্তন করা হয়েছে' : 'বকেয়া ঋণে যুক্ত করা হয়েছে'}। অতিরিক্ত জরিমানা এড়াতে অবিলম্বে সম্পূর্ণ ঋণ পরিশোধ করুন।`,
-              body: `আপনার করযে হাসানা ঋণের ৩০ দিনের মেয়াদ অতিক্রান্ত হওয়ায় আজ (${todayKey}) নিয়ম অনুযায়ী প্রতি ১,০০০ টাকায় ১০ টাকা হারে ৳${dailyFine.toLocaleString('en-US')} বিলম্ব জরিমানা ${deductedFromBal > 0 ? 'আপনার মেইন ওয়ালেট ব্যালেন্স থেকে অটোমেটিক কর্তন করা হয়েছে' : 'বকেয়া ঋণে যুক্ত করা হয়েছে'}। অতিরিক্ত জরিমানা এড়াতে অবিলম্বে সম্পূর্ণ ঋণ পরিশোধ করুন।`,
+              title: '⚠️ করযে হাসানা বিলম্ব জরিমানা যুক্ত',
+              message: `আপনার করযে হাসানা ঋণের ৩০ দিনের মেয়াদ অতিক্রান্ত হওয়ায় আজ (${todayKey}) নিয়ম অনুযায়ী প্রতি ১,০০০ টাকায় ১০ টাকা হারে ৳${dailyFine.toLocaleString('en-US')} বিলম্ব জরিমানা বকেয়া ঋণে যুক্ত করা হয়েছে। অতিরিক্ত জরিমানা এড়াতে অবিলম্বে সম্পূর্ণ ঋণ পরিশোধ করুন।`,
+              body: `আপনার করযে হাসানা ঋণের ৩০ দিনের মেয়াদ অতিক্রান্ত হওয়ায় আজ (${todayKey}) নিয়ম অনুযায়ী প্রতি ১,০০০ টাকায় ১০ টাকা হারে ৳${dailyFine.toLocaleString('en-US')} বিলম্ব জরিমানা বকেয়া ঋণে যুক্ত করা হয়েছে। অতিরিক্ত জরিমানা এড়াতে অবিলম্বে সম্পূর্ণ ঋণ পরিশোধ করুন।`,
               type: 'qard_fine_charged',
               read: false,
               createdAt: nowIso
             });
 
-            user.balance = newBal;
-            user.mainBalance = newBal;
             user.dueLoan = newDue;
             user.lastQardFineDate = todayKey;
             user.totalQardFine = (user.totalQardFine || 0) + dailyFine;
@@ -820,34 +908,14 @@ BNB Business Co-operative Welfare Fund
         }
       }
 
-      // 2. Overdue Late Fine for 3-Month Loan with wallet auto-deduction
+      // 2. Overdue Late Fine for 3-Month Loan (never silently deduct from user's main wallet balance in background)
       if (isOverdue || (stage === 1 && daysElapsed > 30 && !user.lastAutoDeductedMonth) || (stage === 2 && daysElapsed > 60)) {
         if (user.lastQardFineDate !== todayKey) {
           const dailyFine = Math.max(10, Math.floor(dueLoan / 1000) * 10);
-          const currentBal = Number(user.balance !== undefined ? user.balance : (user.mainBalance || 0)) || 0;
-          
-          let newBal = currentBal;
-          let newDue = dueLoan;
-          let deductedFromBal = 0;
-          let addedToDue = 0;
-
-          if (currentBal >= dailyFine) {
-            newBal = currentBal - dailyFine;
-            deductedFromBal = dailyFine;
-          } else if (currentBal > 0) {
-            deductedFromBal = currentBal;
-            addedToDue = dailyFine - currentBal;
-            newBal = 0;
-            newDue = dueLoan + addedToDue;
-          } else {
-            addedToDue = dailyFine;
-            newDue = dueLoan + dailyFine;
-          }
+          const newDue = dueLoan + dailyFine;
 
           const userRef = doc(db, 'users', user.uid);
           updateDoc(userRef, {
-            balance: newBal,
-            mainBalance: newBal,
             dueLoan: newDue,
             lastQardFineDate: todayKey,
             totalQardFine: (user.totalQardFine || 0) + dailyFine
@@ -857,28 +925,26 @@ BNB Business Co-operative Welfare Fund
               userName: user.name,
               memberId: user.memberId || user.phone,
               type: 'qard_fine',
-              typeLabel: 'করযে হাসানা বিলম্ব জরিমানা কর্তন',
+              typeLabel: 'করযে হাসানা বিলম্ব জরিমানা যুক্ত',
               amount: dailyFine,
               status: 'success',
               category: 'qard_late_fine',
-              description: `⚠️ করযে হাসানা ৩ মাস মেয়াদী ঋণের কিস্তির ৩০ দিন মেয়াদ অতিক্রান্ত হওয়ায় আজ ${todayKey}-এ প্রতি হাজারে ১০ টাকা হারে ৳${dailyFine.toLocaleString('en-US')} বিলম্ব জরিমানা ${deductedFromBal > 0 ? `মেইন ওয়ালেট থেকে ৳${deductedFromBal} অটো কর্তন` : ''}${addedToDue > 0 ? `${deductedFromBal > 0 ? ' ও বাকি ' : ''}৳${addedToDue} বকেয়া ঋণে যুক্ত` : ''} করা হয়েছে।`,
-              paymentMethod: deductedFromBal >= dailyFine ? 'AUTO_WALLET_DEDUCT' : 'AUTO_FINE',
+              description: `⚠️ করযে হাসানা ৩ মাস মেয়াদী ঋণের কিস্তির ৩০ দিন মেয়াদ অতিক্রান্ত হওয়ায় আজ ${todayKey}-এ প্রতি হাজারে ১০ টাকা হারে ৳${dailyFine.toLocaleString('en-US')} বিলম্ব জরিমানা বকেয়া ঋণে যুক্ত করা হয়েছে।`,
+              paymentMethod: 'AUTO_FINE',
               receiptNo: `FINE-${Math.floor(100000 + Math.random() * 900000)}`,
               createdAt: nowIso
             });
 
             addDoc(collection(db, 'user_notifications'), {
               userId: user.uid,
-              title: '⚠️ করযে হাসানা বিলম্ব জরিমানা কর্তন',
-              message: `আপনার ৩ মাস মেয়াদী করযে হাসানা ঋণের কিস্তির মেয়াদ অতিক্রান্ত হওয়ায় প্রতিদিন প্রতি ১,০০০ টাকায় ১০ টাকা হারে আজ ৳${dailyFine.toLocaleString('en-US')} জরিমানা ${deductedFromBal > 0 ? 'মেইন ব্যালেন্স থেকে অটোমেটিক কর্তন করা হয়েছে' : 'বকেয়া ঋণে যুক্ত করা হয়েছে'}। অতিসত্বর কিস্তি পরিশোধ করুন।`,
-              body: `আপনার ৩ মাস মেয়াদী করযে হাসানা ঋণের কিস্তির মেয়াদ অতিক্রান্ত হওয়ায় প্রতিদিন প্রতি ১,০০০ টাকায় ১০ টাকা হারে আজ ৳${dailyFine.toLocaleString('en-US')} জরিমানা ${deductedFromBal > 0 ? 'মেইন ব্যালেন্স থেকে অটোমেটিক কর্তন করা হয়েছে' : 'বকেয়া ঋণে যুক্ত করা হয়েছে'}। অতিসত্বর কিস্তি পরিশোধ করুন।`,
+              title: '⚠️ করযে হাসানা বিলম্ব জরিমানা যুক্ত',
+              message: `আপনার ৩ মাস মেয়াদী করযে হাসানা ঋণের কিস্তির মেয়াদ অতিক্রান্ত হওয়ায় প্রতিদিন প্রতি ১,০০০ টাকায় ১০ টাকা হারে আজ ৳${dailyFine.toLocaleString('en-US')} জরিমানা বকেয়া ঋণে যুক্ত করা হয়েছে। অতিসত্বর কিস্তি পরিশোধ করুন।`,
+              body: `আপনার ৩ মাস মেয়াদী করযে হাসানা ঋণের কিস্তির মেয়াদ অতিক্রান্ত হওয়ায় প্রতিদিন প্রতি ১,০০০ টাকায় ১০ টাকা হারে আজ ৳${dailyFine.toLocaleString('en-US')} জরিমানা বকেয়া ঋণে যুক্ত করা হয়েছে। অতিসত্বর কিস্তি পরিশোধ করুন।`,
               type: 'qard_fine_charged',
               read: false,
               createdAt: nowIso
             });
 
-            user.balance = newBal;
-            user.mainBalance = newBal;
             user.dueLoan = newDue;
             user.lastQardFineDate = todayKey;
             user.totalQardFine = (user.totalQardFine || 0) + dailyFine;
@@ -1028,6 +1094,420 @@ BNB Business Co-operative Welfare Fund
     }
   }, [tickerIndex, tickerItems.length]);
 
+  // Handle Auto-Donation Configuration Save & Immediate Execution
+  const handleSaveAutoDonation = async (runNow: boolean = false) => {
+    setAutoDonationSaving(true);
+    setAutoDonationNotice('');
+    try {
+      const cfg: AutoDonationConfig = {
+        enabled: autoDonationEnabled,
+        frequency: autoDonationFrequency,
+        amount: Number(autoDonationAmount) || 0,
+        dayOfMonth: Math.min(28, Math.max(1, Number(autoDonationDay) || 1)),
+        yearlyTimes: autoDonationYearlyTimes,
+        monthAmounts: autoDonationMonthAmounts,
+        isAnonymous: autoDonationAnonymous,
+        totalAutoDonated: user.autoDonationConfig?.totalAutoDonated || 0,
+        updatedAt: new Date().toISOString()
+      };
+
+      if (runNow) {
+        let chargeAmount = cfg.amount;
+        if (cfg.frequency === 'custom_monthly') {
+          const currentMonthNum = String(new Date().getMonth() + 1);
+          chargeAmount = cfg.monthAmounts?.[currentMonthNum] || cfg.amount;
+        }
+
+        const effectiveBal = getEffectiveBalance(user);
+        if (effectiveBal < chargeAmount) {
+          throw new Error(`অপর্যাপ্ত ব্যালেন্স! আপনার বর্তমান ব্যালেন্স ৳${effectiveBal.toLocaleString('bn-BD')}, কিন্তু নির্ধারিত দানের পরিমাণ ৳${chargeAmount.toLocaleString('bn-BD')}`);
+        }
+
+        const userRef = doc(db, 'users', user.uid);
+        const qardConfigRef = doc(db, 'app_config', 'qard_fund');
+        const txCollection = collection(db, 'transactions');
+        const notifCollection = collection(db, 'user_notifications');
+
+        await runTransaction(db, async (txn) => {
+          const userSnap = await txn.get(userRef);
+          if (!userSnap.exists()) throw new Error('ইউজার তথ্য পাওয়া যায়নি');
+          const uData = userSnap.data();
+          const currentBal = (uData.balance !== undefined && uData.balance !== null) ? Number(uData.balance) : 0;
+          if (currentBal < chargeAmount) {
+            throw new Error('অপর্যাপ্ত ব্যালেন্স');
+          }
+
+          const qardSnap = await txn.get(qardConfigRef);
+          let currentTotal = 0;
+          if (qardSnap.exists()) {
+            currentTotal = Number(qardSnap.data().generalCharityTotal || 0);
+          }
+
+          txn.update(userRef, {
+            balance: currentBal - chargeAmount,
+            mainBalance: (uData.mainBalance !== undefined && uData.mainBalance !== null)
+              ? Math.max(0, Number(uData.mainBalance) - chargeAmount)
+              : Math.max(0, currentBal - chargeAmount),
+            autoDonationConfig: {
+              ...cfg,
+              lastExecutedDate: new Date().toISOString().split('T')[0],
+              totalAutoDonated: (cfg.totalAutoDonated || 0) + chargeAmount
+            }
+          });
+
+          txn.set(qardConfigRef, {
+            generalCharityTotal: currentTotal + chargeAmount,
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+        });
+
+        await addDoc(txCollection, {
+          userId: user.uid,
+          userUid: user.uid,
+          memberId: user.memberId || '',
+          memberName: cfg.isAnonymous ? 'গোপন দাতা' : (user.name || 'সম্মানিত সদস্য'),
+          type: 'general_charity',
+          category: 'donation',
+          amount: chargeAmount,
+          method: 'Auto Donation Schedule',
+          status: 'completed',
+          purpose: 'general_charity',
+          isAnonymous: cfg.isAnonymous || false,
+          district: user.district || '',
+          note: `স্বয়ংক্রিয় সাধারণ দান — ${cfg.frequency === 'monthly' ? 'প্রতি মাসের' : cfg.frequency === 'custom_yearly' ? `বছরে ${cfg.yearlyTimes} বার` : '১২ মাস কাস্টম'} সিডিউল`,
+          timestamp: new Date().toISOString(),
+          createdAt: serverTimestamp()
+        });
+
+        await addDoc(notifCollection, {
+          userId: user.uid,
+          title: '🕊️ স্বয়ংক্রিয় সাধারণ দান সফল!',
+          message: `আপনার অটো সিডিউল অনুযায়ী সাধারণ দান তহবিলে ৳${chargeAmount.toLocaleString('bn-BD')} সফলভাবে জমা হয়েছে। আল্লাহ আপনার দান কবুল করুন।`,
+          type: 'donation',
+          read: false,
+          createdAt: serverTimestamp()
+        });
+
+        await syncLiveProfile();
+        setAutoDonationNotice(`টেস্ট রান সফল! ৳${chargeAmount.toLocaleString('bn-BD')} সাধারণ দান তহবিলে জমা হয়েছে।`);
+      } else {
+        const userRef = doc(db, 'users', user.uid);
+        await updateDoc(userRef, {
+          autoDonationConfig: cfg
+        });
+        await syncLiveProfile();
+        setAutoDonationNotice('স্বয়ংক্রিয় সাধারণ দান সিডিউল সফলভাবে সংরক্ষিত হয়েছে!');
+      }
+
+      setTimeout(() => {
+        setAutoDonationNotice('');
+        if (!runNow) {
+          setShowAutoDonationModal(false);
+        }
+      }, 2000);
+    } catch (err: any) {
+      setAutoDonationNotice(err.message || 'সংরক্ষণে সমস্যা হয়েছে');
+    } finally {
+      setAutoDonationSaving(false);
+    }
+  };
+
+  // Handle Qard Hasana Auto-Donation Configuration Save & Immediate Execution
+  const handleSaveQardAutoDonation = async (runNow: boolean = false) => {
+    setQardAutoDonationSaving(true);
+    setQardAutoDonationNotice('');
+    try {
+      const cfg: AutoDonationConfig = {
+        enabled: qardAutoDonationEnabled,
+        frequency: qardAutoDonationFrequency,
+        amount: Number(qardAutoDonationAmount) || 0,
+        dayOfMonth: Math.min(28, Math.max(1, Number(qardAutoDonationDay) || 1)),
+        monthAmounts: qardAutoDonationMonthAmounts,
+        isAnonymous: qardAutoDonationAnonymous,
+        totalAutoDonated: user.qardAutoDonationConfig?.totalAutoDonated || 0,
+        updatedAt: new Date().toISOString()
+      };
+
+      if (runNow) {
+        let chargeAmount = cfg.amount;
+        if (cfg.frequency === 'custom_monthly') {
+          const currentMonthNum = String(new Date().getMonth() + 1);
+          chargeAmount = cfg.monthAmounts?.[currentMonthNum] || cfg.amount;
+        }
+
+        const effectiveBal = getEffectiveBalance(user);
+        if (effectiveBal < chargeAmount) {
+          throw new Error(`অপর্যাপ্ত ব্যালেন্স! আপনার বর্তমান ব্যালেন্স ৳${effectiveBal.toLocaleString('bn-BD')}, কিন্তু নির্ধারিত করযে হাসানা দানের পরিমাণ ৳${chargeAmount.toLocaleString('bn-BD')}`);
+        }
+
+        const userRef = doc(db, 'users', user.uid);
+        const qardConfigRef = doc(db, 'app_config', 'qard_fund');
+        const txCollection = collection(db, 'transactions');
+        const notifCollection = collection(db, 'user_notifications');
+
+        await runTransaction(db, async (txn) => {
+          const userSnap = await txn.get(userRef);
+          if (!userSnap.exists()) throw new Error('ইউজার তথ্য পাওয়া যায়নি');
+          const uData = userSnap.data();
+          const currentBal = Number(uData.balance || 0);
+          if (currentBal < chargeAmount) throw new Error('অপর্যাপ্ত ব্যালেন্স');
+
+          const qardSnap = await txn.get(qardConfigRef);
+          let currentTotal = 0;
+          if (qardSnap.exists()) {
+            currentTotal = Number(qardSnap.data().qardTotalFund || 0);
+          }
+
+          txn.update(userRef, {
+            balance: currentBal - chargeAmount,
+            mainBalance: (uData.mainBalance !== undefined && uData.mainBalance !== null)
+              ? Math.max(0, Number(uData.mainBalance) - chargeAmount)
+              : Math.max(0, currentBal - chargeAmount),
+            qardAutoDonationConfig: {
+              ...cfg,
+              lastExecutedDate: new Date().toISOString().split('T')[0],
+              totalAutoDonated: (cfg.totalAutoDonated || 0) + chargeAmount
+            }
+          });
+
+          txn.set(qardConfigRef, {
+            qardTotalFund: currentTotal + chargeAmount,
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+        });
+
+        await addDoc(txCollection, {
+          userId: user.uid,
+          userUid: user.uid,
+          memberId: user.memberId || '',
+          memberName: cfg.isAnonymous ? 'গোপন দাতা' : (user.name || 'সম্মানিত সদস্য'),
+          type: 'qard_donation',
+          category: 'qard_donation',
+          amount: chargeAmount,
+          method: 'Auto Donation Schedule (Qard)',
+          status: 'success',
+          purpose: 'qard_fund',
+          isAnonymous: cfg.isAnonymous || false,
+          note: `স্বয়ংক্রিয় করযে হাসানা দান — ${cfg.frequency === 'monthly' ? 'প্রতি মাসের' : '১২ মাস কাস্টম'} সিডিউল`,
+          timestamp: new Date().toISOString(),
+          createdAt: serverTimestamp()
+        });
+
+        await addDoc(notifCollection, {
+          userId: user.uid,
+          title: '💖 অটো করযে হাসানা দান সফল!',
+          message: `আপনার অটো সিডিউল অনুযায়ী করযে হাসানা কল্যাণ ফান্ডের জন্য ৳${chargeAmount.toLocaleString('bn-BD')} সফলভাবে জমা হয়েছে। আল্লাহ আপনার দান কবুল করুন।`,
+          type: 'donation',
+          read: false,
+          createdAt: serverTimestamp()
+        });
+
+        await syncLiveProfile();
+        setQardAutoDonationNotice(`টেস্ট রান সফল! ৳${chargeAmount.toLocaleString('bn-BD')} করযে হাসানা ফান্ডের জমা হয়েছে।`);
+      } else {
+        const userRef = doc(db, 'users', user.uid);
+        await updateDoc(userRef, {
+          qardAutoDonationConfig: cfg
+        });
+        await syncLiveProfile();
+        setQardAutoDonationNotice('অটো করযে হাসানা দান সিডিউল সফলভাবে সংরক্ষিত হয়েছে!');
+      }
+
+      setTimeout(() => {
+        setQardAutoDonationNotice('');
+        if (!runNow) {
+          setShowQardAutoDonationModal(false);
+        }
+      }, 2000);
+    } catch (err: any) {
+      setQardAutoDonationNotice(err.message || 'সংরক্ষণে সমস্যা হয়েছে');
+    } finally {
+      setQardAutoDonationSaving(false);
+    }
+  };
+
+  // Automated background deduction checker if auto-donation is enabled (General Charity)
+  useEffect(() => {
+    if (!user?.uid || !user?.autoDonationConfig?.enabled) return;
+    const checkAndExecuteAutoDonation = async () => {
+      try {
+        const cfg = user.autoDonationConfig;
+        if (!cfg || !cfg.enabled) return;
+        const today = new Date();
+        const todayDateStr = today.toISOString().split('T')[0];
+        if (cfg.lastExecutedDate === todayDateStr) return;
+
+        const currentDay = today.getDate();
+        const currentMonth = today.getMonth() + 1;
+        const targetDay = cfg.dayOfMonth || 1;
+
+        if (currentDay !== targetDay) return;
+
+        let chargeAmount = cfg.amount || 0;
+        if (cfg.frequency === 'custom_monthly' && cfg.monthAmounts) {
+          chargeAmount = cfg.monthAmounts[String(currentMonth)] || chargeAmount;
+        }
+
+        const effectiveBal = getEffectiveBalance(user);
+        if (effectiveBal < chargeAmount) return;
+
+        const userRef = doc(db, 'users', user.uid);
+        const qardConfigRef = doc(db, 'app_config', 'qard_fund');
+        const txCollection = collection(db, 'transactions');
+        const notifCollection = collection(db, 'user_notifications');
+
+        await runTransaction(db, async (txn) => {
+          const userSnap = await txn.get(userRef);
+          if (!userSnap.exists()) return;
+          const uData = userSnap.data();
+          const currentBal = Number(uData.balance || 0);
+          if (currentBal < chargeAmount) return;
+
+          const qardSnap = await txn.get(qardConfigRef);
+          let currentTotal = 0;
+          if (qardSnap.exists()) {
+            currentTotal = Number(qardSnap.data().generalCharityTotal || 0);
+          }
+
+          txn.update(userRef, {
+            balance: currentBal - chargeAmount,
+            mainBalance: (uData.mainBalance !== undefined && uData.mainBalance !== null)
+              ? Math.max(0, Number(uData.mainBalance) - chargeAmount)
+              : Math.max(0, currentBal - chargeAmount),
+            'autoDonationConfig.lastExecutedDate': todayDateStr,
+            'autoDonationConfig.totalAutoDonated': (cfg.totalAutoDonated || 0) + chargeAmount
+          });
+
+          txn.set(qardConfigRef, {
+            generalCharityTotal: currentTotal + chargeAmount,
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+        });
+
+        await addDoc(txCollection, {
+          userId: user.uid,
+          userUid: user.uid,
+          memberId: user.memberId || '',
+          memberName: cfg.isAnonymous ? 'গোপন দাতা' : (user.name || 'সম্মানিত সদস্য'),
+          type: 'general_charity',
+          category: 'donation',
+          amount: chargeAmount,
+          method: 'Auto Donation Schedule',
+          status: 'completed',
+          purpose: 'general_charity',
+          isAnonymous: cfg.isAnonymous || false,
+          note: `স্বয়ংক্রিয় সাধারণ দান (অটো সিডিউল) — তারিখ: ${todayDateStr}`,
+          timestamp: new Date().toISOString(),
+          createdAt: serverTimestamp()
+        });
+
+        await addDoc(notifCollection, {
+          userId: user.uid,
+          title: '🕊️ মাসিক স্বয়ংক্রিয় সাধারণ দান সফল!',
+          message: `আপনার অটো সিডিউল অনুযায়ী সাধারণ দান তহবিলে ৳${chargeAmount.toLocaleString('bn-BD')} স্বয়ংক্রিয়ভাবে জমা করা হয়েছে।`,
+          type: 'donation',
+          read: false,
+          createdAt: serverTimestamp()
+        });
+        await syncLiveProfile();
+      } catch (e) {
+        console.error('Auto donation background execution failed:', e);
+      }
+    };
+    checkAndExecuteAutoDonation();
+  }, [user?.uid, user?.autoDonationConfig?.enabled]);
+
+  // Automated background deduction checker if Qard auto-donation is enabled
+  useEffect(() => {
+    if (!user?.uid || !user?.qardAutoDonationConfig?.enabled) return;
+    const checkAndExecuteQardAutoDonation = async () => {
+      try {
+        const cfg = user.qardAutoDonationConfig;
+        if (!cfg || !cfg.enabled) return;
+        const today = new Date();
+        const todayDateStr = today.toISOString().split('T')[0];
+        if (cfg.lastExecutedDate === todayDateStr) return;
+
+        const currentDay = today.getDate();
+        const currentMonth = today.getMonth() + 1;
+        const targetDay = cfg.dayOfMonth || 1;
+
+        if (currentDay !== targetDay) return;
+
+        let chargeAmount = cfg.amount || 0;
+        if (cfg.frequency === 'custom_monthly' && cfg.monthAmounts) {
+          chargeAmount = cfg.monthAmounts[String(currentMonth)] || chargeAmount;
+        }
+
+        const effectiveBal = getEffectiveBalance(user);
+        if (effectiveBal < chargeAmount) return;
+
+        const userRef = doc(db, 'users', user.uid);
+        const qardConfigRef = doc(db, 'app_config', 'qard_fund');
+        const txCollection = collection(db, 'transactions');
+        const notifCollection = collection(db, 'user_notifications');
+
+        await runTransaction(db, async (txn) => {
+          const userSnap = await txn.get(userRef);
+          if (!userSnap.exists()) return;
+          const uData = userSnap.data();
+          const currentBal = Number(uData.balance || 0);
+          if (currentBal < chargeAmount) return;
+
+          const qardSnap = await txn.get(qardConfigRef);
+          let currentTotal = 0;
+          if (qardSnap.exists()) {
+            currentTotal = Number(qardSnap.data().qardTotalFund || 0);
+          }
+
+          txn.update(userRef, {
+            balance: currentBal - chargeAmount,
+            mainBalance: (uData.mainBalance !== undefined && uData.mainBalance !== null)
+              ? Math.max(0, Number(uData.mainBalance) - chargeAmount)
+              : Math.max(0, currentBal - chargeAmount),
+            'qardAutoDonationConfig.lastExecutedDate': todayDateStr,
+            'qardAutoDonationConfig.totalAutoDonated': (cfg.totalAutoDonated || 0) + chargeAmount
+          });
+
+          txn.set(qardConfigRef, {
+            qardTotalFund: currentTotal + chargeAmount,
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+        });
+
+        await addDoc(txCollection, {
+          userId: user.uid,
+          userUid: user.uid,
+          memberId: user.memberId || '',
+          memberName: cfg.isAnonymous ? 'গোপন দাতা' : (user.name || 'সম্মানিত সদস্য'),
+          type: 'qard_donation',
+          category: 'qard_donation',
+          amount: chargeAmount,
+          method: 'Auto Donation Schedule (Qard)',
+          status: 'success',
+          purpose: 'qard_fund',
+          isAnonymous: cfg.isAnonymous || false,
+          note: `স্বয়ংক্রিয় করযে হাসানা দান (অটো সিডিউল) — তারিখ: ${todayDateStr}`,
+          timestamp: new Date().toISOString(),
+          createdAt: serverTimestamp()
+        });
+
+        await addDoc(notifCollection, {
+          userId: user.uid,
+          title: '💖 মাসিক অটো করযে হাসানা দান সফল!',
+          message: `আপনার অটো সিডিউল অনুযায়ী করযে হাসানা ফান্ডের জন্য ৳${chargeAmount.toLocaleString('bn-BD')} স্বয়ংক্রিয়ভাবে জমা করা হয়েছে।`,
+          type: 'donation',
+          read: false,
+          createdAt: serverTimestamp()
+        });
+        await syncLiveProfile();
+      } catch (e) {
+        console.error('Qard auto donation background execution failed:', e);
+      }
+    };
+    checkAndExecuteQardAutoDonation();
+  }, [user?.uid, user?.qardAutoDonationConfig?.enabled]);
+
   // Handle Donation submit
   const handleDonateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1045,21 +1525,24 @@ BNB Business Co-operative Welfare Fund
       return;
     }
 
-    if (!securityPin || securityPin !== user.pin) {
+    if (!securityPin || (user.pin ? securityPin.trim() !== String(user.pin).trim() : securityPin.length < 4)) {
       setErrorMsg('ভুল সিকিউরিটি পিন নাম্বার প্রদান করেছেন।');
       return;
     }
 
     setLoading(true);
     try {
+      const isCharity = donationPurpose === 'general_charity';
       const purposeMap: Record<string, { title: string; emoji: string }> = {
+        general_charity: { title: 'সাধারণ দান ও লিল্লা সাদাকাহ তহবিল', emoji: '🕊️' },
+        qard_fund: { title: 'সাধারণ করযে হাসানা ফান্ড', emoji: '🤝' },
         general: { title: 'সাধারণ করযে হাসানা ফান্ড', emoji: '🤝' },
         medical: { title: 'চিকিৎসা সহায়তা খাতের দান', emoji: '🩺' },
         education: { title: 'দরিদ্র শিক্ষার্থীদের শিক্ষা', emoji: '🎓' },
         micro: { title: 'ক্ষুদ্র স্বনির্ভর ব্যবসা', emoji: '🚜' },
         emergency: { title: 'জরুরি মানবিক ও ত্রাণ সহায়তা', emoji: '🚨' },
       };
-      const curPurpose = purposeMap[donationPurpose || 'general'] || purposeMap.general;
+      const curPurpose = purposeMap[donationPurpose || (isCharity ? 'general_charity' : 'general')] || purposeMap.general;
       const details = `${donationType === 'one_time' ? 'এককালীন' : 'মাসিক/স্বয়ংক্রিয়'} দান [${curPurpose.emoji} ${curPurpose.title}]`;
 
       // 2. Create success donation transaction
@@ -1070,38 +1553,46 @@ BNB Business Co-operative Welfare Fund
         userPhoto: isAnonymous ? '' : (user.photoURL || user.profilePic || (user as any).photo || ''),
         photoURL: isAnonymous ? '' : (user.photoURL || user.profilePic || (user as any).photo || ''),
         memberId: user.memberId,
-        type: 'qard_donation',
-        typeLabel: 'করযে হাসানা দান',
+        type: isCharity ? 'general_charity_donation' : 'qard_donation',
+        category: isCharity ? 'general_charity' : 'qard_donation',
+        typeLabel: isCharity ? 'সাধারণ দান ও সাদাকাহ' : 'করযে হাসানা দান',
         amount: amt,
         status: 'success',
-        donationPurpose: donationPurpose || 'general',
+        donationPurpose: donationPurpose || (isCharity ? 'general_charity' : 'general'),
         purposeTitle: curPurpose.title,
         purposeEmoji: curPurpose.emoji,
         description: details + (isAnonymous ? ' (গোপনে দান)' : ''),
         createdAt: new Date().toISOString(),
         paymentMethod: 'WALLET',
         senderInfo: isAnonymous ? 'গোপন দাতা' : user.name,
-        transactionId: `QRD-WLT-${Date.now().toString().slice(-6)}`,
-        receiptNo: `REC-${Math.floor(100000 + Math.random() * 900000)}`
+        transactionId: isCharity ? `SAD-WLT-${Date.now().toString().slice(-6)}` : `QRD-WLT-${Date.now().toString().slice(-6)}`,
+        receiptNo: `REC-${Math.floor(100000 + Math.random() * 900000)}`,
+        district: (user.district || (user as any).thana || (user as any).address || 'ঢাকা').split(',').pop()?.trim() || 'ঢাকা'
       };
 
       // Optimistic balance update ⚡
       user.balance = (user.balance || 0) - amt;
       user.mainBalance = user.balance;
 
+      if (isCharity) {
+        setGeneralCharityTotal(prev => prev + amt);
+      } else {
+        setQardTotalFund(prev => prev + amt);
+      }
+
       setReceiptData({
         receiptNo: newTx.receiptNo || '',
         transactionId: newTx.transactionId || '',
         userName: newTx.userName || '',
         memberId: newTx.memberId || '',
-        typeLabel: newTx.typeLabel || 'করযে হাসানা দান',
+        typeLabel: newTx.typeLabel || (isCharity ? 'সাধারণ দান ও সাদাকাহ' : 'করযে হাসানা দান'),
         amount: newTx.amount || amt,
         description: newTx.description || '',
         createdAt: newTx.createdAt || new Date().toISOString(),
         paymentMethod: newTx.paymentMethod || 'WALLET'
       });
       setShowReceiptModal(true);
-      setSuccessMsg('আলহামদুলিল্লাহ! আপনার মেইন ব্যালেন্স থেকে অনুদানটি সফলভাবে সম্পন্ন হয়েছে। উম্মাহর সেবায় আপনার অবদান কবুল হোক! ইনশাআল্লাহ।');
+      setSuccessMsg(`আলহামদুলিল্লাহ! আপনার মেইন ব্যালেন্স থেকে ${isCharity ? 'সাধারণ দান ও সাদাকাহ' : 'করযে হাসানা অনুদান'} সফলভাবে সম্পন্ন হয়েছে। উম্মাহর সেবায় আপনার অবদান কবুল হোক!`);
       setDonationAmount('');
       setSecurityPin('');
       setLoading(false);
@@ -1109,19 +1600,25 @@ BNB Business Co-operative Welfare Fund
       // Background async database operations
       const userRef = doc(db, 'users', user.uid);
       addDoc(collection(db, 'admin_notifications'), {
-        title: '💖 করজে হাসানা ফান্ডে নতুন অনুদান প্রাপ্তি',
-        message: `${user.name || 'সদস্য'} (${user.memberId || 'N/A'}) করজে হাসানা ফান্ডে ৳${amt.toLocaleString('en-US')} টাকা অনুদান দিয়েছেন।`,
+        title: isCharity ? '🕊️ সাধারণ দান ফান্ডে নতুন সাদাকাহ প্রাপ্তি' : '💖 করজে হাসানা ফান্ডে নতুন অনুদান প্রাপ্তি',
+        message: `${user.name || 'সদস্য'} (${user.memberId || 'N/A'}) ${isCharity ? 'সাধারণ দান ও লিল্লা সাদাকাহ' : 'করজে হাসানা'} ফান্ডে ৳${amt.toLocaleString('bn-BD')} টাকা অনুদান দিয়েছেন।`,
         userId: user.uid,
         userName: user.name || '',
         memberId: user.memberId || '',
         userPhone: user.phone || '',
         amount: amt,
-        type: 'qard_donation',
+        type: isCharity ? 'general_charity_donation' : 'qard_donation',
         read: false,
         createdAt: new Date().toISOString()
       }).catch(e => console.warn('Admin notif error:', e));
       Promise.all([
-        updateDoc(userRef, { balance: user.balance, mainBalance: user.balance }),
+        runTransaction(db, async (t) => {
+          const uSnap = await t.get(userRef);
+          if (!uSnap.exists()) return;
+          const liveBal = getEffectiveBalance(uSnap.data());
+          const updatedBal = Math.max(0, liveBal - amt);
+          t.update(userRef, { balance: updatedBal, mainBalance: updatedBal });
+        }),
         addDoc(collection(db, 'transactions'), newTx)
       ]).then(() => {
         fetchLedgers();
@@ -1363,27 +1860,37 @@ BNB Business Co-operative Welfare Fund
 
     setInstantLoanLoading(true);
     try {
-      // 1. Update user balance & due loan directly in Firestore
+      // 1. Update user balance & due loan atomically in Firestore
       const userRef = doc(db, 'users', user.uid);
-      const newBalance = (user.balance || 0) + requestedAmt;
-      const newDueLoan = (user.dueLoan || 0) + requestedAmt;
+      let newBalance = getEffectiveBalance(user) + requestedAmt;
+      let newDueLoan = (user.dueLoan || 0) + requestedAmt;
       const durationMonths = instantLoanDurationInput === 3 ? 3 : 1;
       const nowIso = new Date().toISOString();
 
-      await updateDoc(userRef, {
-        balance: newBalance,
-        mainBalance: newBalance,
-        dueLoan: newDueLoan,
-        lastCoopInstantLoanAt: nowIso,
-        lastCoopInstantLoanAmount: requestedAmt,
-        lastCoopLoanPercentage: loanPercent,
-        instantLoanDurationMonths: durationMonths,
-        instantLoanOriginalAmount: requestedAmt,
-        instantLoanTakenAt: nowIso
+      await runTransaction(db, async (t) => {
+        const uSnap = await t.get(userRef);
+        if (!uSnap.exists()) return;
+        const freshData = uSnap.data();
+        const liveBal = getEffectiveBalance(freshData);
+        const liveDue = Number(freshData.dueLoan) || 0;
+        newBalance = liveBal + requestedAmt;
+        newDueLoan = liveDue + requestedAmt;
+        t.update(userRef, {
+          balance: newBalance,
+          mainBalance: newBalance,
+          dueLoan: newDueLoan,
+          lastCoopInstantLoanAt: nowIso,
+          lastCoopInstantLoanAmount: requestedAmt,
+          lastCoopLoanPercentage: loanPercent,
+          instantLoanDurationMonths: durationMonths,
+          instantLoanOriginalAmount: requestedAmt,
+          instantLoanTakenAt: nowIso
+        });
       });
 
       // Update local optimistic state
       user.balance = newBalance;
+      user.mainBalance = newBalance;
       user.dueLoan = newDueLoan;
       user.lastCoopInstantLoanAmount = requestedAmt;
       user.lastCoopLoanPercentage = loanPercent;
@@ -1633,13 +2140,6 @@ BNB Business Co-operative Welfare Fund
 
       // Async background sync
       const userRef = doc(db, 'users', user.uid);
-      const userUpdateFields: any = {
-        balance: newBalance,
-        dueLoan: newDue
-      };
-      if (newDue === 0) {
-        userUpdateFields.lastCoopInstantLoanRepaidAt = nowIso;
-      }
 
       await Promise.all([
         addDoc(collection(db, 'admin_notifications'), {
@@ -1653,7 +2153,22 @@ BNB Business Co-operative Welfare Fund
           read: false,
           createdAt: nowIso
         }).catch(e => console.warn('Admin notif error:', e)),
-        updateDoc(userRef, userUpdateFields),
+        runTransaction(db, async (t) => {
+          const uSnap = await t.get(userRef);
+          if (!uSnap.exists()) return;
+          const freshData = uSnap.data();
+          const liveBal = getEffectiveBalance(freshData);
+          const updatedBal = Math.max(0, liveBal - repayAmt);
+          const userUpdateFields: any = {
+            balance: updatedBal,
+            mainBalance: updatedBal,
+            dueLoan: newDue
+          };
+          if (newDue === 0) {
+            userUpdateFields.lastCoopInstantLoanRepaidAt = nowIso;
+          }
+          t.update(userRef, userUpdateFields);
+        }),
         addDoc(collection(db, 'transactions'), newTx),
         addDoc(collection(db, 'user_notifications'), {
           id: `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -1737,7 +2252,13 @@ BNB Business Co-operative Welfare Fund
       const targetRef = doc(db, 'users', targetUserObj.uid);
 
       await Promise.all([
-        updateDoc(payerRef, { balance: newPayerBalance }).catch(e => console.warn('Payer update err:', e)),
+        runTransaction(db, async (t) => {
+          const pSnap = await t.get(payerRef);
+          if (!pSnap.exists()) return;
+          const livePayerBal = getEffectiveBalance(pSnap.data());
+          const updatedPayerBal = Math.max(0, livePayerBal - repayAmt);
+          t.update(payerRef, { balance: updatedPayerBal, mainBalance: updatedPayerBal });
+        }).catch(e => console.warn('Payer update err:', e)),
         updateDoc(targetRef, { dueLoan: newTargetDue }).catch(e => console.warn('Target update err:', e)),
         addDoc(collection(db, 'transactions'), {
           userId: targetUserObj.uid,
@@ -1875,7 +2396,13 @@ BNB Business Co-operative Welfare Fund
       const targetRef = doc(db, 'users', targetUserId);
 
       await Promise.all([
-        updateDoc(payerRef, { balance: newPayerBalance, mainBalance: newPayerBalance }).catch(e => console.warn('Payer update err:', e)),
+        runTransaction(db, async (t) => {
+          const pSnap = await t.get(payerRef);
+          if (!pSnap.exists()) return;
+          const livePayerBal = getEffectiveBalance(pSnap.data());
+          const updatedPayerBal = Math.max(0, livePayerBal - repayAmt);
+          t.update(payerRef, { balance: updatedPayerBal, mainBalance: updatedPayerBal });
+        }).catch(e => console.warn('Payer update err:', e)),
         updateDoc(targetRef, { dueLoan: newTargetDue }).catch(e => console.warn('Target update err:', e)),
         addDoc(collection(db, 'transactions'), {
           userId: targetUserId,
@@ -2099,9 +2626,16 @@ BNB Business Co-operative Welfare Fund
     setSimulatingAutoDebit(true);
     try {
       const userRef = doc(db, 'users', user.uid);
-      // Deduct from user balance
-      await updateDoc(userRef, {
-        balance: user.balance - totalDeduction
+      // Deduct from user balance atomically
+      await runTransaction(db, async (t) => {
+        const uSnap = await t.get(userRef);
+        if (!uSnap.exists()) return;
+        const liveBal = getEffectiveBalance(uSnap.data());
+        const updatedBal = Math.max(0, liveBal - totalDeduction);
+        t.update(userRef, {
+          balance: updatedBal,
+          mainBalance: updatedBal
+        });
       });
       
       const generatedReceiptNo = `REC-${Math.floor(100000 + Math.random() * 900000)}`;
@@ -2186,19 +2720,19 @@ BNB Business Co-operative Welfare Fund
             return;
           }
 
-          // Credit borrower's main wallet balance and update due loan status
+          // Credit borrower's main wallet balance and update due loan status atomically
           const borrowerRef = doc(db, 'users', txUserId);
-          const snapB = await getDocs(query(collection(db, 'users')));
           let borrowerData: any = null;
-          snapB.forEach((ub) => {
-            if (ub.id === txUserId) borrowerData = ub.data();
-          });
-
-          const currentBal = borrowerData?.balance || 0;
-          await updateDoc(borrowerRef, {
-            balance: currentBal + txAmount,
-            mainBalance: currentBal + txAmount,
-            dueLoan: txAmount
+          await runTransaction(db, async (t) => {
+            const bSnap = await t.get(borrowerRef);
+            if (!bSnap.exists()) return;
+            borrowerData = bSnap.data();
+            const currentBal = getEffectiveBalance(borrowerData);
+            t.update(borrowerRef, {
+              balance: currentBal + txAmount,
+              mainBalance: currentBal + txAmount,
+              dueLoan: txAmount
+            });
           });
 
           // Insert actual disbursement transaction
@@ -2216,18 +2750,16 @@ BNB Business Co-operative Welfare Fund
         }
 
         if (txType === 'qard_withdrawal') {
-          // Credit user's main balance upon donation withdrawal approval
+          // Credit user's main balance upon donation withdrawal approval atomically
           const requesterRef = doc(db, 'users', txUserId);
-          const snapB = await getDocs(query(collection(db, 'users')));
-          let requesterData: any = null;
-          snapB.forEach((ub) => {
-            if (ub.id === txUserId) requesterData = ub.data();
-          });
-
-          const currentBal = requesterData?.balance || 0;
-          await updateDoc(requesterRef, {
-            balance: currentBal + txAmount,
-            mainBalance: currentBal + txAmount
+          await runTransaction(db, async (t) => {
+            const rSnap = await t.get(requesterRef);
+            if (!rSnap.exists()) return;
+            const currentBal = getEffectiveBalance(rSnap.data());
+            t.update(requesterRef, {
+              balance: currentBal + txAmount,
+              mainBalance: currentBal + txAmount
+            });
           });
         }
         
@@ -2265,7 +2797,7 @@ BNB Business Co-operative Welfare Fund
     <div className="min-h-screen bg-[#0b6623] text-slate-800 flex flex-col font-sans relative">
       
       {/* Green Top Header Section matching Home Dashboard */}
-      <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-2.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-20 space-y-2.5">
+      <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-2.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-20 space-y-2">
         <div className="max-w-2xl mx-auto flex items-center justify-between gap-1">
           {/* Left Group: Back button + Section Name */}
           <div className="flex items-center gap-1.5 shrink-0">
@@ -2287,48 +2819,77 @@ BNB Business Co-operative Welfare Fund
 
             <div className="shrink-0 px-0.5">
               <h1 className="text-xs font-black text-amber-300 font-sans tracking-tight leading-none">
-                করযে হাসানা
+                করযে হাসানা ও দান তহবিল
               </h1>
             </div>
           </div>
 
-          {/* Right Group: Joined Balances Box + Transaction History Button */}
+          {/* Right Group: Transaction History Button */}
           <div className="flex items-center gap-1.5 shrink-0">
-            <div className="flex items-center bg-black/20 border border-white/20 rounded-full px-2.5 py-1 shrink-0 divide-x divide-white/20 gap-1.5">
-              {/* Main Balance */}
-              <div className="pr-1 text-left leading-none">
-                <span className="text-[6.5px] font-extrabold text-emerald-200 uppercase block tracking-tighter">মেইন</span>
-                <span className="text-[10px] font-bold text-white font-mono block mt-0.5 whitespace-nowrap">৳ {(user.balance || 0).toLocaleString('en-US')}</span>
-              </div>
-              {/* Qard Hasana Fund */}
-              <div className="px-1.5 text-left leading-none">
-                <span className="text-[6.5px] font-extrabold text-amber-300 uppercase block tracking-tighter">ফান্ড</span>
-                <span className="text-[10px] font-bold text-amber-200 font-mono block mt-0.5 whitespace-nowrap">৳ {(qardTotalFund || 0).toLocaleString('en-US')}</span>
-              </div>
-            </div>
-
-            {/* Transaction History Button */}
             <button 
               onClick={() => {
                 fetchLedgers();
                 setShowSectionTxHistory(true);
               }}
-              className="p-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg border border-white/20 transition active:scale-95 cursor-pointer flex items-center gap-1 shrink-0"
-              title="করযে হাসানা লেনদেন হিস্টোরি"
+              className="px-2.5 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-xl border border-white/20 transition active:scale-95 cursor-pointer flex items-center gap-1 shrink-0 text-xs font-bold"
+              title="করযে হাসানা ও দান লেনদেন হিস্টোরি"
             >
               <ClipboardList className="w-3.5 h-3.5 text-white shrink-0" />
+              <span className="hidden sm:inline">খতিয়ান</span>
             </button>
           </div>
         </div>
 
-        {/* Row 2: Announcement Ticker (ঘোষণা) */}
-        <div className="max-w-2xl mx-auto flex items-center gap-2.5 overflow-hidden w-full pt-1 px-0.5 relative z-10">
-          <div className="bg-white text-[#005a36] text-[10.5px] font-black px-3 py-1 rounded-full shrink-0 shadow-xs flex items-center gap-1">
+        {/* 5-Metric Balances Strip — Unified, Slim, Connected in 1 Line with Red (Qard) & Blue (Dan) Themes */}
+        <div 
+          onClick={() => {
+            setFundAnalyticsActiveTab('districts');
+            setShowFundAnalyticsModal(true);
+          }}
+          className="max-w-2xl mx-auto w-full my-1 bg-[#002f1a]/95 backdrop-blur-md border border-white/20 rounded-2xl shadow-sm cursor-pointer group hover:border-emerald-300/40 transition select-none text-left overflow-hidden"
+          title="তহবিল, দাতা, বিতরণ ও জেলাভিত্তিক সাহায্য খতিয়ান দেখতে ট্যাপ করুন"
+        >
+          <div className="grid grid-cols-5 items-stretch py-1 px-0.5">
+            {/* ১. মেইন ব্যালেন্স */}
+            <div className="px-1 py-0.5 text-center min-w-0 bg-emerald-950/40 rounded-l-xl">
+              <span className="text-[7.5px] sm:text-[8px] font-bold text-emerald-200/90 block truncate leading-none">মেইন ব্যালেন্স</span>
+              <span className="text-[10px] sm:text-[11.5px] font-black text-white font-mono block mt-1 whitespace-nowrap truncate leading-tight">৳{(user.balance || 0).toLocaleString('bn-BD')}</span>
+            </div>
+
+            {/* ২. কর্জ ফান্ড জমা (RED - লাল) */}
+            <div className="px-1 py-0.5 text-center min-w-0 bg-red-950/80 border-l border-red-500/40">
+              <span className="text-[7.5px] sm:text-[8px] font-bold text-red-200 block truncate leading-none">কর্জ ফান্ড জমা</span>
+              <span className="text-[10px] sm:text-[11.5px] font-black text-rose-300 font-mono block mt-1 whitespace-nowrap truncate leading-tight">৳{(qardTotalFund || 0).toLocaleString('bn-BD')}</span>
+            </div>
+
+            {/* ৩. বিতরণকৃত কর্জ (RED - লাল) */}
+            <div className="px-1 py-0.5 text-center min-w-0 bg-red-950/80 border-l border-red-500/40">
+              <span className="text-[7.5px] sm:text-[8px] font-bold text-red-200 block truncate leading-none">বিতরণকৃত কর্জ</span>
+              <span className="text-[10px] sm:text-[11.5px] font-black text-rose-300 font-mono block mt-1 whitespace-nowrap truncate leading-tight">৳{(qardActiveLoansAmount || 0).toLocaleString('bn-BD')}</span>
+            </div>
+
+            {/* ৪. সাধারণ দান জমা (BLUE - নীল) */}
+            <div className="px-1 py-0.5 text-center min-w-0 bg-blue-950/80 border-l border-blue-500/40">
+              <span className="text-[7.5px] sm:text-[8.5px] font-bold text-sky-200 block truncate leading-none">দান ফান্ড জমা</span>
+              <span className="text-[10px] sm:text-[11.5px] font-black text-sky-300 font-mono block mt-1 whitespace-nowrap truncate leading-tight">৳{(generalCharityTotal || 0).toLocaleString('bn-BD')}</span>
+            </div>
+
+            {/* ৫. বিতরণকৃত দান (BLUE - নীল) */}
+            <div className="px-1 py-0.5 text-center min-w-0 bg-blue-950/80 border-l border-blue-500/40 rounded-r-xl">
+              <span className="text-[7.5px] sm:text-[8px] font-bold text-sky-200 block truncate leading-none">বিতরণকৃত দান</span>
+              <span className="text-[10px] sm:text-[11.5px] font-black text-sky-300 font-mono block mt-1 whitespace-nowrap truncate leading-tight">৳{(generalCharityDisbursed || 0).toLocaleString('bn-BD')}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Row 3: Announcement Ticker (ঘোষণা) */}
+        <div className="max-w-2xl mx-auto flex items-center gap-2.5 overflow-hidden w-full pt-0.5 px-0.5 relative z-10">
+          <div className="bg-white text-[#005a36] text-[10.5px] font-black px-3 py-0.5 rounded-full shrink-0 shadow-xs flex items-center gap-1">
             <span>ঘোষণা</span>
           </div>
           <div className="flex-grow overflow-hidden relative mr-1">
-            <marquee className="text-[12px] font-bold text-white leading-none py-0.5 tracking-wide" behavior="scroll" direction="left" scrollamount="4">
-              {appConfig?.qardTicker || "BNB করজে হাসানা ফান্ডের সাথে থাকুন। সুদমুক্ত ঋণ গ্রহণ করুন এবং হালাল অর্থনীতিতে অবদান রাখুন।"}
+            <marquee className="text-[11.5px] font-bold text-white leading-none py-0.5 tracking-wide" behavior="scroll" direction="left" scrollamount="4">
+              {appConfig?.qardTicker || "BNB করজে হাসানা ও দান ফান্ডের সাথে থাকুন। সুদমুক্ত ঋণ নিন এবং সাধারণ অনুদানে অংশ নিন।"}
             </marquee>
           </div>
         </div>
@@ -2399,13 +2960,16 @@ BNB Business Co-operative Welfare Fund
           const displayLoans = liveLoansList.slice(0, 5);
 
           // Aggregate all donations by unique donor (userId/phone/name) for Cumulative Totals
+          // Aggregate all donations (both Qard and General Charity) with District tracking
           const allDonationsTxs = qardHistory.filter(t => {
-            if (t.type !== 'qard_donation' || t.status !== 'success') return false;
+            const isDonation = (t.type === 'qard_donation' || t.type === 'general_charity_donation') && t.status === 'success';
+            if (!isDonation) return false;
             const nameStr = String(t.userName || '');
             if (nameStr.includes('জুবায়ের') || nameStr.includes('Jubayer')) return false;
             if (Number(t.amount) === 2500) return false;
             return true;
           });
+
           const donorMap: Record<string, {
             userId: string;
             name: string;
@@ -2416,6 +2980,7 @@ BNB Business Co-operative Welfare Fund
             donationCount: number;
             latestDate: string;
             latestTimestamp: number;
+            district: string;
             history: Array<{
               id: string;
               amount: number;
@@ -2437,6 +3002,7 @@ BNB Business Co-operative Welfare Fund
 
             const memberName = t.userName === 'গোপন দাতা' ? 'গোপন দাতা' : (uInfo?.name || t.userName || 'দানশীল সদস্য');
             const memberPhone = (uInfo as any)?.phone || t.userPhone || '';
+            const memberDistrict = t.district || (uInfo as any)?.district || (uInfo as any)?.thana || 'ঢাকা';
             const memberPhoto = t.userName === 'গোপন দাতা' 
               ? '' 
               : (uInfo?.photoURL || uInfo?.photo || (uInfo as any)?.profilePic || t.userPhoto || t.photoURL || (t as any).profilePic || (user && (user.uid === t.userId || user.name === t.userName || user.phone === t.userPhone) ? (user.photoURL || user.profilePic || (user as any).photo) : '') || '');
@@ -2445,7 +3011,7 @@ BNB Business Co-operative Welfare Fund
 
             const txDate = t.createdAt ? new Date(t.createdAt) : new Date();
             const formattedDate = txDate.toLocaleDateString('bn-BD', { day: 'numeric', month: 'long', year: 'numeric' });
-            const typeLabel = t.description?.includes('মাসিক') ? 'মাসিক অনুদান' : (t.description?.includes('আমানত') ? 'কল্যাণ আমানত' : 'স্বেচ্ছা অনুদান');
+            const typeLabel = t.type === 'general_charity_donation' ? 'লিল্লা সাদাকাহ' : (t.description?.includes('মাসিক') ? 'মাসিক অনুদান' : (t.description?.includes('আমানত') ? 'কল্যাণ আমানত' : 'সুদমুক্ত দান'));
 
             if (!donorMap[key]) {
               donorMap[key] = {
@@ -2458,6 +3024,7 @@ BNB Business Co-operative Welfare Fund
                 donationCount: 0,
                 latestDate: formattedDate,
                 latestTimestamp: txDate.getTime(),
+                district: memberDistrict,
                 history: []
               };
             } else {
@@ -2466,6 +3033,9 @@ BNB Business Co-operative Welfare Fund
               }
               if (memberName && memberName !== 'দানশীল সদস্য' && donorMap[key].name === 'দানশীল সদস্য') {
                 donorMap[key].name = memberName;
+              }
+              if (memberDistrict && (!donorMap[key].district || donorMap[key].district === 'ঢাকা')) {
+                donorMap[key].district = memberDistrict;
               }
             }
 
@@ -2481,7 +3051,7 @@ BNB Business Co-operative Welfare Fund
               amount: donateAmt,
               date: formattedDate,
               typeLabel,
-              description: t.description || 'করযে হাসানা অনুদান',
+              description: t.description || (t.type === 'general_charity_donation' ? 'লিল্লা সাদাকাহ' : 'করযে হাসানা অনুদান'),
               receiptNo: t.receiptNo,
               transactionId: t.transactionId
             });
@@ -2502,40 +3072,62 @@ BNB Business Co-operative Welfare Fund
               {/* Premium Image Slider System (Memoized isolated slider) */}
               <QardBannerSlider adSlides={adSlides} />
 
-              {/* Top Section: Compact Sleek Full-Width Banner for 'কর্জে হাসানায় দান করুন' */}
-              <div className="my-2 w-full">
+              {/* Two Distinct Side-by-Side Cards: Left is RED (Qard Hasana), Right is BLUE (General Dan) */}
+              <div className="grid grid-cols-2 gap-2.5 sm:gap-3 my-2.5 w-full select-none text-left">
+                {/* Left Card: কর্জে হাসানায় দান (RED - লাল চিহ্ন) — Slimmer & Sleek */}
                 <div 
-                  onClick={() => setActiveTab('donate')}
-                  className="w-full bg-gradient-to-r from-emerald-800 via-teal-800 to-emerald-900 hover:from-emerald-900 hover:to-teal-900 text-white py-2.5 px-3.5 sm:py-3 sm:px-4 rounded-2.5xl shadow-md border border-emerald-500/70 flex items-center justify-between gap-2.5 cursor-pointer transition active:scale-98 group relative overflow-hidden"
+                  onClick={() => {
+                    setDonationPurpose('qard_fund');
+                    setDonateStep(1);
+                    setActiveTab('donate');
+                  }}
+                  className="bg-gradient-to-br from-red-600 via-rose-700 to-red-950 text-white p-1.5 sm:p-2 rounded-xl shadow-sm border border-red-400/60 hover:border-red-300 flex flex-col justify-between cursor-pointer group active:scale-[0.98] transition select-none text-left min-h-[90px]"
+                  title="কর্জে হাসানা কল্যাণ ফান্ডে দান করতে ক্লিক করুন"
                 >
-                  {/* Decorative subtle glowing background highlight */}
-                  <div className="absolute -right-6 -bottom-6 w-28 h-28 bg-amber-400/10 rounded-full blur-xl pointer-events-none" />
-
-                  <div className="flex items-center gap-2.5 relative z-10 text-left min-w-0 flex-1">
-                    <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-amber-400 to-amber-500 text-emerald-950 flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition border border-amber-300">
-                      <HeartHandshake className="w-5 h-5 sm:w-5.5 sm:h-5.5 text-emerald-950" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 mb-0.5">
-                        <span className="text-[8.5px] sm:text-[9.5px] font-black bg-amber-400 text-emerald-950 px-2 py-0.2 rounded-full shadow-3xs leading-tight">
-                          ✨ ১৮ গুণ সওয়াব
-                        </span>
-                        <span className="text-[8.5px] font-bold text-emerald-200 bg-white/10 px-1.5 py-0.2 rounded-full border border-white/20 hidden sm:inline-block">
-                          সদকা এ جاریয়া
-                        </span>
+                  <div>
+                    <div className="flex items-center justify-between gap-1 mb-0.5">
+                      <div className="w-6 h-6 rounded-lg bg-white/20 text-white flex items-center justify-center shrink-0 border border-white/25">
+                        <HeartHandshake className="w-3 h-3 text-white" />
                       </div>
-                      <h3 className="text-xs sm:text-sm font-black text-amber-300 font-sans leading-tight truncate">
-                        উম্মাহর সেবায় করযে হাসানায় দান করুন
-                      </h3>
+                      <span className="text-[7px] font-black bg-white text-red-900 px-1 py-0.5 rounded-full shadow-3xs leading-tight whitespace-nowrap uppercase">
+                        ১৮ গুণ সওয়াব
+                      </span>
                     </div>
+                    <h3 className="text-xs font-black text-white font-sans leading-tight truncate">
+                      কর্জে হাসানায় দান
+                    </h3>
                   </div>
 
-                  {/* Right Action Button */}
-                  <div className="relative z-10 shrink-0">
-                    <div className="px-3 py-1.5 bg-gradient-to-r from-amber-400 to-amber-500 text-emerald-950 rounded-xl text-[11px] font-black shadow-xs flex items-center gap-1 group-hover:translate-x-0.5 transition border border-amber-300">
-                      <HandHeart className="w-3.5 h-3.5 text-emerald-950 fill-emerald-950" />
-                      <span>দান করুন ➔</span>
+                  <div className="mt-1 pt-1 border-t border-white/10 flex items-center justify-between">
+                    <span className="text-[8.5px] font-black text-rose-100 uppercase tracking-tighter">দান করুন</span>
+                    <span className="text-[10px] font-black text-white group-hover:translate-x-0.5 transition-transform">➔</span>
+                  </div>
+                </div>
+
+                <div 
+                  onClick={() => {
+                    setActiveTab('general_charity');
+                  }}
+                  className="bg-gradient-to-br from-blue-600 via-sky-700 to-indigo-950 text-white p-1.5 sm:p-2 rounded-xl shadow-sm border border-sky-400/60 hover:border-sky-300 flex flex-col justify-between cursor-pointer group active:scale-[0.98] transition select-none text-left min-h-[90px]"
+                  title="সাধারণ দান ও লিল্লা সাদাকাহ পেজ খুলুন"
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-1 mb-0.5">
+                      <div className="w-6 h-6 rounded-lg bg-white/20 text-white flex items-center justify-center shrink-0 border border-white/25">
+                        <HandHeart className="w-3 h-3 text-white" />
+                      </div>
+                      <span className="text-[7px] font-black bg-white text-blue-900 px-1 py-0.5 rounded-full shadow-3xs leading-tight whitespace-nowrap uppercase">
+                        লিল্লা সাদাকাহ
+                      </span>
                     </div>
+                    <h3 className="text-xs font-black text-white font-sans leading-tight truncate">
+                      সাধারণ দান ও সদকা
+                    </h3>
+                  </div>
+
+                  <div className="mt-1 pt-1 border-t border-white/10 flex items-center justify-between">
+                    <span className="text-[8.5px] font-black text-sky-100 uppercase tracking-tighter">দান করুন</span>
+                    <span className="text-[10px] font-black text-white group-hover:translate-x-0.5 transition-transform">➔</span>
                   </div>
                 </div>
               </div>
@@ -2612,20 +3204,6 @@ BNB Business Co-operative Welfare Fund
                   </div>
                 </button>
               </div>
-
-              {/* Silent administrative button helper if user is admin */}
-              {user.role === 'admin' && (
-                <div 
-                  onClick={() => setActiveTab('admin')}
-                  className="bg-purple-50 hover:bg-purple-100 border border-purple-200/60 rounded-2xl p-2.5 flex items-center justify-between text-purple-900 cursor-pointer transition active:scale-95"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 bg-purple-500 rounded-full animate-pulse" />
-                    <span className="text-[11px] font-black">⚙️ আপনি একজন অ্যাডমিন। যাচাইকরণ ও কাজের জন্য অ্যাডমিন মডিউল খুলুন</span>
-                  </div>
-                  <ChevronRight className="w-4 h-4 text-purple-400" />
-                </div>
-              )}
 
               {/* Progress Bar Card */}
               <div className="bg-white border border-slate-100 rounded-3xl p-3.5 shadow-xs flex items-center justify-between gap-3 my-3">
@@ -2773,6 +3351,320 @@ BNB Business Co-operative Welfare Fund
           );
         })()}
 
+        {/* ==================== TAB: GENERAL CHARITY (২ নাম্বার সেকশন - দান করুন পেজ) ==================== */}
+        {activeTab === 'general_charity' && (
+          <div className="space-y-4 max-w-2xl mx-auto animate-fade-in text-left font-sans select-none pb-12">
+
+
+            {/* 🕊️ সাধারণ দান ও লিল্লা সাদাকাহ সেকশন (General Charity & Nationwide Aid Roadmap) */}
+            <div className="bg-gradient-to-br from-[#053822] via-[#042f1c] to-[#022113] p-4 sm:p-5 border border-emerald-600/30 rounded-3.5xl text-white shadow-md space-y-4 relative overflow-hidden text-left select-none">
+              {/* Header Title with Soothing Mint Accents */}
+              <div className="flex items-center justify-between gap-2 border-b border-white/10 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-2xl bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 flex items-center justify-center shrink-0 shadow-xs">
+                    <HandHeart className="w-5 h-5 text-emerald-300 fill-emerald-300/30" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs sm:text-sm font-black text-emerald-100 tracking-wide">
+                      🕊️ সাধারণ দান ও লিল্লা সাদাকাহ প্রকল্প
+                    </h3>
+                    <p className="text-[10px] text-emerald-200/80 font-medium">
+                      সারা বাংলাদেশে প্রতি মাসে এক জেলা সহায়তা কর্মসূচি
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAutoDonationEnabled(user.autoDonationConfig?.enabled || false);
+                      setAutoDonationFrequency(user.autoDonationConfig?.frequency || 'monthly');
+                      setAutoDonationAmount(user.autoDonationConfig?.amount || 0);
+                      setAutoDonationDay(user.autoDonationConfig?.dayOfMonth || 1);
+                      setAutoDonationYearlyTimes(user.autoDonationConfig?.yearlyTimes || 4);
+                      if (user.autoDonationConfig?.monthAmounts) {
+                        setAutoDonationMonthAmounts(user.autoDonationConfig.monthAmounts);
+                      }
+                      setAutoDonationAnonymous(user.autoDonationConfig?.isAnonymous ?? false);
+                      setShowAutoDonationModal(true);
+                    }}
+                    className="px-5 py-3 rounded-2xl font-black text-sm sm:text-base shadow-xl flex items-center gap-2 bg-amber-400 text-slate-950 border-2 border-white/20 transition active:scale-95 cursor-pointer whitespace-nowrap animate-pulse-slow"
+                    title="স্বয়ংক্রিয় বা অটো দান সিডিউল নির্ধারণ করুন"
+                  >
+                    <RefreshCw className={`w-5 h-5 ${user.autoDonationConfig?.enabled ? 'animate-spin' : ''}`} style={{ animationDuration: '4s' }} />
+                    <span>
+                      {user.autoDonationConfig?.enabled ? '(অটো দান: সচল)' : '(অটো দান)'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Fund Metrics 3-Card Row — Soothing, Calm Colors */}
+              <div className="grid grid-cols-3 gap-2">
+                <div className="bg-black/25 border border-white/10 rounded-2xl p-2.5 text-center">
+                  <span className="text-[8.5px] sm:text-[9.5px] font-bold text-emerald-200/80 block truncate">মোট দান প্রাপ্তি</span>
+                  <span className="text-xs sm:text-sm font-black text-amber-300 font-mono block mt-0.5 truncate">৳ {generalCharityTotal.toLocaleString('bn-BD')}</span>
+                </div>
+
+                <div className="bg-black/25 border border-white/10 rounded-2xl p-2.5 text-center">
+                  <span className="text-[8.5px] sm:text-[9.5px] font-bold text-emerald-200/80 block truncate">বিতরণকৃত সাহায্য</span>
+                  <span className="text-xs sm:text-sm font-black text-rose-200 font-mono block mt-0.5 truncate">৳ {generalCharityDisbursed.toLocaleString('bn-BD')}</span>
+                </div>
+
+                <div className="bg-black/25 border border-white/10 rounded-2xl p-2.5 text-center">
+                  <span className="text-[8.5px] sm:text-[9.5px] font-bold text-emerald-200/80 block truncate">বিতরণযোগ্য তহবিল</span>
+                  <span className="text-xs sm:text-sm font-black text-teal-200 font-mono block mt-0.5 truncate">৳ {Math.max(0, generalCharityTotal - generalCharityDisbursed).toLocaleString('bn-BD')}</span>
+                </div>
+              </div>
+
+              {/* দানের বিবরণী — দান করলে কি কি পাবে (ফজিলত ও আত্মিক প্রশান্তি) */}
+              <div className="bg-white/5 border border-white/10 rounded-2.5xl p-3 space-y-2">
+                <div className="flex items-center gap-1.5 text-amber-300">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span className="text-[11px] font-black">দানের বিবরণী — দান করলে যা যা পাবেন:</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px] text-emerald-100/90 font-medium">
+                  <div className="flex items-start gap-1.5">
+                    <span className="text-amber-300 shrink-0">✔</span>
+                    <span><strong>সম্পদে বহুগুণ বরকত:</strong> হাদিস শরীফ অনুযায়ী দানশীল ব্যক্তির সম্পদ কখনোই কমে না, বরং বহুগুণে বৃদ্ধি পায়।</span>
+                  </div>
+                  <div className="flex items-start gap-1.5">
+                    <span className="text-amber-300 shrink-0">✔</span>
+                    <span><strong>বিপদ-আপদ দূরীকরণ:</strong> সাদাকাহ অপমৃত্যু, কঠিন রোগ-বালাই ও পার্থিব আকস্মিক বালা-মুসিবত থেকে রক্ষা করে।</span>
+                  </div>
+                  <div className="flex items-start gap-1.5">
+                    <span className="text-amber-300 shrink-0">✔</span>
+                    <span><strong>হৃদয়ের অনাবিল শান্তি:</strong> একজন নিঃস্ব ও ক্ষুধার্ত মানুষের মুখে খাবার তুলে দিয়ে অন্তরে পরম আত্মতৃপ্তি লাভ।</span>
+                  </div>
+                  <div className="flex items-start gap-1.5">
+                    <span className="text-amber-300 shrink-0">✔</span>
+                    <span><strong>শতভাগ উন্মুক্ত হিসাব:</strong> আপনার প্রদত্ত প্রতিটি পয়সার লাইভ হিসাব ও ব্যয়ের তালিকা অ্যাপে সার্বক্ষণিক উন্মুক্ত।</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* সারা বাংলাদেশ সহায়তা নীতিমালা — প্রতি মাসে এক জেলা */}
+              <div className="bg-white/5 border border-white/10 rounded-2.5xl p-3 space-y-2">
+                <div className="flex items-center gap-1.5 text-emerald-200">
+                  <MapPin className="w-3.5 h-3.5 text-amber-300" />
+                  <span className="text-[11px] font-black">আমাদের সারা বাংলাদেশ সহায়তা নীতিমালা (প্রতি মাসে এক জেলা):</span>
+                </div>
+                <p className="text-[10.5px] text-emerald-100/90 leading-relaxed font-sans">
+                  আমরা সারা বাংলাদেশের ৬৪ জেলার মধ্যে প্রতি মাসে পর্যায়ক্রমে ১টি জেলা নির্বাচন করে সাধারণ দানের সম্পূর্ণ অর্থ সরাসরি পৌঁছাই। 
+                  <strong className="text-amber-300"> যে জেলা থেকে যত টাকা দান আসবে, ওই জেলায় তত টাকাই খাদ্য, চিকিৎসা ও পুনর্বাসন সহায়তা প্রদান করা হবে!</strong>
+                </p>
+              </div>
+
+              {/* জেলা ভিত্তিক দান ও সহায়তার লাইভ তালিকা (District Leaderboard) */}
+              <div className="space-y-2 pt-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-black text-emerald-100 flex items-center gap-1">
+                    <span>📍 জেলাভিত্তিক অনুদান ও সহায়তা পরিসংখ্যান</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFundAnalyticsActiveTab('districts');
+                      setShowFundAnalyticsModal(true);
+                    }}
+                    className="text-[10px] font-bold text-amber-300 hover:underline cursor-pointer flex items-center gap-0.5"
+                  >
+                    <span>সব ৬৪ জেলা দেখুন</span>
+                    <ChevronRight className="w-3 h-3" />
+                  </button>
+                </div>
+
+                {/* 4-Item Compact District Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {districtRankingList.filter(d => d.totalDonated > 0).length > 0 ? (
+                    districtRankingList.filter(d => d.totalDonated > 0).slice(0, 4).map((dist, idx) => (
+                      <div 
+                        key={idx}
+                        onClick={() => {
+                          setFundAnalyticsActiveTab('districts');
+                          setShowFundAnalyticsModal(true);
+                        }}
+                        className="bg-black/30 border border-white/10 hover:border-emerald-400/40 rounded-2xl p-2.5 transition cursor-pointer text-left group"
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-black text-white group-hover:text-amber-300 transition">{dist.name}</span>
+                          <span className="text-[8px] font-bold text-emerald-300 bg-emerald-500/20 px-1.5 py-0.2 rounded-full font-mono">{dist.donorsCount} জন</span>
+                        </div>
+                        <div className="text-[9px] text-emerald-200/80">মোট দান: <strong className="text-white font-mono">৳{dist.totalDonated.toLocaleString('bn-BD')}</strong></div>
+                        <div className="text-[8.5px] text-amber-300/90 mt-0.5 font-bold">সহায়তা বরাদ্দ: ৳{dist.aidAllocation.toLocaleString('bn-BD')}</div>
+                      </div>
+                    ))
+                  ) : (
+                    <div 
+                      onClick={() => {
+                        setFundAnalyticsActiveTab('districts');
+                        setShowFundAnalyticsModal(true);
+                      }}
+                      className="col-span-2 sm:col-span-4 bg-black/25 border border-white/10 rounded-2xl p-3 text-center cursor-pointer hover:border-emerald-400/30 transition"
+                    >
+                      <p className="text-[11px] text-emerald-100 font-bold">
+                        🌱 এখনো পর্যন্ত কোনো জেলাভিত্তিক সাধারণ অনুদান জমা হয়নি।
+                      </p>
+                      <p className="text-[9.5px] text-emerald-200/80 mt-0.5">
+                        আপনি সাধারণ দান প্রদান করলে সরাসরি আপনার জেলার নামে লাইভ রিয়েলটাইমে যুক্ত হবে।
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* সবুজ দাগ এলাকা: অ্যাকাউন্ট বসিয়ে কয় টাকা দান করতে চাই */}
+              <div className="bg-black/30 border border-white/10 rounded-2.5xl p-3 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-black text-emerald-100 flex items-center gap-1.5">
+                    <span>💳 অ্যাকাউন্ট ও দানের পরিমাণ</span>
+                  </span>
+                  <span className="text-[10px] text-emerald-200/80 font-mono">
+                    মেইন ব্যালেন্স: <strong className="text-white">৳{(user.balance || 0).toLocaleString('bn-BD')}</strong>
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {/* ১. অ্যাকাউন্ট বসিয়ে */}
+                  <div className="space-y-1">
+                    <label className="text-[9.5px] font-bold text-emerald-200/80 block">
+                      প্রেরক অ্যাকাউন্ট / সদস্য আইডি:
+                    </label>
+                    <div className="flex items-center bg-black/40 border border-white/15 focus-within:border-emerald-400 rounded-xl px-2.5 py-1.5 transition">
+                      <input 
+                        type="text"
+                        value={senderAccount || user.memberId || user.phone || 'মেইন ওয়ালেট'}
+                        onChange={(e) => setSenderAccount(e.target.value)}
+                        placeholder="অ্যাকাউন্ট নম্বর / আইডি"
+                        className="w-full bg-transparent text-white text-xs font-mono focus:outline-none placeholder:text-white/30"
+                      />
+                      <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded-md font-bold shrink-0 ml-1">
+                        সচল
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* ২. কয় টাকা দান করতে চাই */}
+                  <div className="space-y-1">
+                    <label className="text-[9.5px] font-bold text-amber-200/90 block">
+                      দানের পরিমাণ (টাকা):
+                    </label>
+                    <div className="flex items-center bg-black/40 border border-white/15 focus-within:border-amber-400 rounded-xl px-2.5 py-1.5 transition">
+                      <span className="text-amber-300 font-black text-sm mr-1">৳</span>
+                      <input 
+                        type="number"
+                        min="1"
+                        value={donationAmount}
+                        onChange={(e) => {
+                          setDonationAmount(e.target.value);
+                          if (errorMsg) setErrorMsg('');
+                        }}
+                        placeholder="পরিমাণ লিখুন"
+                        className="w-full bg-transparent text-white text-sm font-black font-mono focus:outline-none placeholder:text-white/30"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* এক ক্লিকে করযে হাসানা দানের প্রিসেট বাটন (২০, ৩০, ৫০, ১০০, ২০০ টাকা - এক লাইনে ৫টি বাটন) */}
+                <div className="space-y-1 pt-0.5">
+                  <div className="grid grid-cols-5 gap-1.5">
+                    {[20, 30, 50, 100, 200].map((amt) => (
+                      <button
+                        key={amt}
+                        type="button"
+                        onClick={() => {
+                          setDonationAmount(String(amt));
+                          if (errorMsg) setErrorMsg('');
+                        }}
+                        className={`py-1.5 text-xs font-black rounded-xl border transition active:scale-95 cursor-pointer font-mono ${
+                          donationAmount === String(amt)
+                            ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-xs'
+                            : 'bg-white/10 hover:bg-emerald-500/30 text-white border-white/15 hover:border-emerald-300'
+                        }`}
+                      >
+                        ৳{amt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* নীল দাগ এলাকা: বাম পাশে পরিচয় গোপন + ডান পাশে পিন এবং নিচে নিশ্চিতকরণ */}
+              <div className="bg-black/30 border border-white/10 rounded-2.5xl p-3 space-y-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {/* বাম পাশে: পরিচয় গোপন রেখে দান */}
+                  <label className="flex items-center gap-2.5 bg-black/40 border border-white/15 hover:border-emerald-400/40 rounded-xl px-3 py-2 cursor-pointer transition select-none">
+                    <input 
+                      type="checkbox"
+                      checked={isAnonymous}
+                      onChange={(e) => setIsAnonymous(e.target.checked)}
+                      className="w-4 h-4 accent-amber-400 rounded cursor-pointer shrink-0"
+                    />
+                    <div className="min-w-0 text-left">
+                      <span className="text-[10.5px] font-black text-white block leading-tight">
+                        পরিচয় গোপন রাখুন
+                      </span>
+                      <span className="text-[8.5px] text-emerald-200/80 block leading-tight mt-0.5">
+                        খতিয়ানে 'গোপন দাতা' দেখাবে
+                      </span>
+                    </div>
+                  </label>
+
+                  {/* ডান পাশে: পিন দিতে হবে */}
+                  <div className="space-y-1">
+                    <div className="flex items-center bg-black/40 border border-white/15 focus-within:border-amber-400 rounded-xl px-3 py-1.5 transition">
+                      <div className="min-w-0 flex-1 text-left">
+                        <span className="text-[8.5px] text-emerald-200/80 font-bold block leading-tight">
+                          সিকিউরিটি পিন:
+                        </span>
+                        <input 
+                          type="password"
+                          maxLength={6}
+                          value={securityPin}
+                          onChange={(e) => {
+                            setSecurityPin(e.target.value);
+                            if (errorMsg) setErrorMsg('');
+                          }}
+                          placeholder="••••"
+                          className="w-full bg-transparent text-white font-mono text-left tracking-widest text-sm focus:outline-none placeholder:text-white/30 pt-0.5"
+                        />
+                      </div>
+                      <span className="text-[10px] text-amber-300 shrink-0 font-bold ml-1">
+                        🔒 পিন
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Error message inside box if any */}
+                {errorMsg && (
+                  <div className="bg-rose-500/25 border border-rose-400 text-rose-100 p-2.5 rounded-xl text-[11px] font-bold flex items-center gap-2 text-left">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-300" />
+                    <span>{errorMsg}</span>
+                  </div>
+                )}
+
+                {/* নিশ্চিতকরণ বাটন: টিপ দিলে নিশ্চিত হয়ে দান সম্পন্ন হয়ে যাবে এবং নীল ব্যালেন্সে যোগ হবে */}
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={(e) => {
+                    setDonationPurpose('general_charity');
+                    handleDonateSubmit(e);
+                  }}
+                  className="w-full py-2.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs sm:text-sm rounded-xl shadow-md hover:brightness-105 transition active:scale-98 flex items-center justify-center gap-2 cursor-pointer border border-amber-300 disabled:opacity-50"
+                >
+                  <HandHeart className="w-4 h-4 fill-slate-950 shrink-0" />
+                  <span>
+                    {loading ? 'প্রসেসিং হচ্ছে...' : 'নিঃস্বদের জন্য সাধারণ দান নিশ্চিত করুন ➔'}
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ==================== TAB 1: DONATE FORM (Compact Sleek Single Purpose Form) ==================== */}
         {activeTab === 'donate' && (
           <div className="space-y-3 max-w-lg mx-auto animate-fade-in text-center font-sans">
@@ -2787,9 +3679,29 @@ BNB Business Co-operative Welfare Fund
                     করযে হাসানার বিশেষ ফজিলত ও সওয়াব
                   </h3>
                 </div>
-                <span className="text-xs sm:text-sm font-black uppercase bg-amber-400 text-emerald-950 px-2.5 py-1 rounded-full shadow-xs leading-none">
-                  ১৮ গুণ সওয়াব
-                </span>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQardAutoDonationEnabled(user.qardAutoDonationConfig?.enabled || false);
+                      setQardAutoDonationFrequency(user.qardAutoDonationConfig?.frequency || 'monthly');
+                      setQardAutoDonationAmount(user.qardAutoDonationConfig?.amount || 0);
+                      setQardAutoDonationDay(user.qardAutoDonationConfig?.dayOfMonth || 1);
+                      if (user.qardAutoDonationConfig?.monthAmounts) {
+                        setQardAutoDonationMonthAmounts(user.qardAutoDonationConfig.monthAmounts);
+                      }
+                      setQardAutoDonationAnonymous(user.qardAutoDonationConfig?.isAnonymous ?? false);
+                      setShowQardAutoDonationModal(true);
+                    }}
+                    className="px-5 py-3 rounded-2xl font-black text-sm sm:text-base shadow-xl flex items-center gap-2 bg-amber-400 text-slate-950 border-2 border-white/20 transition active:scale-95 cursor-pointer whitespace-nowrap animate-pulse-slow"
+                    title="স্বয়ংক্রিয় বা অটো করযে হাসানা দান নির্ধারণ করুন"
+                  >
+                    <RefreshCw className={`w-5 h-5 ${user.qardAutoDonationConfig?.enabled ? 'animate-spin' : ''}`} style={{ animationDuration: '4s' }} />
+                    <span>
+                      {user.qardAutoDonationConfig?.enabled ? '(অটো দান: সচল)' : '(অটো দান)'}
+                    </span>
+                  </button>
+                </div>
               </div>
 
               {/* Hadith 1 */}
@@ -2821,14 +3733,16 @@ BNB Business Co-operative Welfare Fund
 
             <form onSubmit={handleDonateSubmit} className="space-y-2.5 font-sans">
               
-              {/* Single Purpose Card: কর্জে হাসানা */}
+              {/* Single Purpose Card: কর্জে হাসানা / সাধারণ দান */}
               <div className="bg-white border border-slate-200/90 p-2.5 sm:p-3 rounded-xl space-y-1.5 shadow-2xs text-left">
                 <div className="flex items-center justify-between pb-1.5 border-b border-slate-100">
                   <div className="flex items-center gap-1.5">
                     <span className="p-1 bg-rose-50 rounded-md text-rose-700 shrink-0">
-                      <HeartHandshake className="w-3.5 h-3.5" />
+                      {donationPurpose === 'general_charity' ? <HandHeart className="w-3.5 h-3.5" /> : <HeartHandshake className="w-3.5 h-3.5" />}
                     </span>
-                    <span className="text-[10.5px] font-black text-slate-800">১. খাতের নামঃ কর্জে হাসানা</span>
+                    <span className="text-[10.5px] font-black text-slate-800">
+                      ১. খাতের নামঃ {donationPurpose === 'general_charity' ? 'সাধারণ দান ও সাদাকাহ' : 'কর্জে হাসানা'}
+                    </span>
                   </div>
                   <span className="text-[8px] font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
                     ✓ খাত নির্ধারিত
@@ -2836,10 +3750,18 @@ BNB Business Co-operative Welfare Fund
                 </div>
 
                 <div className="flex items-center gap-2 p-2 bg-gradient-to-r from-rose-50/70 to-emerald-50/70 border border-rose-200/80 rounded-lg">
-                  <span className="text-sm p-1.5 bg-white border border-rose-200 rounded-md shrink-0 shadow-2xs">🤝</span>
+                  <span className="text-sm p-1.5 bg-white border border-rose-200 rounded-md shrink-0 shadow-2xs">
+                    {donationPurpose === 'general_charity' ? '🕊️' : '🤝'}
+                  </span>
                   <div className="text-left min-w-0">
-                    <span className="text-xs font-black text-slate-850 block leading-tight">কর্জে হাসানা কল্যাণ ফান্ড</span>
-                    <span className="text-[8.5px] block text-slate-500 font-bold leading-tight mt-0.5">অসহায় ও অভাবগ্রস্তদের সুদমুক্ত আর্থিক ঋণ সহায়তা দেওয়ার উদ্দেশ্যে তৈরি বিশেষ ফান্ড।</span>
+                    <span className="text-xs font-black text-slate-850 block leading-tight">
+                      {donationPurpose === 'general_charity' ? 'সাধারণ দান ও লিল্লা সাদাকাহ তহবিল' : 'কর্জে হাসানা কল্যাণ ফান্ড'}
+                    </span>
+                    <span className="text-[8.5px] block text-slate-500 font-bold leading-tight mt-0.5">
+                      {donationPurpose === 'general_charity'
+                        ? 'নিঃস্ব ও অসহায় মানুষদের মাঝে প্রতি মাসে সরাসরি দান বিতরণ করার জন্য বিশেষ ফান্ড।'
+                        : 'অসহায় ও অভাবগ্রস্তদের সুদমুক্ত আর্থিক ঋণ সহায়তা দেওয়ার উদ্দেশ্যে তৈরি বিশেষ ফান্ড।'}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -2851,7 +3773,9 @@ BNB Business Co-operative Welfare Fund
                     <span className="p-1 bg-rose-50 rounded-md text-rose-700 shrink-0">
                       <Coins className="w-3.5 h-3.5" />
                     </span>
-                    <span className="text-[10.5px] font-black text-slate-800">২. কর্জে হাসানাতে দান করুন (টাকা):</span>
+                    <span className="text-[10.5px] font-black text-slate-800">
+                      {donationPurpose === 'general_charity' ? '২. সাধারণ দান ও সাদাকাহ করুন (টাকা):' : '২. কর্জে হাসানাতে দান করুন (টাকা):'}
+                    </span>
                   </div>
                   <span className="text-[8.5px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-md">
                     ন্যূনতম 5 ৳
@@ -2960,7 +3884,7 @@ BNB Business Co-operative Welfare Fund
                   disabled={loading}
                   className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-black text-xs rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
                 >
-                  {loading ? 'প্রসেসিং হচ্ছে...' : 'কর্জযে হাসানাতে দান সম্পন্ন করুন'}
+                  {loading ? 'প্রসেসিং হচ্ছে...' : (donationPurpose === 'general_charity' ? 'সাধারণ দান ও সাদাকাহ সম্পন্ন করুন' : 'কর্জযে হাসানাতে দান সম্পন্ন করুন')}
                   <Heart className="w-4 h-4 fill-current animate-pulse text-white" />
                 </button>
               </div>
@@ -4637,156 +5561,186 @@ BNB Business Co-operative Welfare Fund
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[11000] bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto font-sans text-slate-800"
-            onClick={() => setShowPayForMemberModal(false)}
+            className="fixed inset-0 z-[11000] bg-slate-900 flex flex-col w-full h-full min-h-screen overflow-hidden font-sans text-slate-800"
           >
             <motion.div
-              initial={{ scale: 0.95, opacity: 0, y: 15 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 15 }}
-              onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl border border-slate-200 flex flex-col text-left"
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="bg-white w-full h-full flex flex-col overflow-hidden"
             >
-              {/* Modal Header */}
-              <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 text-white p-4 flex items-center justify-between shrink-0 shadow-xs">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-2xl bg-white/20 flex items-center justify-center text-white shrink-0">
-                    <Coins className="w-5 h-5 text-amber-300" />
-                  </div>
+              {/* Notification Clear Space (Top margin) */}
+              <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+
+              {/* Full-Screen Top Navigation Bar */}
+              <div className="bg-gradient-to-r from-emerald-700 via-teal-700 to-emerald-800 text-white px-4 py-4 flex items-center justify-between shrink-0 shadow-md">
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowPayForMemberModal(false)}
+                    className="w-10 h-10 rounded-2xl bg-white/20 hover:bg-white/30 active:scale-90 flex items-center justify-center transition cursor-pointer"
+                  >
+                    <ChevronLeft className="w-6 h-6 text-white" />
+                  </button>
                   <div>
-                    <h3 className="text-sm font-black text-white">অন্য সদস্যের কিস্তি পরিশোধ করুন</h3>
-                    <p className="text-[10.5px] text-emerald-100 font-semibold">আপনার ওয়ালেট থেকে কিস্তি কেটে নেওয়া হবে</p>
+                    <h3 className="text-lg font-black text-white">কিস্তি পরিশোধ</h3>
+                    <p className="text-[11px] text-emerald-100 font-semibold">অন্য সদস্যের করযে হাসানা কিস্তি পরিশোধ করুন</p>
                   </div>
                 </div>
+                <div className="w-11 h-11 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center shadow-lg">
+                  <Coins className="w-6 h-6" />
+                </div>
+              </div>
+
+              {/* Scrollable Body Content */}
+              <div className="flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 space-y-6">
+                {/* Target Member Details Card */}
+                <div className="bg-white border-2 border-emerald-100 rounded-3xl p-5 flex flex-col gap-4 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className="w-14 h-14 rounded-2xl bg-emerald-50 border-2 border-emerald-500 text-emerald-600 flex items-center justify-center text-2xl shrink-0">
+                        👤
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-emerald-800 font-extrabold uppercase block tracking-wider">ঋণ গ্রহীতা সদস্যঃ</span>
+                        <h4 className="text-base font-black text-slate-800">{selectedTargetUser.name || selectedTargetUser.userName || 'সম্মানিত সদস্য'}</h4>
+                        <p className="text-xs text-slate-500 font-mono font-bold mt-0.5">ফোনঃ {selectedTargetUser.phone || selectedTargetUser.userPhone || 'N/A'}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[10px] text-rose-700 font-black uppercase block tracking-wider">বকেয়া ঋণঃ</span>
+                      <strong className="text-xl font-mono font-black text-rose-700">
+                        ৳{(selectedTargetUser.dueAmount !== undefined ? selectedTargetUser.dueAmount : (selectedTargetUser.rawDueAmount !== undefined ? selectedTargetUser.rawDueAmount : selectedTargetUser.dueLoan || 0)).toLocaleString('en-US')}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200 flex items-center justify-between text-sm font-bold text-slate-700">
+                    <span>আপনার বর্তমান ব্যালেন্স:</span>
+                    <span className="text-emerald-700 font-mono font-black text-lg">৳{(user.balance || 0).toLocaleString('en-US')}</span>
+                  </div>
+                </div>
+
+                {/* Modal Form */}
+                <div className="bg-white border border-emerald-100 rounded-3xl p-5 space-y-5 shadow-sm">
+                  {payMemberError && (
+                    <div className="p-4 bg-rose-50 border-2 border-rose-200 rounded-2xl text-sm font-bold text-rose-800 flex items-start gap-3">
+                      <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                      <span>{payMemberError}</span>
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    <label className="text-[13px] font-black text-emerald-800 uppercase tracking-widest flex items-center gap-2">
+                      পরিশোধের পরিমাণ নির্বাচন করুন
+                    </label>
+                    
+                    {(() => {
+                      const due = selectedTargetUser.dueAmount !== undefined ? selectedTargetUser.dueAmount : (selectedTargetUser.rawDueAmount !== undefined ? selectedTargetUser.rawDueAmount : selectedTargetUser.dueLoan || 0);
+                      const instAmt = Math.min(due, Math.ceil(due / 3));
+                      return (
+                        <div className="grid grid-cols-2 gap-3">
+                          <button
+                            type="button"
+                            onClick={() => setPayMemberAmountInput(String(instAmt))}
+                            className={`py-4 px-3 rounded-2xl border-2 text-xs font-black transition cursor-pointer flex flex-col items-center gap-1 ${
+                              payMemberAmountInput === String(instAmt)
+                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-lg scale-[1.02]'
+                                : 'bg-slate-50 text-slate-700 border-slate-100 hover:border-emerald-200'
+                            }`}
+                          >
+                            <span>১ কিস্তি</span>
+                            <span className="font-mono text-[10px] opacity-80">৳{instAmt.toLocaleString('en-US')}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPayMemberAmountInput(String(due))}
+                            className={`py-4 px-3 rounded-2xl border-2 text-xs font-black transition cursor-pointer flex flex-col items-center gap-1 ${
+                              payMemberAmountInput === String(due)
+                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-lg scale-[1.02]'
+                                : 'bg-slate-50 text-slate-700 border-slate-100 hover:border-emerald-200'
+                            }`}
+                          >
+                            <span>সম্পূর্ণ ঋণ</span>
+                            <span className="font-mono text-[10px] opacity-80">৳{due.toLocaleString('en-US')}</span>
+                          </button>
+                        </div>
+                      );
+                    })()}
+
+                    <div className="flex items-center bg-slate-50 border-2 border-slate-100 focus-within:border-emerald-500 focus-within:bg-white rounded-2.5xl px-4 py-3.5 transition mt-2">
+                      <span className="text-emerald-600 font-black text-xl mr-2">৳</span>
+                      <input
+                        type="number"
+                        value={payMemberAmountInput}
+                        onChange={(e) => setPayMemberAmountInput(e.target.value)}
+                        className="w-full bg-transparent text-slate-900 font-mono font-black text-2xl focus:outline-none"
+                        placeholder="টাকার পরিমাণ"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <label className="text-[13px] font-black text-emerald-800 uppercase tracking-widest flex items-center gap-2">
+                      আপনার সিকিউরিটি পিন দিন
+                    </label>
+                    <div className="flex items-center bg-slate-50 border-2 border-slate-100 focus-within:border-emerald-500 focus-within:bg-white rounded-2.5xl px-4 py-3.5 transition">
+                      <Lock className="w-5 h-5 text-slate-400 mr-3" />
+                      <input
+                        type="password"
+                        maxLength={4}
+                        value={payMemberPinInput}
+                        onChange={(e) => setPayMemberPinInput(e.target.value)}
+                        className="w-full bg-transparent text-slate-900 font-mono font-black text-2xl tracking-[0.5em] focus:outline-none placeholder:tracking-normal placeholder:text-slate-300"
+                        placeholder="••••"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Reminder Note */}
+                <div className="bg-amber-50 border border-amber-200 rounded-3xl p-5 flex items-start gap-4">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center shrink-0">
+                    <ShieldCheck className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <strong className="text-amber-900 font-black text-sm block mb-1">সতর্কতা ও নিরাপত্তা:</strong>
+                    <p className="text-[11px] text-amber-800/80 leading-relaxed font-semibold">
+                      নিশ্চিত করুন যে আপনি সঠিক সদস্যের কিস্তি পরিশোধ করছেন। একবার পেমেন্ট হয়ে গেলে তা আর ফেরতযোগ্য নয়। আপনার পিন কোড কাউকে শেয়ার করবেন না।
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer Controls */}
+              <div className="bg-white border-t border-slate-100 p-4 sm:p-6 flex items-center gap-3 shrink-0 shadow-[0_-4px_20px_rgba(0,0,0,0.03)]">
                 <button
                   type="button"
                   onClick={() => setShowPayForMemberModal(false)}
-                  className="w-7 h-7 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center text-xs font-bold transition cursor-pointer"
+                  className="flex-1 px-6 py-4 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-600 font-black text-sm rounded-2xl transition cursor-pointer"
                 >
-                  ✕
+                  বাতিল করুন
                 </button>
-              </div>
-
-              {/* Target Member Details Card */}
-              <div className="p-4 bg-emerald-50/80 border-b border-emerald-100 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <span className="text-[9px] text-emerald-800 font-extrabold uppercase block">ঋণ গ্রহীতা সদস্যঃ</span>
-                    <h4 className="text-xs font-black text-slate-900">{selectedTargetUser.name || selectedTargetUser.userName || 'সম্মানিত সদস্য'}</h4>
-                    <p className="text-[10px] text-slate-500 font-mono font-bold mt-0.5">ফোনঃ {selectedTargetUser.phone || selectedTargetUser.userPhone || 'N/A'}</p>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[9px] text-rose-700 font-black uppercase block">বকেয়া ঋণঃ</span>
-                    <strong className="text-sm font-mono font-black text-rose-700">
-                      ৳{(selectedTargetUser.dueAmount !== undefined ? selectedTargetUser.dueAmount : (selectedTargetUser.rawDueAmount !== undefined ? selectedTargetUser.rawDueAmount : selectedTargetUser.dueLoan || 0)).toLocaleString('en-US')} BDT
-                    </strong>
-                  </div>
-                </div>
-
-                <div className="p-2 bg-white rounded-xl border border-emerald-200 flex items-center justify-between text-[11px] font-bold text-slate-700">
-                  <span>আপনার ওয়ালেট ব্যালেন্স:</span>
-                  <span className="text-emerald-700 font-mono font-black">৳{(user.balance || 0).toLocaleString('en-US')} BDT</span>
-                </div>
-              </div>
-
-              {/* Modal Form */}
-              <form onSubmit={handlePayForMemberSubmit} className="p-4 sm:p-5 space-y-4">
-                {payMemberError && (
-                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-800 flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                    <span>{payMemberError}</span>
-                  </div>
-                )}
-
-                {/* Amount selection */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-black text-slate-800">
-                    পরিশোধের পরিমাণ লিখুন (৳):
-                  </label>
-
-                  {/* Quick Amount Buttons */}
-                  {(() => {
-                    const due = selectedTargetUser.dueAmount !== undefined ? selectedTargetUser.dueAmount : (selectedTargetUser.rawDueAmount !== undefined ? selectedTargetUser.rawDueAmount : selectedTargetUser.dueLoan || 0);
-                    const instAmt = Math.min(due, Math.ceil(due / 3));
-                    return (
-                      <div className="grid grid-cols-2 gap-2 mb-2">
-                        <button
-                          type="button"
-                          onClick={() => setPayMemberAmountInput(String(instAmt))}
-                          className={`py-2 px-3 rounded-xl border text-[11px] font-bold transition cursor-pointer ${
-                            payMemberAmountInput === String(instAmt)
-                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                              : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                          }`}
-                        >
-                          ১ কিস্তি (৳{instAmt.toLocaleString('en-US')})
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPayMemberAmountInput(String(due))}
-                          className={`py-2 px-3 rounded-xl border text-[11px] font-bold transition cursor-pointer ${
-                            payMemberAmountInput === String(due)
-                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                              : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                          }`}
-                        >
-                          সম্পূর্ণ ঋণ (৳{due.toLocaleString('en-US')})
-                        </button>
-                      </div>
-                    );
-                  })()}
-
-                  <div className="relative">
-                    <span className="absolute left-3.5 top-2.5 text-slate-400 font-bold text-xs">৳</span>
-                    <input
-                      type="number"
-                      value={payMemberAmountInput}
-                      onChange={(e) => setPayMemberAmountInput(e.target.value)}
-                      placeholder="টাকার পরিমাণ লিখুন"
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-4 py-2.5 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:border-emerald-500 focus:bg-white"
-                      required
-                    />
-                  </div>
-                </div>
-
-                {/* 4-Digit Security PIN Input */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-black text-slate-800">
-                    আপনার ৪ সংখ্যার সিকিউরিটি পিন কোড দিন:
-                  </label>
-                  <div className="relative">
-                    <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-                    <input
-                      type="password"
-                      maxLength={4}
-                      value={payMemberPinInput}
-                      onChange={(e) => setPayMemberPinInput(e.target.value)}
-                      placeholder="৪ সংখ্যার পিন কোড লিখুন"
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-xs font-mono font-bold tracking-widest text-slate-900 focus:outline-none focus:border-emerald-500 focus:bg-white"
-                      required
-                    />
-                  </div>
-                </div>
-
-                {/* Action Button */}
                 <button
-                  type="submit"
+                  type="button"
                   disabled={payMemberLoading}
-                  className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-95 text-white font-black text-xs rounded-2xl transition cursor-pointer shadow-md flex items-center justify-center gap-2"
+                  onClick={handlePayForMemberSubmit}
+                  className="flex-[2] px-8 py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-95 text-white font-black text-sm rounded-2xl transition cursor-pointer shadow-lg flex items-center justify-center gap-2 disabled:opacity-50"
                 >
                   {payMemberLoading ? (
                     <>
-                      <RefreshCw className="w-4 h-4 animate-spin text-white" />
-                      <span>পরিশোধ হচ্ছে...</span>
+                      <RefreshCw className="w-5 h-5 animate-spin" />
+                      <span>প্রসেসিং হচ্ছে...</span>
                     </>
                   ) : (
                     <>
-                      <Coins className="w-4 h-4 text-white" />
-                      <span>ওয়ালেট থেকে ৳{(parseFloat(payMemberAmountInput) || 0).toLocaleString('en-US')} কিস্তি পরিশোধ নিশ্চিত করুন</span>
+                      <Check className="w-5 h-5 text-white stroke-[3]" />
+                      <span>পরিশোধ নিশ্চিত করুন</span>
                     </>
                   )}
                 </button>
-              </form>
+              </div>
             </motion.div>
           </motion.div>
         )}
@@ -4910,59 +5864,62 @@ BNB Business Co-operative Welfare Fund
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[10000] bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 font-sans text-slate-800"
+            className="fixed inset-0 z-[10000] bg-slate-900 flex flex-col w-full h-full min-h-screen overflow-hidden font-sans text-slate-800"
           >
             <motion.div 
               initial={{ y: "100%" }}
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
               transition={{ type: 'spring', damping: 25, stiffness: 220 }}
-              className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col max-h-[85vh] sm:max-h-[80vh] overflow-hidden"
+              className="bg-white w-full h-full flex flex-col overflow-hidden"
             >
+              {/* Notification Clear Space (Top margin) */}
+              <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+
               {/* Header */}
-              <div className="bg-gradient-to-r from-rose-700 to-pink-850 text-white px-5 py-4 flex items-center justify-between shadow-sm">
-                <div className="flex items-center gap-2">
-                  <ClipboardList className="w-5 h-5 text-pink-100" />
+              <div className="bg-gradient-to-r from-emerald-700 via-teal-700 to-emerald-800 text-white px-5 py-4 flex items-center justify-between shadow-md shrink-0">
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowSectionTxHistory(false)}
+                    className="w-10 h-10 rounded-2xl bg-white/20 hover:bg-white/30 active:scale-90 flex items-center justify-center transition cursor-pointer"
+                  >
+                    <ChevronLeft className="w-6 h-6 text-white" />
+                  </button>
                   <div>
-                    <h3 className="text-sm font-black text-white">করযে হাসানা লেনদেন সমূহ</h3>
-                    <p className="text-[10px] text-pink-100 font-medium">আপনার অনুদান ও সুদমুক্ত ঋণ সংক্রান্ত সকল লেনদেন বিবরণী</p>
+                    <h3 className="text-lg font-black text-white">লেনদেন খতিয়ান</h3>
+                    <p className="text-[11px] text-emerald-100 font-semibold">আপনার অনুদান ও সুদমুক্ত ঋণ লেনদেন বিবরণী</p>
                   </div>
                 </div>
-                <button 
-                  onClick={() => {
-                    setShowSectionTxHistory(false);
-                    setTxModalSearch('');
-                  }}
-                  className="p-1.5 hover:bg-white/10 rounded-xl transition text-white/90 active:scale-90"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+                <div className="w-11 h-11 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center shadow-lg">
+                  <ClipboardList className="w-6 h-6" />
+                </div>
               </div>
 
               {/* Search Bar */}
-              <div className="p-4 border-b border-slate-100 bg-slate-50/50">
+              <div className="p-4 border-b border-slate-100 bg-slate-50 shrink-0">
                 <div className="relative">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                  <Search className="w-5 h-5 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
                   <input 
                     type="text"
                     value={txModalSearch}
                     onChange={(e) => setTxModalSearch(e.target.value)}
                     placeholder="পরিমাণ, বিবরণ বা আইডি দিয়ে খুঁজুন..."
-                    className="w-full bg-white border border-slate-200 pl-10 pr-4 py-2 rounded-2xl text-xs font-medium focus:outline-none focus:border-rose-600 focus:ring-1 focus:ring-rose-600"
+                    className="w-full bg-white border-2 border-slate-100 pl-11 pr-10 py-3 rounded-2xl text-sm font-bold focus:outline-none focus:border-emerald-500 shadow-sm"
                   />
                   {txModalSearch && (
                     <button 
                       onClick={() => setTxModalSearch('')}
-                      className="text-[10px] font-black text-slate-400 hover:text-slate-600 absolute right-3.5 top-2.5"
+                      className="absolute right-3.5 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-full transition cursor-pointer"
                     >
-                      মুছুন
+                      ✕
                     </button>
                   )}
                 </div>
               </div>
 
-              {/* Content */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {/* Transaction List */}
+              <div className="flex-1 overflow-y-auto bg-white">
                 {(() => {
                   const filteredTxs = qardHistory.filter(tx => {
                     const isUserTx = tx.userId === user.uid;
@@ -4974,104 +5931,523 @@ BNB Business Co-operative Welfare Fund
                       tx.description?.toLowerCase().includes(searchLower) ||
                       tx.typeLabel?.toLowerCase().includes(searchLower) ||
                       tx.amount.toString().includes(searchLower) ||
-                      tx.id.toLowerCase().includes(searchLower) ||
-                      tx.receiptNo?.toLowerCase().includes(searchLower)
+                      (tx.id && tx.id.toLowerCase().includes(searchLower)) ||
+                      (tx.receiptNo && tx.receiptNo.toLowerCase().includes(searchLower))
                     );
                   });
 
                   if (filteredTxs.length === 0) {
                     return (
-                      <div className="text-center py-10 text-slate-400 text-xs font-bold">
-                        আপনার করযে হাসানা তহবিল লেনদেন রেকর্ড পাওয়া যায়নি।
+                      <div className="flex flex-col items-center justify-center py-20 px-6 text-center space-y-4">
+                        <div className="w-20 h-20 rounded-full bg-slate-50 flex items-center justify-center text-4xl grayscale opacity-50">
+                          📂
+                        </div>
+                        <div>
+                          <p className="text-base font-black text-slate-400">কোনো লেনদেন পাওয়া যায়নি</p>
+                          <p className="text-xs text-slate-400 mt-1">আপনার করা সকল অনুদান ও ঋণ পরিশোধের তালিকা এখানে থাকবে</p>
+                        </div>
                       </div>
                     );
                   }
 
-                  return filteredTxs.map((tx, idx) => {
-                    const isDonation = tx.type === 'qard_donation';
-                    return (
-                      <div key={`${tx.id}-${idx}`} className="p-3 bg-white border border-slate-150 rounded-2xl shadow-3xs flex justify-between items-start gap-3">
-                        <div className="space-y-1">
-                          <span className="text-xs font-black text-slate-800 block">{tx.typeLabel || 'করযে হাসানা দান'}</span>
-                          <span className="text-[10px] text-slate-400 block font-medium">
-                            {new Date(tx.createdAt).toLocaleDateString('bn-BD')} {new Date(tx.createdAt).toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                          <p className="text-[10.5px] text-slate-600 font-bold leading-normal">{tx.description}</p>
-                          {tx.receiptNo && (
-                            <span className="inline-block text-[9px] bg-slate-100 text-slate-500 font-mono px-2 py-0.5 rounded-md">
-                              Receipt: {tx.receiptNo}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-right shrink-0 space-y-1">
-                          <span className={`text-xs font-black font-mono block ${isDonation ? 'text-rose-600' : 'text-emerald-600'}`}>
-                            {isDonation ? '-' : '+'} ৳{tx.amount.toLocaleString('en-US')}
-                          </span>
-                          <span className={`inline-block text-[8.5px] font-extrabold px-1.5 py-0.2 rounded-md uppercase block ${
-                            tx.status === 'success' || tx.status === 'approved' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
-                            tx.status === 'pending' ? 'bg-amber-50 text-amber-700 border border-amber-100' : 'bg-rose-50 text-rose-700 border border-rose-100'
-                          }`}>
-                            {tx.status === 'success' || tx.status === 'approved' ? 'সফল' : tx.status === 'pending' ? 'অপেক্ষমাণ' : 'ব্যর্থ'}
-                          </span>
-                          <button
+                  return (
+                    <div className="p-4 space-y-3">
+                      {filteredTxs.map((tx, idx) => {
+                        const isDonation = tx.type?.includes('donation') || tx.type === 'general_charity';
+                        const isSuccess = tx.status === 'success' || tx.status === 'approved' || tx.status === 'completed';
+                        return (
+                          <div 
+                            key={`${tx.id}-${idx}`}
                             onClick={() => showReceiptForTx(tx)}
-                            className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 text-[8.5px] font-sans font-extrabold rounded-md shadow-3xs cursor-pointer block mt-1 ml-auto"
+                            className="bg-white border-2 border-slate-50 hover:border-emerald-100 p-4 rounded-2.5xl transition cursor-pointer group shadow-sm flex items-center justify-between gap-4"
                           >
-                            ডিজিটাল রসিদ
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  });
+                            <div className="flex items-center gap-4 min-w-0">
+                              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-xl shrink-0 transition group-hover:scale-110 ${
+                                isDonation 
+                                  ? 'bg-emerald-50 text-emerald-600' 
+                                  : tx.type?.includes('repayment') 
+                                    ? 'bg-amber-50 text-amber-600' 
+                                    : 'bg-blue-50 text-blue-600'
+                              }`}>
+                                {isDonation ? '💝' : tx.type?.includes('repayment') ? '💸' : '📄'}
+                              </div>
+                              <div className="min-w-0">
+                                <h4 className="text-sm font-black text-slate-800 truncate">{tx.typeLabel || 'করযে হাসানা লেনদেন'}</h4>
+                                <p className="text-[10px] text-slate-400 font-bold mt-0.5">{new Date(tx.createdAt).toLocaleString('bn-BD')}</p>
+                                <p className="text-[11px] text-slate-500 font-medium truncate mt-1">{tx.description || (tx as any).note}</p>
+                              </div>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <span className={`text-base font-black font-mono block ${isDonation ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                {isDonation ? '-' : '+'} ৳{tx.amount.toLocaleString('en-US')}
+                              </span>
+                              <span className={`inline-block text-[9px] font-extrabold px-2 py-0.5 rounded-full uppercase mt-1 ${
+                                isSuccess ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
+                                tx.status === 'pending' ? 'bg-amber-50 text-amber-700 border border-amber-100' : 'bg-rose-50 text-rose-700 border border-rose-100'
+                              }`}>
+                                {isSuccess ? 'সফল' : tx.status === 'pending' ? 'অপেক্ষমাণ' : 'ব্যর্থ'}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
                 })()}
               </div>
 
               {/* Footer */}
-              <div className="p-4 bg-slate-50 border-t border-slate-100 text-center">
-                <span className="text-[10px] text-slate-400 font-bold">© BUSINESS NETWORK BANGLADESH (BNB)</span>
+              <div className="p-4 sm:p-6 bg-white border-t border-slate-100 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowSectionTxHistory(false)}
+                  className="w-full py-4 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-600 font-black text-sm rounded-2xl transition cursor-pointer"
+                >
+                  বন্ধ করুন
+                </button>
               </div>
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
 
+      {/* ==================== FUND, DONORS, DISBURSEMENT & DISTRICT AID MODAL ==================== */}
+      <AnimatePresence>
+        {showFundAnalyticsModal && (() => {
+          // 64 Bangladesh districts live transactions aggregation (Strictly for General Charity, Zero fake data)
+          const all64Districts: Array<{ name: string; division: string }> = [
+            { name: 'ঢাকা', division: 'ঢাকা' },
+            { name: 'চট্টগ্রাম', division: 'চট্টগ্রাম' },
+            { name: 'বগুড়া', division: 'রাজশাহী' },
+            { name: 'সিলেট', division: 'সিলেট' },
+            { name: 'কুমিল্লা', division: 'চট্টগ্রাম' },
+            { name: 'রাজশাহী', division: 'রাজশাহী' },
+            { name: 'ময়মনসিংহ', division: 'ময়মনসিংহ' },
+            { name: 'রংপুর', division: 'রংপুর' },
+            { name: 'খুলনা', division: 'খুলনা' },
+            { name: 'বরিশাল', division: 'বরিশাল' },
+            { name: 'গাজীপুর', division: 'ঢাকা' },
+            { name: 'নারায়ণগঞ্জ', division: 'ঢাকা' },
+            { name: 'ফরিদপুর', division: 'ঢাকা' },
+            { name: 'টাঙ্গাইল', division: 'ঢাকা' },
+            { name: 'যশোর', division: 'খুলনা' },
+            { name: 'পাবনা', division: 'রাজশাহী' },
+            { name: 'দিনাজপুর', division: 'রংপুর' },
+            { name: 'ব্রাহ্মণবাড়িয়া', division: 'চট্টগ্রাম' },
+            { name: 'নোয়াখালী', division: 'চট্টগ্রাম' },
+            { name: 'কক্সবাজার', division: 'চট্টগ্রাম' },
+            { name: 'কুষ্টিয়া', division: 'খুলনা' },
+            { name: 'কিশোরগঞ্জ', division: 'ঢাকা' },
+            { name: 'জামালপুর', division: 'ময়মনসিংহ' },
+            { name: 'পটুয়াখালী', division: 'বরিশাল' },
+            { name: 'সাতক্ষীরা', division: 'খুলনা' },
+            { name: 'হবিগঞ্জ', division: 'সিলেট' },
+            { name: 'মৌলভীবাজার', division: 'সিলেট' },
+            { name: 'সুনামগঞ্জ', division: 'সিলেট' },
+            { name: 'চাঁদপুর', division: 'চট্টগ্রাম' },
+            { name: 'ফেনী', division: 'চট্টগ্রাম' },
+            { name: 'লক্ষ্মীপুর', division: 'চট্টগ্রাম' },
+            { name: 'সিরাজগঞ্জ', division: 'রাজশাহী' },
+            { name: 'নওগাঁ', division: 'রাজশাহী' },
+            { name: 'নাটোর', division: 'রাজশাহী' },
+            { name: 'গাইবান্ধা', division: 'রংপুর' },
+            { name: 'কুড়িগ্রাম', division: 'রংপুর' },
+            { name: 'নীলফামারী', division: 'রংপুর' },
+            { name: 'নেত্রকোণা', division: 'ময়মনসিংহ' },
+            { name: 'শেরপুর', division: 'ময়মনসিংহ' },
+            { name: 'ভোলা', division: 'বরিশাল' },
+            { name: 'পিরোজপুর', division: 'বরিশাল' },
+            { name: 'বরগুনা', division: 'বরিশাল' },
+            { name: 'ঝালকাঠি', division: 'বরিশাল' },
+            { name: 'ঝিনাইদহ', division: 'খুলনা' },
+            { name: 'বাগেরহাট', division: 'খুলনা' },
+            { name: 'চুয়াডাঙ্গা', division: 'খুলনা' },
+            { name: 'মেহেরপুর', division: 'খুলনা' },
+            { name: 'মাগুরা', division: 'খুলনা' },
+            { name: 'নড়াইল', division: 'খুলনা' },
+            { name: 'মানিকগঞ্জ', division: 'ঢাকা' },
+            { name: 'মুন্সীগঞ্জ', division: 'ঢাকা' },
+            { name: 'নরসিংদী', division: 'ঢাকা' },
+            { name: 'রাজবাড়ী', division: 'ঢাকা' },
+            { name: 'মাদারীপুর', division: 'ঢাকা' },
+            { name: 'গোপালগঞ্জ', division: 'ঢাকা' },
+            { name: 'শরীয়তপুর', division: 'ঢাকা' },
+            { name: 'চাঁপাইনবাবগঞ্জ', division: 'রাজশাহী' },
+            { name: 'জয়পুরহাট', division: 'রাজশাহী' },
+            { name: 'লালমনিরহাট', division: 'রংপুর' },
+            { name: 'ঠাকুরগাঁও', division: 'রংপুর' },
+            { name: 'পঞ্চগড়', division: 'রংপুর' },
+            { name: 'বান্দরবান', division: 'চট্টগ্রাম' },
+            { name: 'রাঙ্গামাটি', division: 'চট্টগ্রাম' },
+            { name: 'খাগড়াছড়ি', division: 'চট্টগ্রাম' },
+          ];
+
+          const distMap: Record<string, { name: string; donors: number; amount: number; division: string }> = {};
+          all64Districts.forEach(d => {
+            distMap[d.name] = { name: d.name, donors: 0, amount: 0, division: d.division };
+          });
+
+          // Strictly REAL general charity donation transactions for district calculations (Zero fake data)
+          const charityOnlyTxs = qardHistory.filter(t => 
+            (t.type === 'general_charity_donation' || t.category === 'general_charity' || t.donationPurpose === 'general_charity') && 
+            t.status === 'success'
+          );
+
+          charityOnlyTxs.forEach(t => {
+            const amt = Number(t.amount) || 0;
+            const u = usersMap[t.userId] || (t.userPhone ? usersMap[t.userPhone] : null);
+            const mDist = t.district || (u as any)?.district || (u as any)?.thana || 'ঢাকা';
+            const matchedKey = all64Districts.find(d => mDist.includes(d.name))?.name || 'ঢাকা';
+            if (distMap[matchedKey]) {
+              distMap[matchedKey].donors += 1;
+              distMap[matchedKey].amount += amt;
+            }
+          });
+
+          // All donors map (Nationwide across Bangladesh - Qard Hasana & Charity donors)
+          const allDonationTxs = qardHistory.filter(t => (t.type === 'qard_donation' || t.type === 'general_charity_donation') && t.status === 'success');
+          const dMap: Record<string, any> = {};
+
+          allDonationTxs.forEach(t => {
+            const key = t.userId || t.userPhone || t.userName || 'anonymous';
+            const amt = Number(t.amount) || 0;
+            const u = usersMap[t.userId] || (t.userPhone ? usersMap[t.userPhone] : null);
+            const mName = t.userName === 'গোপন দাতা' ? 'গোপন দাতা' : (u?.name || t.userName || 'দানশীল সদস্য');
+            const mPhone = (u as any)?.phone || t.userPhone || '';
+            const mDist = t.district || (u as any)?.district || (u as any)?.thana || 'ঢাকা';
+            const mPhoto = t.userName === 'গোপন দাতা' ? '' : (u?.photoURL || u?.photo || t.userPhoto || '');
+            const txDate = t.createdAt ? new Date(t.createdAt) : new Date();
+            const dateStr = txDate.toLocaleDateString('bn-BD', { day: 'numeric', month: 'short', year: 'numeric' });
+
+            if (!dMap[key]) {
+              dMap[key] = {
+                userId: key,
+                name: mName,
+                phone: mPhone,
+                district: mDist,
+                image: mPhoto,
+                initial: mName.charAt(0).toUpperCase(),
+                totalAmount: 0,
+                count: 0,
+                lastDate: dateStr,
+                type: t.type
+              };
+            }
+            dMap[key].totalAmount += amt;
+            dMap[key].count += 1;
+          });
+
+          const districtSorted = Object.values(distMap).sort((a, b) => b.amount - a.amount);
+          const filteredDistricts = districtSorted.filter(d => 
+            !districtSearchQuery.trim() || 
+            d.name.includes(districtSearchQuery.trim()) || 
+            d.division.includes(districtSearchQuery.trim())
+          );
+
+          const allDonorsSorted = Object.values(dMap).sort((a, b) => b.totalAmount - a.totalAmount);
+          const filteredDonors = allDonorsSorted.filter(d => 
+            !districtSearchQuery.trim() || 
+            d.name.toLowerCase().includes(districtSearchQuery.toLowerCase()) || 
+            d.district.includes(districtSearchQuery) || 
+            d.phone.includes(districtSearchQuery)
+          );
+
+          // Disbursed list: Qard loans disbursed + general charity disbursed
+          const disbursedList = qardHistory
+            .filter(t => (t.type === 'qard_loan_disbursment' || t.type === 'general_charity_disbursed' || t.category === 'charity_aid') && t.status === 'success')
+            .map(t => {
+              const u = usersMap[t.userId] || (t.userPhone ? usersMap[t.userPhone] : null);
+              const mDist = t.district || (u as any)?.district || (u as any)?.thana || 'ঢাকা';
+              const mName = u?.name || t.userName || 'উপকারভোগী সদস্য';
+              const txDate = t.createdAt ? new Date(t.createdAt) : new Date();
+              return {
+                id: t.id || t.transactionId,
+                name: mName,
+                phone: (u as any)?.phone || t.userPhone || '',
+                amount: Number(t.amount) || 0,
+                district: mDist,
+                purpose: t.type === 'general_charity_disbursed' ? 'নিঃস্ব সহায়তা ও মাসিক খাদ্য অনুদান' : 'সুদমুক্ত করজে হাসানা ঋণ',
+                date: txDate.toLocaleDateString('bn-BD', { day: 'numeric', month: 'short', year: 'numeric' })
+              };
+            });
+
+          return (
+            <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+              <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+              <motion.div
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", damping: 25, stiffness: 200 }}
+                className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden shadow-2xl"
+              >
+                {/* Header — Soothing Forest Green */}
+                <div className="bg-[#004a2c] text-white px-6 py-5 flex items-center justify-between shadow-lg shrink-0">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-2xl bg-white/10 text-emerald-300 border border-white/15 flex items-center justify-center shrink-0 shadow-lg">
+                      <Landmark className="w-7 h-7" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-black text-white leading-tight">তহবিল ও জেলা খতিয়ান</h3>
+                      <p className="text-[11px] text-emerald-100/80 font-bold uppercase tracking-wider mt-0.5">সারা বাংলাদেশ সহায়তা প্রকল্প — লাইভ হিসাব ও বিতরণ</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowFundAnalyticsModal(false)}
+                    className="w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition active:scale-90 cursor-pointer"
+                  >
+                    <X className="w-6 h-6 text-white" />
+                  </button>
+                </div>
+
+                {/* 5-Metric Strip Inside Modal */}
+                <div className="bg-slate-50 border-b border-slate-200 p-2.5 shrink-0 overflow-x-auto">
+                  <div className="flex gap-2 min-w-max">
+                    <div className="px-3 py-2 bg-white rounded-2xl border border-slate-200 shadow-sm text-center min-w-[100px]">
+                      <span className="text-[8px] font-bold text-slate-500 block uppercase tracking-wider">ব্যালেন্স</span>
+                      <span className="text-xs font-black text-slate-900 font-mono block mt-0.5">৳{(user.balance || 0).toLocaleString('bn-BD')}</span>
+                    </div>
+                    <div className="px-3 py-2 bg-red-50 rounded-2xl border border-red-100 shadow-sm text-center min-w-[100px]">
+                      <span className="text-[8px] font-bold text-red-600 block uppercase tracking-wider">কর্জ ফান্ড</span>
+                      <span className="text-xs font-black text-red-700 font-mono block mt-0.5">৳{(qardTotalFund || 0).toLocaleString('bn-BD')}</span>
+                    </div>
+                    <div className="px-3 py-2 bg-red-50 rounded-2xl border border-red-100 shadow-sm text-center min-w-[100px]">
+                      <span className="text-[8px] font-bold text-red-600 block uppercase tracking-wider">বিতরণ কর্জ</span>
+                      <span className="text-xs font-black text-red-700 font-mono block mt-0.5">৳{(qardActiveLoansAmount || 0).toLocaleString('bn-BD')}</span>
+                    </div>
+                    <div className="px-3 py-2 bg-blue-50 rounded-2xl border border-blue-100 shadow-sm text-center min-w-[100px]">
+                      <span className="text-[8px] font-bold text-blue-600 block uppercase tracking-wider">দান ফান্ড</span>
+                      <span className="text-xs font-black text-blue-700 font-mono block mt-0.5">৳{(generalCharityTotal || 0).toLocaleString('bn-BD')}</span>
+                    </div>
+                    <div className="px-3 py-2 bg-blue-50 rounded-2xl border border-blue-100 shadow-sm text-center min-w-[100px]">
+                      <span className="text-[8px] font-bold text-blue-600 block uppercase tracking-wider">বিতরণ দান</span>
+                      <span className="text-xs font-black text-blue-700 font-mono block mt-0.5">৳{(generalCharityDisbursed || 0).toLocaleString('bn-BD')}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Tab Switcher */}
+                <div className="p-3 bg-white border-b border-slate-100 flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setFundAnalyticsActiveTab('districts')}
+                    className={`flex-1 py-3 px-2 rounded-2xl text-[11px] font-black transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                      fundAnalyticsActiveTab === 'districts'
+                        ? 'bg-[#005a36] text-white shadow-lg scale-[1.02]'
+                        : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-100'
+                    }`}
+                  >
+                    <MapPin className="w-4 h-4" />
+                    <span>জেলা ভিত্তিক</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setFundAnalyticsActiveTab('donors')}
+                    className={`flex-1 py-3 px-2 rounded-2xl text-[11px] font-black transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                      fundAnalyticsActiveTab === 'donors'
+                        ? 'bg-[#005a36] text-white shadow-lg scale-[1.02]'
+                        : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-100'
+                    }`}
+                  >
+                    <Users className="w-4 h-4" />
+                    <span>কে দান করেছে</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setFundAnalyticsActiveTab('disbursed')}
+                    className={`flex-1 py-3 px-2 rounded-2xl text-[11px] font-black transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                      fundAnalyticsActiveTab === 'disbursed'
+                        ? 'bg-[#005a36] text-white shadow-lg scale-[1.02]'
+                        : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-100'
+                    }`}
+                  >
+                    <HandHeart className="w-4 h-4" />
+                    <span>বিতরণ তালিকা</span>
+                  </button>
+                </div>
+
+                {/* Search Bar */}
+                <div className="p-4 bg-slate-50 border-b border-slate-200 shrink-0">
+                  <div className="relative">
+                    <Search className="w-5 h-5 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={districtSearchQuery}
+                      onChange={(e) => setDistrictSearchQuery(e.target.value)}
+                      placeholder={
+                        fundAnalyticsActiveTab === 'districts' ? 'জেলার নাম বা বিভাগ দিয়ে খুঁজুন...' :
+                        fundAnalyticsActiveTab === 'donors' ? 'দাতার নাম, ফোন বা জেলা দিয়ে খুঁজুন...' : 'উপকারভোগী বা জেলা দিয়ে খুঁজুন...'
+                      }
+                      className="w-full pl-11 pr-4 py-3 text-sm bg-white border-2 border-slate-100 rounded-2xl focus:outline-none focus:border-emerald-500 shadow-sm font-bold"
+                    />
+                  </div>
+                </div>
+
+                {/* Content Body */}
+                {/* Content Body */}
+                <div className="flex-1 overflow-y-auto bg-white p-4 sm:p-6 space-y-5">
+                  {fundAnalyticsActiveTab === 'districts' && (
+                    <div className="space-y-4">
+                      <div className="bg-emerald-50 border-2 border-emerald-100 rounded-3xl p-5 flex items-start gap-4 shadow-sm">
+                        <div className="w-12 h-12 rounded-2xl bg-white border-2 border-emerald-500 text-emerald-600 flex items-center justify-center text-2xl shrink-0 shadow-sm">🌟</div>
+                        <div className="space-y-1.5">
+                          <strong className="block text-emerald-900 font-black text-sm">আমাদের নীতি: যে জেলা থেকে যত টাকা দান, সেই জেলায় তত টাকা সহায়তা!</strong>
+                          <p className="text-[11px] text-emerald-800/80 leading-relaxed font-bold">
+                            আমরা প্রতি মাসে সারা বাংলাদেশের একটি জেলাকে কেন্দ্র করে দান বিতরণ করি। আপনার জেলার মানুষ যত টাকা দান করবেন, সমপরিমাণ টাকা আপনার জেলার নিঃস্ব, বিধবা, অসুস্থ ও অসহায় মানুষদের খাদ্য, চিকিৎসা ও পুনর্বাসনে ব্যয় করা হবে।
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {filteredDistricts.map((d, idx) => (
+                          <div key={idx} className="p-4 bg-white border-2 border-slate-100 hover:border-[#004a2c]/30 rounded-[28px] transition-all text-left space-y-4 shadow-sm group">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                <span className="w-7 h-7 rounded-xl bg-emerald-50 text-[#004a2c] text-xs font-black flex items-center justify-center group-hover:bg-[#004a2c] group-hover:text-white transition-all shadow-3xs">
+                                  {idx + 1}
+                                </span>
+                                <span className="text-sm font-black text-slate-800">{d.name} জেলা</span>
+                              </div>
+                              <span className="text-[10px] font-black bg-slate-50 px-3 py-1 rounded-full border border-slate-200 text-slate-500 font-mono">
+                                {d.donors} জন দাতা
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4 pt-4 border-t border-slate-50">
+                              <div className="space-y-1">
+                                <span className="text-[9px] text-slate-400 font-black uppercase tracking-widest block">সংগৃহীত দান:</span>
+                                <span className="font-black text-slate-800 font-mono text-base">৳{d.amount.toLocaleString('bn-BD')}</span>
+                              </div>
+                              <div className="space-y-1">
+                                <span className="text-[9px] text-[#004a2c] font-black uppercase tracking-widest block">সহায়তা বরাদ্দ:</span>
+                                <span className="font-black text-[#004a2c] font-mono text-base">৳{d.amount.toLocaleString('bn-BD')}</span>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {fundAnalyticsActiveTab === 'donors' && (
+                    <div className="space-y-3">
+                      {filteredDonors.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-20 text-center space-y-4 opacity-40">
+                          <Search className="w-12 h-12 text-slate-300" />
+                          <p className="text-sm font-black text-slate-400 uppercase tracking-widest">কোনো দাতার তথ্য পাওয়া যায়নি</p>
+                        </div>
+                      ) : (
+                        filteredDonors.map((donor, idx) => (
+                          <div key={idx} className="p-4 bg-white border-2 border-slate-100 hover:border-emerald-100 rounded-[28px] flex items-center justify-between gap-4 text-left transition-all shadow-sm">
+                            <div className="flex items-center gap-4 min-w-0 flex-1">
+                              {donor.image ? (
+                                <img src={donor.image} alt={donor.name} className="w-12 h-12 rounded-2xl object-cover border-2 border-emerald-50 shrink-0 shadow-sm" />
+                              ) : (
+                                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-600 to-[#004a2c] text-white font-black text-lg flex items-center justify-center shrink-0 shadow-md">
+                                  {donor.initial}
+                                </div>
+                              )}
+                              <div className="min-w-0">
+                                <h4 className="text-sm font-black text-slate-800 truncate">{donor.name}</h4>
+                                <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-1 font-black">
+                                  <span className="flex items-center gap-1 text-[#004a2c]">
+                                    <MapPin className="w-3 h-3" />
+                                    <span>{donor.district}</span>
+                                  </span>
+                                  <span className="opacity-30">•</span>
+                                  <span>{donor.lastDate}</span>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <span className="text-base font-black text-[#004a2c] font-mono block">৳{donor.totalAmount.toLocaleString('bn-BD')}</span>
+                              <span className="text-[10px] font-black bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-full border border-emerald-100 block mt-1 uppercase tracking-tighter">
+                                {donor.count} বার দান
+                              </span>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+
+                  {fundAnalyticsActiveTab === 'disbursed' && (
+                    <div className="space-y-3">
+                      {disbursedList.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-20 text-center space-y-4 opacity-40">
+                          <HandHeart className="w-12 h-12 text-slate-300" />
+                          <p className="text-sm font-black text-slate-400 uppercase tracking-widest">কোনো বিতরণ রেকর্ড নেই</p>
+                        </div>
+                      ) : (
+                        disbursedList.map((item, idx) => (
+                          <div key={idx} className="p-4 bg-white border-2 border-slate-100 hover:border-emerald-100 rounded-[28px] flex items-center justify-between gap-4 text-left transition-all shadow-sm">
+                            <div className="min-w-0 flex-1">
+                              <h4 className="text-sm font-black text-slate-800 truncate">{item.name}</h4>
+                              <p className="text-[11px] text-slate-500 font-bold mt-1">{item.purpose}</p>
+                              <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-2 font-black">
+                                <span className="text-emerald-700 flex items-center gap-1">
+                                  <MapPin className="w-3 h-3" />
+                                  <span>{item.district}</span>
+                                </span>
+                                <span className="opacity-30">•</span>
+                                <span>{item.date}</span>
+                              </div>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <span className="text-base font-black text-rose-600 font-mono block">৳{item.amount.toLocaleString('bn-BD')}</span>
+                              <span className="text-[9px] font-black bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-full border border-emerald-100 block mt-1 uppercase tracking-widest">বিতরণ সম্পন্ন</span>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Footer Controls */}
+                <div className="p-4 sm:p-6 bg-slate-50 border-t border-slate-100 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setShowFundAnalyticsModal(false)}
+                    className="w-full py-4 bg-white border-2 border-slate-200 hover:border-emerald-100 hover:text-[#004a2c] text-slate-600 rounded-[24px] text-sm font-black transition-all shadow-sm active:scale-95"
+                  >
+                    বন্ধ করুন
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          );
+        })()}
+      </AnimatePresence>
+
       {/* ==================== DONORS & CONTRIBUTORS MODAL (কে টাকা দিয়েছে - সর্বমোট দান খতিয়ান) ==================== */}
       <AnimatePresence>
         {showDonorsModal && (() => {
-          const allDonationsTxs = qardHistory.filter(t => t.type === 'qard_donation' && t.status === 'success');
-          const donorMap: Record<string, {
-            userId: string;
-            name: string;
-            phone: string;
-            image: string;
-            initialLetter: string;
-            totalAmount: number;
-            donationCount: number;
-            latestDate: string;
-            latestTimestamp: number;
-            history: Array<{
-              id: string;
-              amount: number;
-              date: string;
-              typeLabel: string;
-              description: string;
-              receiptNo?: string;
-              transactionId?: string;
-            }>;
-          }> = {};
+          const allDonationsTxs = qardHistory.filter(t => {
+            const isDonation = (t.type === 'qard_donation' || t.type === 'general_charity_donation') && t.status === 'success';
+            if (!isDonation) return false;
+            const nameStr = String(t.userName || '');
+            if (nameStr.includes('জুবায়ের') || nameStr.includes('Jubayer')) return false;
+            if (Number(t.amount) === 2500) return false;
+            return true;
+          });
 
+          const donorMap: Record<string, any> = {};
           allDonationsTxs.forEach((t) => {
             const key = t.userId || t.userPhone || t.userName || 'anonymous';
             const donateAmt = Number(t.amount) || 0;
-            const uInfo = usersMap[t.userId] || (t.userPhone ? usersMap[t.userPhone] : null) || (t.memberId ? usersMap[t.memberId] : null);
+            const uInfo = usersMap[t.userId] || (t.userPhone ? usersMap[t.userPhone] : null) || (t.memberId ? usersMap[t.memberId] : null) || (t.userName ? usersMap[t.userName] : null);
             const memberName = t.userName === 'গোপন দাতা' ? 'গোপন দাতা' : (uInfo?.name || t.userName || 'দানশীল সদস্য');
             const memberPhone = (uInfo as any)?.phone || t.userPhone || '';
-            const memberPhoto = t.userName === 'গোপন দাতা' ? '' : (uInfo?.photoURL || uInfo?.photo || t.userPhoto || t.photoURL || '');
+            const memberDistrict = t.district || (uInfo as any)?.district || (uInfo as any)?.thana || 'ঢাকা';
+            const memberPhoto = t.userName === 'গোপন দাতা' ? '' : (uInfo?.photoURL || uInfo?.photo || (uInfo as any)?.profilePic || t.userPhoto || t.photoURL || (t as any).profilePic || '');
             const initialLetter = (memberName || 'দ').trim().charAt(0).toUpperCase();
-
             const txDate = t.createdAt ? new Date(t.createdAt) : new Date();
             const formattedDate = txDate.toLocaleDateString('bn-BD', { day: 'numeric', month: 'long', year: 'numeric' });
-            const typeLabel = t.description?.includes('মাসিক') ? 'মাসিক অনুদান' : (t.description?.includes('আমানত') ? 'কল্যাণ আমানত' : 'স্বেচ্ছা অনুদান');
+            const typeLabel = t.type === 'general_charity_donation' ? 'লিল্লা সাদাকাহ' : (t.description?.includes('মাসিক') ? 'মাসিক অনুদান' : (t.description?.includes('আমানত') ? 'কল্যাণ আমানত' : 'সুদমুক্ত দান'));
 
             if (!donorMap[key]) {
               donorMap[key] = {
@@ -5084,187 +6460,172 @@ BNB Business Co-operative Welfare Fund
                 donationCount: 0,
                 latestDate: formattedDate,
                 latestTimestamp: txDate.getTime(),
+                district: memberDistrict,
                 history: []
               };
             }
-
             donorMap[key].totalAmount += donateAmt;
             donorMap[key].donationCount += 1;
             if (txDate.getTime() >= donorMap[key].latestTimestamp) {
               donorMap[key].latestTimestamp = txDate.getTime();
               donorMap[key].latestDate = formattedDate;
             }
-
             donorMap[key].history.push({
               id: t.id || t.transactionId || String(Math.random()),
               amount: donateAmt,
               date: formattedDate,
               typeLabel,
-              description: t.description || 'করযে হাসানা অনুদান',
+              description: t.description || (t.type === 'general_charity_donation' ? 'লিল্লা সাদাকাহ' : 'করযে হাসানা অনুদান'),
               receiptNo: t.receiptNo,
               transactionId: t.transactionId
             });
           });
 
-          // Sort each donor's history descending by date
-          Object.values(donorMap).forEach((d) => {
-            d.history.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-          });
-
-          const aggregatedDonorsList = Object.values(donorMap).sort((a, b) => b.totalAmount - a.totalAmount);
-
-          const filtered = aggregatedDonorsList.filter(d => 
-            !donorsSearchQuery.trim() || 
-            d.name.toLowerCase().includes(donorsSearchQuery.toLowerCase()) ||
-            d.phone.includes(donorsSearchQuery) ||
-            String(d.totalAmount).includes(donorsSearchQuery)
+          const aggregatedDonorsList = Object.values(donorMap).sort((a: any, b: any) => b.totalAmount - a.totalAmount);
+          const q = donorsSearchQuery.trim().toLowerCase();
+          const filtered = !q ? aggregatedDonorsList : aggregatedDonorsList.filter((d: any) =>
+            String(d.name || '').toLowerCase().includes(q) ||
+            String(d.totalAmount || '').includes(q) ||
+            String(d.phone || '').includes(q)
           );
-
           return (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto font-sans"
-              onClick={() => setShowDonorsModal(false)}
-            >
+            <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+              <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
               <motion.div
-                initial={{ scale: 0.95, opacity: 0, y: 15 }}
-                animate={{ scale: 1, opacity: 1, y: 0 }}
-                exit={{ scale: 0.95, opacity: 0, y: 15 }}
-                onClick={(e) => e.stopPropagation()}
-                className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl border border-slate-100 flex flex-col max-h-[88vh] text-left"
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", damping: 25, stiffness: 200 }}
+                className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden shadow-2xl"
               >
                 {/* Header */}
-                <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 text-white p-4 flex items-center justify-between shrink-0 shadow-xs">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-2xl bg-white/20 flex items-center justify-center text-white shrink-0">
-                      <Heart className="w-5 h-5 text-white" />
+                <div className="bg-[#004a2c] text-white px-6 py-5 flex items-center justify-between shadow-lg shrink-0">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-2xl bg-white/10 text-emerald-300 border border-white/15 flex items-center justify-center shrink-0 shadow-lg">
+                      <Heart className="w-7 h-7" />
                     </div>
                     <div>
-                      <h3 className="text-sm font-black text-white">ফান্ডে দান ও আমানতকারী সদস্যবৃন্দ (সর্বমোট দান)</h3>
-                      <p className="text-[10px] text-emerald-100 font-semibold">কল্যাণমুখী সুদমুক্ত তহবিলের দাতা সদস্যদের তালিকা</p>
+                      <h3 className="text-lg font-black text-white leading-tight">ফান্ডে দানকারী সদস্য</h3>
+                      <p className="text-[11px] text-emerald-100/80 font-bold uppercase tracking-wider mt-0.5">তহবিলে অনুদান ও আমানতকারী সদস্যদের তালিকা</p>
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => setShowDonorsModal(false)}
-                    className="w-7 h-7 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center text-xs font-bold transition cursor-pointer"
+                    className="w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition active:scale-90 cursor-pointer"
                   >
-                    ✕
+                    <X className="w-6 h-6 text-white" />
                   </button>
                 </div>
 
                 {/* Highlights Banner */}
-                <div className="bg-emerald-50 border-b border-emerald-100 p-3.5 flex items-center justify-between shrink-0">
+                <div className="bg-emerald-50 border-b border-emerald-100 p-4 flex items-center justify-between shrink-0">
                   <div className="text-left">
-                    <span className="text-[9px] text-emerald-800 font-extrabold uppercase block">মোট সংগৃহীত ফান্ড</span>
-                    <span className="text-base font-black text-emerald-900 font-mono">৳ {qardTotalFund?.toLocaleString('en-US')} BDT</span>
+                    <span className="text-[10px] text-emerald-800 font-extrabold uppercase block tracking-wider">মোট সংগৃহীত ফান্ড</span>
+                    <span className="text-xl font-black text-emerald-900 font-mono">৳ {qardTotalFund?.toLocaleString('en-US')}</span>
                   </div>
                   <div className="text-right">
-                    <span className="text-[9px] text-emerald-800 font-extrabold uppercase block">মোট দাতা সদস্য</span>
-                    <span className="text-xs font-black text-emerald-800 bg-emerald-100/90 border border-emerald-200 px-2.5 py-0.5 rounded-full inline-block">
+                    <span className="text-[10px] text-emerald-800 font-extrabold uppercase block tracking-wider">মোট দাতা</span>
+                    <span className="text-sm font-black text-emerald-800 bg-emerald-100 border border-emerald-200 px-3 py-1 rounded-full inline-block shadow-3xs">
                       {aggregatedDonorsList.length} জন
                     </span>
                   </div>
                 </div>
 
                 {/* Search Bar */}
-                <div className="p-3 border-b border-slate-100 bg-slate-50/70 shrink-0">
+                <div className="p-4 border-b border-slate-100 bg-slate-50 shrink-0">
                   <div className="relative">
-                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <Search className="w-5 h-5 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
                       placeholder="সদস্যের নাম বা টাকার পরিমাণ লিখে খুঁজুন..."
                       value={donorsSearchQuery}
                       onChange={(e) => setDonorsSearchQuery(e.target.value)}
-                      className="w-full pl-8 pr-7 py-2 text-xs bg-white border border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 focus:outline-none focus:border-emerald-500 font-sans font-bold"
+                      className="w-full pl-11 pr-4 py-3 text-sm bg-white border-2 border-slate-100 rounded-2xl focus:outline-none focus:border-emerald-500 shadow-sm font-bold"
                     />
-                    {donorsSearchQuery && (
-                      <button
-                        type="button"
-                        onClick={() => setDonorsSearchQuery('')}
-                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold"
-                      >
-                        ✕
-                      </button>
-                    )}
                   </div>
                 </div>
 
                 {/* Scrollable List */}
-                <div className="p-3 overflow-y-auto space-y-2 flex-1 divide-y divide-slate-100">
+                <div className="flex-1 overflow-y-auto bg-white p-4 sm:p-6">
                   {filtered.length === 0 ? (
-                    <div className="text-center py-10 text-slate-400 space-y-2">
-                      <Heart className="w-10 h-10 text-slate-300 mx-auto opacity-50" />
-                      <p className="text-xs font-bold text-slate-600">কোনো দাতার রেকর্ড পাওয়া যায়নি</p>
-                      <p className="text-[10px] text-slate-400">সদস্যগণ ফান্ডে অনুদান বা আমানত জমা দিলে স্বয়ংক্রিয়ভাবে এখানে যুক্ত হবে।</p>
+                    <div className="flex flex-col items-center justify-center py-20 text-center space-y-4 grayscale opacity-50">
+                      <div className="text-6xl">💝</div>
+                      <div>
+                        <p className="text-base font-black text-slate-400">কোনো দাতার রেকর্ড পাওয়া যায়নি</p>
+                        <p className="text-xs text-slate-400 mt-1">সদস্যগণ অনুদান প্রদান করলে এখানে নাম যুক্ত হবে</p>
+                      </div>
                     </div>
                   ) : (
-                    filtered.map((item, idx) => (
-                      <div 
-                        key={idx} 
-                        onClick={() => setSelectedDonorForDetails(item)}
-                        className="pt-2.5 first:pt-0 flex items-center justify-between gap-2.5 hover:bg-emerald-50/60 p-2.5 rounded-2xl transition cursor-pointer border border-transparent hover:border-emerald-200 group"
-                      >
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          {item.image ? (
-                            <img
-                              src={item.image}
-                              alt={item.name}
-                              className="w-10.5 h-10.5 rounded-full object-cover border-2 border-emerald-500 shrink-0 shadow-xs group-hover:scale-105 transition"
-                              referrerPolicy="no-referrer"
-                              onError={(e) => {
-                                (e.currentTarget as HTMLElement).style.display = 'none';
-                                const fallback = (e.currentTarget as HTMLElement).nextElementSibling as HTMLElement;
-                                if (fallback) fallback.style.display = 'flex';
-                              }}
-                            />
-                          ) : null}
-                          <div className={`w-10.5 h-10.5 rounded-full bg-emerald-100 text-emerald-700 font-black text-sm flex items-center justify-center shrink-0 border border-emerald-300 shadow-xs group-hover:scale-105 transition ${item.image ? 'hidden' : 'flex'}`}>
-                            {item.initialLetter}
-                          </div>
-                          <div className="min-w-0 flex-1 pr-1">
-                            <h4 className="text-xs sm:text-sm font-extrabold text-slate-800 group-hover:text-emerald-800 leading-snug whitespace-normal break-words">{item.name}</h4>
-                            <div className="flex items-center gap-1.5 text-[9px] font-semibold flex-wrap mt-0.5">
-                              <span className="text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-150">
-                                {item.donationCount > 1 ? `মোট ${item.donationCount} বার দান` : '১ বার দান'}
-                              </span>
-                              <span className="text-slate-300">•</span>
-                              <span className="text-slate-500">সর্বশেষ: {item.latestDate}</span>
+                    <div className="space-y-3">
+                      {filtered.map((item, idx) => (
+                        <div 
+                          key={idx} 
+                          onClick={() => setSelectedDonorForDetails(item)}
+                          className="bg-white border-2 border-slate-50 hover:border-emerald-100 p-4 rounded-2.5xl transition cursor-pointer group shadow-sm flex items-center justify-between gap-4"
+                        >
+                          <div className="flex items-center gap-4 min-w-0 flex-1">
+                            {item.image ? (
+                              <img
+                                src={item.image}
+                                alt={item.name}
+                                className="w-12 h-12 rounded-2xl object-cover border-2 border-emerald-500 shrink-0 shadow-sm group-hover:scale-105 transition"
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : (
+                              <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 font-black text-lg flex items-center justify-center shrink-0 border border-emerald-300 shadow-sm group-hover:scale-105 transition">
+                                {item.initialLetter}
+                              </div>
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <h4 className="text-sm font-black text-slate-800 group-hover:text-emerald-800 truncate">{item.name}</h4>
+                              <div className="flex items-center gap-2 text-[10px] font-bold mt-1">
+                                <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
+                                  {item.donationCount > 1 ? `মোট ${item.donationCount} বার দান` : '১ বার দান'}
+                                </span>
+                                <span className="text-slate-400">•</span>
+                                <span className="text-slate-400">সর্বশেষ: {item.latestDate}</span>
+                              </div>
                             </div>
                           </div>
-                        </div>
 
-                        <div className="text-right shrink-0">
-                          <span className="text-xs sm:text-sm font-black text-emerald-600 font-mono block">
-                            ৳ {item.totalAmount.toLocaleString('en-US')}
-                          </span>
-                          <span className="text-[8.5px] font-bold text-teal-800 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-full inline-block mt-0.5 group-hover:bg-teal-600 group-hover:text-white transition">
-                            খতিয়ান দেখুন ➔
-                          </span>
+                          <div className="text-right shrink-0">
+                            <span className="text-base font-black text-emerald-600 font-mono block">
+                              ৳ {item.totalAmount.toLocaleString('en-US')}
+                            </span>
+                            <span className="text-[9px] font-bold text-teal-800 bg-teal-50 border border-teal-200 px-2.5 py-1 rounded-full inline-block mt-1 group-hover:bg-[#005a36] group-hover:text-white transition">
+                              খতিয়ান দেখুন ➔
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                    ))
+                      ))}
+                    </div>
                   )}
                 </div>
 
                 {/* Footer Action */}
-                <div className="p-3 bg-slate-50 border-t border-slate-100 shrink-0">
+                <div className="p-4 sm:p-6 bg-slate-50 border-t border-slate-100 shrink-0 shadow-[0_-4px_20px_rgba(0,0,0,0.03)] flex flex-col gap-3">
                   <button
                     type="button"
                     onClick={() => {
                       setShowDonorsModal(false);
                       setActiveTab('donate');
                     }}
-                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-xs rounded-2xl transition cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+                    className="w-full py-4 bg-[#004a2c] hover:bg-[#003a22] active:scale-95 text-white font-black text-sm rounded-[24px] transition cursor-pointer flex items-center justify-center gap-2 shadow-lg"
                   >
-                    <Heart className="w-4 h-4 text-white" />
+                    <Heart className="w-5 h-5 fill-white" />
                     <span>আমিও ফান্ডে টাকা জমা বা দান করতে চাই</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowDonorsModal(false)}
+                    className="w-full py-4 bg-white border-2 border-slate-200 hover:border-emerald-100 hover:text-[#004a2c] text-slate-600 font-black text-sm rounded-[24px] transition cursor-pointer active:scale-95 shadow-sm"
+                  >
+                    বন্ধ করুন
                   </button>
                 </div>
               </motion.div>
-            </motion.div>
+            </div>
           );
         })()}
       </AnimatePresence>
@@ -5272,113 +6633,107 @@ BNB Business Co-operative Welfare Fund
       {/* ==================== DONOR DETAILED BREAKDOWN MODAL (কবে কয় টাকা দিয়েছিলো) ==================== */}
       <AnimatePresence>
         {selectedDonorForDetails && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[10000] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto font-sans"
-            onClick={() => setSelectedDonorForDetails(null)}
-          >
-            <motion.div 
-              initial={{ scale: 0.95, opacity: 0, y: 15 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 15 }}
-              onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl border border-slate-100 flex flex-col max-h-[85vh] text-left"
+          <div className="fixed inset-0 z-[110] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden shadow-2xl"
             >
               {/* Modal Top Header */}
-              <div className="bg-gradient-to-r from-emerald-700 via-teal-700 to-emerald-800 text-white p-4 flex items-center justify-between shrink-0 shadow-md">
-                <div className="flex items-center gap-3">
+              <div className="bg-[#004a2c] text-white px-6 py-5 flex items-center justify-between shadow-lg shrink-0">
+                <div className="flex items-center gap-4">
                   {selectedDonorForDetails.image ? (
                     <img 
                       src={selectedDonorForDetails.image} 
                       alt={selectedDonorForDetails.name}
-                      className="w-11 h-11 rounded-full object-cover border-2 border-amber-300 shadow-md shrink-0"
+                      className="w-12 h-12 rounded-2xl object-cover border-2 border-emerald-300 shadow-md shrink-0"
                     />
                   ) : (
-                    <div className="w-11 h-11 rounded-full bg-white/20 text-white font-black text-base flex items-center justify-center shrink-0 border border-white/30">
+                    <div className="w-12 h-12 rounded-2xl bg-white/10 text-white font-black text-xl flex items-center justify-center shrink-0 border border-white/20 shadow-md">
                       {selectedDonorForDetails.initialLetter}
                     </div>
                   )}
                   <div className="min-w-0">
-                    <h3 className="text-sm sm:text-base font-black text-white truncate leading-tight">
-                      {selectedDonorForDetails.name}
-                    </h3>
-                    <p className="text-[11px] text-emerald-100 font-semibold mt-0.5">
-                      পবিত্র করযে হাসানা দান খতিয়ান ও বিস্তারিত হিস্ট্রি
-                    </p>
+                    <h3 className="text-lg font-black text-white truncate leading-tight">{selectedDonorForDetails.name}</h3>
+                    <p className="text-[11px] text-emerald-100/80 font-bold uppercase tracking-wider mt-0.5">পবিত্র করযে হাসানা দান খতিয়ান ও হিস্ট্রি</p>
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setSelectedDonorForDetails(null)}
-                  className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center text-xs font-bold transition cursor-pointer shrink-0"
+                  className="w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition active:scale-90 cursor-pointer"
                 >
-                  ✕
+                  <X className="w-6 h-6 text-white" />
                 </button>
               </div>
 
               {/* Cumulative Donation Stats Summary Box */}
-              <div className="bg-gradient-to-br from-emerald-50 via-teal-50/60 to-emerald-100/50 p-4 border-b border-emerald-200/80 flex items-center justify-between gap-3 shrink-0">
-                <div className="space-y-0.5">
-                  <span className="text-[10px] text-emerald-800 font-extrabold uppercase block">
+              <div className="bg-emerald-50 border-b border-emerald-100 p-5 flex items-center justify-between gap-4 shrink-0">
+                <div className="space-y-1">
+                  <span className="text-[10px] text-emerald-800 font-extrabold uppercase block tracking-wider">
                     সর্বমোট প্রদানকৃত দান
                   </span>
-                  <strong className="text-xl font-mono font-black text-emerald-900 block">
-                    ৳ {selectedDonorForDetails.totalAmount?.toLocaleString('en-US')} BDT
+                  <strong className="text-2xl font-mono font-black text-emerald-900 block">
+                    ৳ {selectedDonorForDetails.totalAmount?.toLocaleString('en-US')}
                   </strong>
                 </div>
-                <div className="text-right space-y-1">
-                  <span className="text-[10px] text-slate-500 font-extrabold uppercase block">
+                <div className="text-right space-y-1.5">
+                  <span className="text-[10px] text-slate-500 font-extrabold uppercase block tracking-wider">
                     মোট অনুদান সংখ্যা
                   </span>
-                  <span className="text-xs font-black text-emerald-800 bg-emerald-100 border border-emerald-300 px-3 py-1 rounded-full inline-block shadow-3xs">
+                  <span className="text-sm font-black text-emerald-800 bg-white border border-emerald-200 px-4 py-1.5 rounded-2xl inline-block shadow-3xs">
                     {selectedDonorForDetails.donationCount} বার দান করেছেন
                   </span>
                 </div>
               </div>
 
               {/* Scrollable Individual Transactions History Timeline */}
-              <div className="p-4 overflow-y-auto space-y-3 flex-1 bg-slate-50/50">
-                <h4 className="text-xs font-black text-slate-800 border-l-4 border-emerald-500 pl-2">
-                  দানের তারিখ ও পরিমাণ খতিয়ান (কবে কয় টাকা দিয়েছিলেন):
-                </h4>
+              <div className="flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 space-y-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-1 h-5 bg-emerald-600 rounded-full"></div>
+                  <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest">
+                    বিস্তারিত খতিয়ান
+                  </h4>
+                </div>
 
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {selectedDonorForDetails.history.map((entry: any, hIdx: number) => (
                     <div 
                       key={entry.id || hIdx}
-                      className="p-3.5 bg-white border border-slate-200/90 rounded-2xl shadow-4xs space-y-2 hover:border-emerald-300 transition"
+                      className="p-4 bg-white border-2 border-slate-100 rounded-3xl shadow-sm space-y-3 hover:border-emerald-300 transition"
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-xs shrink-0 font-mono">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-base shrink-0 font-mono shadow-3xs border border-emerald-100">
                             ৳
                           </div>
                           <div>
-                            <strong className="text-sm font-black font-mono text-emerald-700 block">
-                              ৳ {entry.amount?.toLocaleString('en-US')} BDT
+                            <strong className="text-base font-black font-mono text-emerald-700 block">
+                              ৳ {entry.amount?.toLocaleString('en-US')}
                             </strong>
-                            <span className="text-[9.5px] text-slate-400 font-semibold block mt-0.5">
+                            <span className="text-[10px] text-slate-400 font-bold block mt-0.5">
                               {entry.typeLabel}
                             </span>
                           </div>
                         </div>
 
                         <div className="text-right">
-                          <span className="text-[10px] font-extrabold text-slate-700 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200 inline-flex items-center gap-1">
-                            <Calendar className="w-3 h-3 text-slate-400" />
+                          <span className="text-[10px] font-black text-slate-600 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 inline-flex items-center gap-1.5 shadow-3xs">
+                            <Calendar className="w-3.5 h-3.5 text-slate-400" />
                             {entry.date}
                           </span>
                         </div>
                       </div>
 
-                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500 font-semibold">
-                        <span className="truncate max-w-[240px]">
+                      <div className="pt-3 border-t border-slate-50 flex items-center justify-between text-[11px] text-slate-500 font-semibold">
+                        <span className="truncate max-w-[200px]">
                           {entry.description || 'কর্জে হাসানা কল্যাণ অনুদান'}
                         </span>
                         {entry.receiptNo && (
-                          <span className="font-mono font-bold text-slate-400 shrink-0">
+                          <span className="font-mono font-black text-slate-400 bg-slate-50 px-2 py-0.5 rounded-lg border border-slate-100">
                             {entry.receiptNo}
                           </span>
                         )}
@@ -5389,17 +6744,17 @@ BNB Business Co-operative Welfare Fund
               </div>
 
               {/* Footer */}
-              <div className="p-3 bg-white border-t border-slate-200 shrink-0 text-center">
+              <div className="p-4 sm:p-6 bg-slate-50 border-t border-slate-100 shrink-0">
                 <button
                   type="button"
                   onClick={() => setSelectedDonorForDetails(null)}
-                  className="w-full py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-black text-xs rounded-xl shadow-xs transition cursor-pointer"
+                  className="w-full py-4 bg-white border-2 border-slate-200 hover:border-emerald-100 hover:text-[#004a2c] text-slate-600 font-black text-sm rounded-[24px] transition cursor-pointer active:scale-95 shadow-sm"
                 >
                   বন্ধ করুন
                 </button>
               </div>
             </motion.div>
-          </motion.div>
+          </div>
         )}
       </AnimatePresence>
 
@@ -5408,233 +6763,859 @@ BNB Business Co-operative Welfare Fund
         {showBorrowersModal && (() => {
           const liveLoansList = qardHistory
             .filter(t => t.type === 'qard_loan_disbursment' && t.status === 'success')
-            .map((t, idx) => {
+            .map((t) => {
               const repayments = qardHistory
                 .filter(rp => rp.type === 'qard_loan_repayment' && rp.status === 'success' && rp.userId === t.userId);
-              const totalRepaidAmount = repayments.reduce((sum, r) => sum + r.amount, 0);
-              const remaining = Math.max(0, t.amount - totalRepaidAmount);
+              const totalRepaidAmount = repayments.reduce((sum, r) => sum + (r.amount || 0), 0);
+              const loanAmt = Number(t.amount) || 0;
+              const remaining = Math.max(0, loanAmt - totalRepaidAmount);
               const isComplete = remaining === 0;
-
               const uInfo = usersMap[t.userId] || (t.userPhone ? usersMap[t.userPhone] : null) || (t.memberId ? usersMap[t.memberId] : null);
               const memberName = uInfo?.name || t.userName || 'সম্মানিত সদস্য';
               const memberPhoto = uInfo?.photoURL || uInfo?.photo || t.userPhoto || t.photoURL || '';
               const initialLetter = (memberName || 'স').trim().charAt(0).toUpperCase();
-
+              const txDate = t.createdAt ? new Date(t.createdAt) : new Date();
               return {
+                userId: t.userId,
                 name: memberName,
                 role: 'সদস্য',
-                amount: t.amount?.toLocaleString('en-US') || '0',
-                rawAmount: t.amount || 0,
-                installments: isComplete ? '3/3' : '1/3',
-                dueAmount: remaining?.toLocaleString('en-US') || '0',
+                rawAmount: loanAmt,
+                amount: loanAmt.toLocaleString('en-US'),
+                installments: isComplete ? '3/3' : (t.loanDuration ? `1/${t.loanDuration}` : '1/3'),
+                dueAmount: remaining.toLocaleString('en-US'),
                 rawDueAmount: remaining,
-                nextInstallment: t.loanDuration ? (t.loanDuration + ' মাস') : 'চলতি মাস',
+                date: txDate.toLocaleDateString('bn-BD', { day: 'numeric', month: 'short', year: 'numeric' }),
+                nextInstallment: t.loanDuration === 1 ? '30 দিন' : '90 দিন',
                 isComplete,
-                date: t.createdAt ? new Date(t.createdAt).toLocaleDateString('bn-BD') : 'N/A',
                 image: memberPhoto,
                 initialLetter
               };
-            });
+            })
+            .sort((a, b) => b.rawAmount - a.rawAmount);
 
-          // সর্বোচ্চ থেকে সর্বনিম্ন ঋণের পরিমাণ ক্রমানুসারে সাজানো (Descending Sort: Highest to Lowest)
-          liveLoansList.sort((a, b) => b.rawAmount - a.rawAmount);
-
-          const filtered = liveLoansList.filter(b => 
-            !borrowersSearchQuery.trim() || 
-            b.name.toLowerCase().includes(borrowersSearchQuery.toLowerCase()) ||
-            String(b.rawAmount).includes(borrowersSearchQuery) ||
-            b.amount.includes(borrowersSearchQuery)
+          const bq = borrowersSearchQuery.trim().toLowerCase();
+          const filtered = !bq ? liveLoansList : liveLoansList.filter((item) =>
+            String(item.name || '').toLowerCase().includes(bq) ||
+            String(item.rawAmount || '').includes(bq) ||
+            String(item.amount || '').includes(bq)
           );
-
           return (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
-              onClick={() => setShowBorrowersModal(false)}
-            >
+            <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+              <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
               <motion.div
-                initial={{ scale: 0.95, opacity: 0, y: 15 }}
-                animate={{ scale: 1, opacity: 1, y: 0 }}
-                exit={{ scale: 0.95, opacity: 0, y: 15 }}
-                onClick={(e) => e.stopPropagation()}
-                className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl border border-slate-100 flex flex-col max-h-[88vh] text-left"
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", damping: 25, stiffness: 200 }}
+                className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden shadow-2xl"
               >
                 {/* Header */}
-                <div className="bg-gradient-to-r from-rose-600 via-rose-700 to-amber-700 text-white p-4 flex items-center justify-between shrink-0 shadow-xs">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-2xl bg-white/20 flex items-center justify-center text-white shrink-0">
-                      <Coins className="w-5 h-5 text-white" />
+                <div className="bg-[#004a2c] text-white px-6 py-5 flex items-center justify-between shadow-lg shrink-0">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-2xl bg-white/10 text-emerald-300 border border-white/15 flex items-center justify-center shrink-0 shadow-lg">
+                      <Coins className="w-7 h-7" />
                     </div>
                     <div>
-                      <h3 className="text-sm font-black text-white">সুদমুক্ত ঋণ গ্রহীতা ও কিস্তি খতিয়ান</h3>
-                      <p className="text-[10px] text-rose-100 font-semibold">সকল ঋণ অনুমোদন ও পরিশোধ ট্র্যাকিং</p>
+                      <h3 className="text-lg font-black text-white leading-tight">সুদমুক্ত ঋণ গ্রহীতা তালিকা</h3>
+                      <p className="text-[11px] text-emerald-100/80 font-bold uppercase tracking-wider mt-0.5">ঋণ অনুমোদন ও কিস্তি ট্র্যাকিং</p>
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => setShowBorrowersModal(false)}
-                    className="w-7 h-7 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center text-xs font-bold transition cursor-pointer"
+                    className="w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition active:scale-90 cursor-pointer"
                   >
-                    ✕
+                    <X className="w-6 h-6 text-white" />
                   </button>
                 </div>
 
                 {/* Highlights Banner */}
-                <div className="bg-rose-50 border-b border-rose-100 p-3.5 flex items-center justify-between shrink-0">
+                <div className="bg-emerald-50 border-b border-emerald-100 p-4 flex items-center justify-between shrink-0">
                   <div className="text-left">
-                    <span className="text-[9px] text-rose-800 font-extrabold uppercase block">মোট ঋণ বিতরণ</span>
-                    <span className="text-base font-black text-rose-900 font-mono">৳ {qardActiveLoansAmount?.toLocaleString('en-US')} BDT</span>
+                    <span className="text-[10px] text-emerald-800 font-extrabold uppercase block tracking-wider">মোট ঋণ বিতরণ</span>
+                    <span className="text-xl font-black text-emerald-900 font-mono">৳ {qardActiveLoansAmount?.toLocaleString('en-US')}</span>
                   </div>
                   <div className="text-right">
-                    <span className="text-[9px] text-rose-800 font-extrabold uppercase block">মোট গ্রহীতা</span>
-                    <span className="text-xs font-black text-rose-800 bg-rose-100/90 border border-rose-200 px-2.5 py-0.5 rounded-full inline-block">
+                    <span className="text-[10px] text-emerald-800 font-extrabold uppercase block tracking-wider">মোট গ্রহীতা</span>
+                    <span className="text-sm font-black text-emerald-800 bg-emerald-100 border border-emerald-200 px-3 py-1 rounded-full inline-block shadow-3xs">
                       {liveLoansList.length} জন
                     </span>
                   </div>
                 </div>
 
                 {/* Search Bar */}
-                <div className="p-3 border-b border-slate-100 bg-slate-50/70 shrink-0">
+                <div className="p-4 border-b border-slate-100 bg-slate-50 shrink-0">
                   <div className="relative">
-                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <Search className="w-5 h-5 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
                       placeholder="ঋণগ্রহীতার নাম বা টাকার অংক লিখে খুঁজুন..."
                       value={borrowersSearchQuery}
                       onChange={(e) => setBorrowersSearchQuery(e.target.value)}
-                      className="w-full pl-8 pr-7 py-2 text-xs bg-white border border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 focus:outline-none focus:border-rose-500 font-sans font-bold"
+                      className="w-full pl-11 pr-4 py-3 text-sm bg-white border-2 border-slate-100 rounded-2xl focus:outline-none focus:border-emerald-500 shadow-sm font-bold"
                     />
-                    {borrowersSearchQuery && (
-                      <button
-                        type="button"
-                        onClick={() => setBorrowersSearchQuery('')}
-                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold"
-                      >
-                        ✕
-                      </button>
-                    )}
                   </div>
                 </div>
 
                 {/* Scrollable List */}
-                <div className="p-3 overflow-y-auto space-y-2.5 flex-1 divide-y divide-slate-100">
+                <div className="flex-1 overflow-y-auto bg-white p-4 sm:p-6">
                   {filtered.length === 0 ? (
-                    <div className="text-center py-10 text-slate-400 space-y-2">
-                      <Coins className="w-10 h-10 text-slate-300 mx-auto opacity-50" />
-                      <p className="text-xs font-bold text-slate-600">কোনো ঋণগ্রহীতার রেকর্ড পাওয়া যায়নি</p>
-                      <p className="text-[10px] text-slate-400">নতুন ঋণ অনুমোদন হলে রিয়েল-টাইম কিস্তির বিবরণ এখানে দেখাবে।</p>
+                    <div className="flex flex-col items-center justify-center py-20 text-center space-y-4 grayscale opacity-50">
+                      <div className="text-6xl">💸</div>
+                      <div>
+                        <p className="text-base font-black text-slate-400">কোনো ঋণগ্রহীতার রেকর্ড পাওয়া যায়নি</p>
+                        <p className="text-xs text-slate-400 mt-1">নতুন ঋণ অনুমোদন হলে এখানে তালিকা প্রদর্শিত হবে</p>
+                      </div>
                     </div>
                   ) : (
-                    filtered.map((item, idx) => (
-                      <div key={idx} className="pt-2.5 first:pt-0 bg-white p-2.5 rounded-2xl border border-slate-150 hover:border-rose-200 space-y-2 shadow-4xs">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            {item.image ? (
-                              <img
-                                src={item.image}
-                                alt={item.name}
-                                className="w-8 h-8 rounded-full object-cover border border-emerald-500 shrink-0"
-                                referrerPolicy="no-referrer"
-                                onError={(e) => {
-                                  (e.currentTarget as HTMLElement).style.display = 'none';
-                                  const fallback = (e.currentTarget as HTMLElement).nextElementSibling as HTMLElement;
-                                  if (fallback) fallback.style.display = 'flex';
-                                }}
-                              />
-                            ) : null}
-                            <div className={`w-8 h-8 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center font-bold text-xs shrink-0 border border-emerald-400 ${item.image ? 'hidden' : 'flex'}`}>
-                              {item.initialLetter}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {filtered.map((item, idx) => (
+                        <div 
+                          key={idx} 
+                          className="bg-white border-2 border-slate-50 hover:border-emerald-200 rounded-3xl p-5 transition shadow-sm space-y-4 group"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              {item.image ? (
+                                <img
+                                  src={item.image}
+                                  alt={item.name}
+                                  className="w-12 h-12 rounded-2xl object-cover border-2 border-emerald-500 shrink-0 shadow-sm group-hover:scale-105 transition"
+                                  referrerPolicy="no-referrer"
+                                />
+                              ) : (
+                                <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center font-black text-lg shrink-0 shadow-sm group-hover:scale-105 transition">
+                                  {item.initialLetter}
+                                </div>
+                              )}
+                              <div>
+                                <h4 className="text-sm font-black text-slate-800">{item.name}</h4>
+                                <span className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100 font-bold uppercase tracking-tighter">{item.role}</span>
+                              </div>
                             </div>
-                            <div>
-                              <h4 className="text-xs font-extrabold text-slate-800">{item.name}</h4>
-                              <span className="text-[9px] text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded font-bold">{item.role}</span>
+
+                            <div className="shrink-0">
+                              {item.isComplete ? (
+                                <span className="text-[9px] font-black text-emerald-700 bg-emerald-50 border-2 border-emerald-100 px-3 py-1 rounded-xl shadow-3xs">
+                                  ✓ পরিশোধিত
+                                </span>
+                              ) : (
+                                <span className="text-[9px] font-black text-rose-700 bg-rose-50 border-2 border-rose-100 px-3 py-1 rounded-xl shadow-3xs animate-pulse">
+                                  ⏳ কিস্তি চলমান
+                                </span>
+                              )}
                             </div>
                           </div>
 
-                          <div>
-                            {item.isComplete ? (
-                              <span className="text-[9px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
-                                ✓ পরিশোধ সম্পন্ন
+                          <div className="grid grid-cols-3 gap-3 bg-slate-50 p-4 rounded-2xl text-center">
+                            <div className="space-y-1">
+                              <span className="text-slate-400 text-[9px] font-bold uppercase tracking-wider block">নেয়া টাকা</span>
+                              <span className="font-mono font-black text-slate-800 text-sm">৳{item.amount}</span>
+                            </div>
+                            <div className="space-y-1 border-x border-slate-200">
+                              <span className="text-slate-400 text-[9px] font-bold uppercase tracking-wider block">কিস্তি</span>
+                              <span className="font-mono font-black text-emerald-700 text-sm">{item.installments}</span>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-slate-400 text-[9px] font-bold uppercase tracking-wider block">বাকি</span>
+                              <span className={`font-mono font-black text-sm ${item.isComplete ? 'text-emerald-700' : 'text-rose-600'}`}>
+                                ৳{item.dueAmount}
                               </span>
-                            ) : (
-                              <span className="text-[9px] font-black text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-md">
-                                ⏳ কিস্তি চলমান
-                              </span>
-                            )}
+                            </div>
+                          </div>
+                          
+                          <div className="pt-1 flex items-center justify-between text-[10px] font-bold text-slate-400">
+                            <span>তারিখ: {item.date}</span>
+                            <span>মেয়াদ: {item.nextInstallment}</span>
                           </div>
                         </div>
-
-                        <div className="grid grid-cols-3 gap-1.5 bg-slate-50 p-2 rounded-xl text-center text-[10px]">
-                          <div>
-                            <span className="text-slate-400 text-[8px] font-bold block">নেয়া টাকা</span>
-                            <span className="font-mono font-black text-slate-800">৳ {item.amount}</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-400 text-[8px] font-bold block">কিস্তি</span>
-                            <span className="font-mono font-black text-emerald-700">{item.installments}</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-400 text-[8px] font-bold block">পরিশোধ বাকি</span>
-                            <span className={'font-mono font-black ' + (item.isComplete ? 'text-emerald-700' : 'text-rose-600')}>
-                              ৳ {item.dueAmount}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    ))
+                      ))}
+                    </div>
                   )}
                 </div>
 
                 {/* Footer Action */}
-                <div className="p-3 bg-slate-50 border-t border-slate-100 shrink-0">
+                <div className="p-4 sm:p-6 bg-slate-50 border-t border-slate-100 shrink-0 shadow-[0_-4px_20px_rgba(0,0,0,0.03)] flex flex-col gap-3">
                   <button
                     type="button"
                     onClick={() => {
                       setShowBorrowersModal(false);
                       setActiveTab('apply');
                     }}
-                    className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-black text-xs rounded-2xl transition cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+                    className="w-full py-4 bg-[#004a2c] hover:bg-[#003a22] active:scale-95 text-white font-black text-sm rounded-[24px] transition cursor-pointer flex items-center justify-center gap-2 shadow-lg"
                   >
-                    <Coins className="w-4 h-4 text-white" />
+                    <Coins className="w-5 h-5 fill-white" />
                     <span>সুদমুক্ত ঋণ নিতে আবেদন করুন</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowBorrowersModal(false)}
+                    className="w-full py-4 bg-white border-2 border-slate-200 hover:border-emerald-100 hover:text-[#004a2c] text-slate-600 font-black text-sm rounded-[24px] transition cursor-pointer active:scale-95 shadow-sm"
+                  >
+                    বন্ধ করুন
                   </button>
                 </div>
               </motion.div>
-            </motion.div>
+            </div>
           );
         })()}
+      </AnimatePresence>
+
+      {/* ==================== AUTO-DONATION RECURRING SCHEDULER (স্বয়ংক্রিয় বা অটো দান সিডিউলার) - Full Screen ==================== */}
+      <AnimatePresence>
+        {showAutoDonationModal && (
+          <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden shadow-2xl"
+            >
+              {/* Header - Yellow/Prominent */}
+              <div className="bg-[#004a2c] text-white px-6 py-5 flex items-center justify-between shadow-lg relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 -rotate-45 translate-x-16 -translate-y-16 rounded-full"></div>
+                <div className="flex items-center gap-4 relative z-10">
+                  <div className="w-12 h-12 bg-amber-400 rounded-2xl flex items-center justify-center shadow-lg animate-pulse-slow">
+                    <RefreshCw className="w-7 h-7 text-slate-900 animate-spin" style={{ animationDuration: '8s' }} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black text-amber-300 flex items-center gap-2 leading-tight">
+                      <span>অটো দান সেটিংস</span>
+                      <span className="text-[10px] font-black bg-white text-emerald-800 px-2 py-0.5 rounded-full uppercase tracking-tighter">
+                        PRO
+                      </span>
+                    </h3>
+                    <p className="text-[11px] text-emerald-50 font-bold uppercase tracking-wider">নির্ধারিত তারিখে আপনার ওয়ালেট থেকে অটো দান হবে</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowAutoDonationModal(false)}
+                  className="w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/20 rounded-2xl transition-all active:scale-90 relative z-10"
+                >
+                  <X className="w-6 h-6 text-white" />
+                </button>
+              </div>
+
+              {/* Scrollable Body Content */}
+              <div className="flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 space-y-6">
+                {/* Master Activation Toggle Switch - White/Green theme */}
+                <div className="bg-white border-2 border-emerald-100 rounded-3xl p-5 flex items-center justify-between gap-4 shadow-sm">
+                  <div className="flex items-center gap-4">
+                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl shrink-0 border-2 transition ${
+                      autoDonationEnabled
+                        ? 'bg-emerald-50 border-emerald-500 text-emerald-600'
+                        : 'bg-slate-50 border-slate-200 text-slate-400'
+                    }`}>
+                      {autoDonationEnabled ? '⚡' : '⏸️'}
+                    </div>
+                    <div className="min-w-0">
+                      <h4 className="text-base sm:text-lg font-black text-slate-800">
+                        স্বয়ংক্রিয় সাধারণ দান সচল রাখুন
+                      </h4>
+                      <p className="text-[11px] sm:text-xs text-slate-500 font-medium leading-tight mt-1">
+                        {autoDonationEnabled
+                          ? 'সচল — নির্ধারিত তারিখে ওয়ালেট থেকে দান তহবিলে টাকা জমা হবে'
+                          : 'বন্ধ — কোনো স্বয়ংক্রিয় অর্থ কর্তন করা হবে না'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setAutoDonationEnabled(!autoDonationEnabled)}
+                    className={`w-16 h-8.5 rounded-full p-1 transition-colors duration-200 ease-in-out cursor-pointer relative shrink-0 border-2 ${
+                      autoDonationEnabled
+                        ? 'bg-emerald-600 border-emerald-600 shadow-md'
+                        : 'bg-slate-300 border-slate-300'
+                    }`}
+                  >
+                    <div
+                      className={`w-6.5 h-6.5 rounded-full bg-white shadow-md transform transition-transform duration-200 ease-in-out ${
+                        autoDonationEnabled ? 'translate-x-7.5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Status Notice */}
+                {autoDonationNotice && (
+                  <div className={`p-4 rounded-2xl text-sm font-bold border-2 flex items-center gap-3 ${
+                    autoDonationNotice.includes('সফল')
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-rose-50 text-rose-700 border-rose-200'
+                  }`}>
+                    {autoDonationNotice.includes('সফল') ? (
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                    )}
+                    <span>{autoDonationNotice}</span>
+                  </div>
+                )}
+
+                {/* Frequency Selector Modes */}
+                <div className="space-y-3">
+                  <label className="text-[13px] font-black text-emerald-800 uppercase tracking-widest flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[10px]">১</span>
+                    অনুদানের ফ্রিকোয়েন্সি নির্বাচন করুন
+                  </label>
+                  <div className="grid grid-cols-2 gap-2 bg-emerald-50/50 p-2 rounded-2.5xl border border-emerald-100">
+                    <button
+                      type="button"
+                      onClick={() => setAutoDonationFrequency('monthly')}
+                      className={`py-3 px-2 text-xs font-black rounded-2xl transition cursor-pointer text-center flex flex-col items-center gap-1 ${
+                        autoDonationFrequency === 'monthly'
+                          ? 'bg-emerald-600 text-white shadow-lg scale-[1.02]'
+                          : 'text-slate-600 hover:text-emerald-700 hover:bg-emerald-100/50'
+                      }`}
+                    >
+                      <Calendar className="w-5 h-5" />
+                      প্রতি মাসে
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAutoDonationFrequency('custom_monthly')}
+                      className={`py-3 px-2 text-xs font-black rounded-2xl transition cursor-pointer text-center flex flex-col items-center gap-1 ${
+                        autoDonationFrequency === 'custom_monthly'
+                          ? 'bg-emerald-600 text-white shadow-lg scale-[1.02]'
+                          : 'text-slate-600 hover:text-emerald-700 hover:bg-emerald-100/50'
+                      }`}
+                    >
+                      <Sparkles className="w-5 h-5" />
+                      ১২ মাস কাস্টম
+                    </button>
+                  </div>
+                </div>
+
+                {/* Sub-Option A: প্রতি মাসে (Monthly) */}
+                {autoDonationFrequency === 'monthly' && (
+                  <div className="bg-white border border-emerald-100 rounded-3xl p-5 space-y-5 shadow-sm">
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-50 pb-4">
+                      <span className="text-sm font-black text-slate-800">প্রতি মাসের কত তারিখে কাটা হবে?</span>
+                      <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-2xl">
+                        <select
+                          value={autoDonationDay}
+                          onChange={(e) => setAutoDonationDay(Number(e.target.value))}
+                          className="bg-transparent text-emerald-700 font-mono font-black text-sm focus:outline-none cursor-pointer"
+                        >
+                          {Array.from({ length: 28 }, (_, i) => i + 1).map((day) => (
+                            <option key={day} value={day} className="bg-white text-slate-900">
+                              {day} তারিখ
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <span className="text-xs font-bold text-slate-500 block uppercase tracking-wider">মাসিক অনুদানের পরিমাণ (টাকা):</span>
+                      <div className="flex items-center bg-slate-50 border-2 border-slate-100 focus-within:border-emerald-500 focus-within:bg-white rounded-2.5xl px-4 py-3.5 transition">
+                        <span className="text-emerald-600 font-black text-xl mr-2">৳</span>
+                        <input
+                          type="number"
+                          min={5}
+                          value={autoDonationAmount || ''}
+                          onChange={(e) => setAutoDonationAmount(Math.max(1, Number(e.target.value)))}
+                          className="w-full bg-transparent text-slate-900 font-mono font-black text-2xl focus:outline-none"
+                          placeholder="পরিমাণ লিখুন"
+                        />
+                      </div>
+                      <div className="grid grid-cols-5 gap-2 pt-1">
+                        {[20, 30, 50, 100, 200].map((amt) => (
+                          <button
+                            key={amt}
+                            type="button"
+                            onClick={() => setAutoDonationAmount(amt)}
+                            className={`py-2.5 text-xs sm:text-sm font-black rounded-xl border-2 font-mono transition active:scale-95 cursor-pointer ${
+                              autoDonationAmount === amt
+                                ? 'bg-amber-400 text-slate-950 border-amber-400 shadow-md scale-[1.05]'
+                                : 'bg-white text-slate-600 border-slate-100 hover:border-emerald-200'
+                            }`}
+                          >
+                            ৳{amt}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Sub-Option C: ১২ মাস কাস্টম পরিমাণ (Custom Month Amounts) */}
+                {autoDonationFrequency === 'custom_monthly' && (
+                  <div className="bg-white border border-emerald-100 rounded-3xl p-5 space-y-5 shadow-sm">
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-50 pb-4">
+                      <div className="min-w-0">
+                        <span className="text-sm font-black text-slate-800 block">১২ মাসের ভিন্ন ভিন্ন পরিমাণ</span>
+                        <span className="text-[11px] text-slate-500 font-medium block truncate">
+                          প্রতিটি মাসের জন্য কাস্টম দান সেট করুন
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-2xl shrink-0">
+                        <select
+                          value={autoDonationDay}
+                          onChange={(e) => setAutoDonationDay(Number(e.target.value))}
+                          className="bg-transparent text-emerald-700 font-mono font-black text-sm focus:outline-none cursor-pointer"
+                        >
+                          {Array.from({ length: 28 }, (_, i) => i + 1).map((day) => (
+                            <option key={day} value={day} className="bg-white text-slate-900">
+                              {day} তারিখ
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* 12 Months Grid - UPDATED TO 3 COLUMNS ALWAYS */}
+                    <div className="grid grid-cols-3 gap-3">
+                      {[
+                        { id: '1', name: 'জানু.' },
+                        { id: '2', name: 'ফেব্রু.' },
+                        { id: '3', name: 'মার্চ' },
+                        { id: '4', name: 'এপ্রিল' },
+                        { id: '5', name: 'মে' },
+                        { id: '6', name: 'জুন' },
+                        { id: '7', name: 'জুলাই' },
+                        { id: '8', name: 'আগস্ট' },
+                        { id: '9', name: 'সেপ্টে.' },
+                        { id: '10', name: 'অক্টো.' },
+                        { id: '11', name: 'নভে.' },
+                        { id: '12', name: 'ডিসে.' },
+                      ].map((m) => (
+                        <div key={m.id} className="bg-emerald-50/30 border border-emerald-100 rounded-2xl p-2.5 space-y-1.5 transition hover:bg-emerald-50">
+                          <span className="text-[10px] font-black text-emerald-800 block truncate text-center uppercase tracking-tighter">
+                            {m.name}
+                          </span>
+                          <div className="flex items-center bg-white border border-emerald-200 focus-within:border-amber-400 rounded-xl px-1.5 py-1.5 shadow-xs transition">
+                            <span className="text-[11px] text-emerald-600 font-bold mr-0.5">৳</span>
+                            <input
+                              type="number"
+                              min={0}
+                              value={autoDonationMonthAmounts[m.id] || ''}
+                              onChange={(e) => {
+                                const val = Math.max(0, Number(e.target.value));
+                                setAutoDonationMonthAmounts(prev => ({
+                                  ...prev,
+                                  [m.id]: val
+                                }));
+                              }}
+                              className="w-full bg-transparent text-slate-900 font-mono font-black text-xs focus:outline-none text-center"
+                              placeholder="৫০"
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Privacy & Anonymous Checkbox */}
+                <label className="flex items-center gap-3 bg-white border border-slate-100 hover:border-emerald-200 rounded-3xl px-5 py-4 cursor-pointer transition select-none group shadow-sm">
+                  <input
+                    type="checkbox"
+                    checked={autoDonationAnonymous}
+                    onChange={(e) => setAutoDonationAnonymous(e.target.checked)}
+                    className="w-5 h-5 accent-emerald-600 rounded-lg cursor-pointer shrink-0"
+                  />
+                  <div className="min-w-0 text-left">
+                    <span className="text-sm font-black text-slate-800 block leading-tight group-hover:text-emerald-700 transition">
+                      স্বয়ংক্রিয় দানেও পরিচয় গোপন রাখুন
+                    </span>
+                    <span className="text-[10px] text-slate-500 block leading-tight mt-1.5 font-medium">
+                      অনলাইন খতিয়ান ও তালিকায় আপনার নাম গোপন থাকবে
+                    </span>
+                  </div>
+                </label>
+
+                {/* Helpful Reminder Note */}
+                <div className="bg-amber-50 border border-amber-200 rounded-3xl p-5 flex items-start gap-4 shadow-inner">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center shrink-0 shadow-sm">
+                    <ShieldCheck className="w-6 h-6" />
+                  </div>
+                  <div className="flex-1">
+                    <strong className="text-amber-900 font-black text-sm block mb-1">নিরাপত্তা ও নীতিমালা:</strong>
+                    <p className="text-[11px] text-amber-800/80 leading-relaxed font-semibold">
+                      নির্ধারিত দিনে আপনার প্রধান ব্যালেন্স থেকে অনুদান কর্তন হবে। ব্যালেন্স অপর্যাপ্ত থাকলে কোনো জরিমানা হবে না এবং পরবর্তী মাসে সিডিউলটি পুনরায় সচল থাকবে।
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer Controls */}
+              <div className="bg-white border-t border-slate-100 p-4 sm:p-6 flex items-center justify-between gap-4 shrink-0 shadow-[0_-4px_20px_rgba(0,0,0,0.03)]">
+                <button
+                  type="button"
+                  disabled={autoDonationSaving}
+                  onClick={() => handleSaveAutoDonation(true)}
+                  className="px-6 py-4 bg-amber-50 hover:bg-amber-100 active:scale-95 text-amber-700 border-2 border-amber-200 font-black text-sm rounded-2xl transition cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  <Zap className="w-4 h-4 fill-amber-500" />
+                  <span>{autoDonationSaving ? 'চলছে...' : 'টেস্ট রান ⚡'}</span>
+                </button>
+
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowAutoDonationModal(false)}
+                    className="px-6 py-4 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-600 font-black text-sm rounded-2xl transition cursor-pointer"
+                  >
+                    বন্ধ করুন
+                  </button>
+                  <button
+                    type="button"
+                    disabled={autoDonationSaving}
+                    onClick={() => handleSaveAutoDonation(false)}
+                    className="px-8 py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-95 text-white font-black text-sm rounded-2xl transition cursor-pointer shadow-lg flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    <Check className="w-5 h-5 text-white stroke-[3]" />
+                    <span>{autoDonationSaving ? 'সংরক্ষণ হচ্ছে...' : 'সিডিউল সংরক্ষণ করুন'}</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ==================== QARD HASANA AUTO-DONATION RECURRING SCHEDULER - Full Screen ==================== */}
+      <AnimatePresence>
+        {showQardAutoDonationModal && (
+          <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden shadow-2xl"
+            >
+              {/* Header - Yellow/Prominent */}
+              <div className="bg-[#004a2c] text-white px-6 py-5 flex items-center justify-between shadow-lg relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 -rotate-45 translate-x-16 -translate-y-16 rounded-full"></div>
+                <div className="flex items-center gap-4 relative z-10">
+                  <div className="w-12 h-12 bg-amber-400 rounded-2xl flex items-center justify-center shadow-lg animate-pulse-slow">
+                    <RefreshCw className="w-7 h-7 text-slate-900 animate-spin" style={{ animationDuration: '8s' }} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black text-amber-300 flex items-center gap-2 leading-tight">
+                      <span>অটো করযে হাসানা</span>
+                      <span className="text-[10px] font-black bg-white text-emerald-800 px-2 py-0.5 rounded-full uppercase tracking-tighter">
+                        QARD
+                      </span>
+                    </h3>
+                    <p className="text-[11px] text-emerald-50 font-bold uppercase tracking-wider">নির্ধারিত তারিখে করযে হাসানা ফান্ডে অটো জমা হবে</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowQardAutoDonationModal(false)}
+                  className="w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/20 rounded-2xl transition-all active:scale-90 relative z-10"
+                >
+                  <X className="w-6 h-6 text-white" />
+                </button>
+              </div>
+
+              {/* Scrollable Body Content */}
+              <div className="flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 space-y-6">
+                {/* Master Activation Toggle Switch */}
+                <div className="bg-white border-2 border-emerald-100 rounded-3xl p-5 flex items-center justify-between gap-4 shadow-sm">
+                  <div className="flex items-center gap-4">
+                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl shrink-0 border-2 transition ${
+                      qardAutoDonationEnabled
+                        ? 'bg-emerald-50 border-emerald-500 text-emerald-600'
+                        : 'bg-slate-50 border-slate-200 text-slate-400'
+                    }`}>
+                      {qardAutoDonationEnabled ? '⚡' : '⏸️'}
+                    </div>
+                    <div className="min-w-0">
+                      <h4 className="text-base sm:text-lg font-black text-slate-800">
+                        স্বয়ংক্রিয় করযে হাসানা দান সচল রাখুন
+                      </h4>
+                      <p className="text-[11px] sm:text-xs text-slate-500 font-medium leading-tight mt-1">
+                        {qardAutoDonationEnabled
+                          ? 'সচল — নির্ধারিত তারিখে ওয়ালেট থেকে করযে হাসানা ফান্ডে টাকা জমা হবে'
+                          : 'বন্ধ — কোনো স্বয়ংক্রিয় অর্থ কর্তন করা হবে না'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setQardAutoDonationEnabled(!qardAutoDonationEnabled)}
+                    className={`w-16 h-8.5 rounded-full p-1 transition-colors duration-200 ease-in-out cursor-pointer relative shrink-0 border-2 ${
+                      qardAutoDonationEnabled
+                        ? 'bg-emerald-600 border-emerald-600 shadow-md'
+                        : 'bg-slate-300 border-slate-300'
+                    }`}
+                  >
+                    <div
+                      className={`w-6.5 h-6.5 rounded-full bg-white shadow-md transform transition-transform duration-200 ease-in-out ${
+                        qardAutoDonationEnabled ? 'translate-x-7.5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Status Notice */}
+                {qardAutoDonationNotice && (
+                  <div className={`p-4 rounded-2xl text-sm font-bold border-2 flex items-center gap-3 ${
+                    qardAutoDonationNotice.includes('সফল')
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-rose-50 text-rose-700 border-rose-200'
+                  }`}>
+                    {qardAutoDonationNotice.includes('সফল') ? (
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                    )}
+                    <span>{qardAutoDonationNotice}</span>
+                  </div>
+                )}
+
+                {/* Frequency Selector Modes */}
+                <div className="space-y-3">
+                  <label className="text-[13px] font-black text-emerald-800 uppercase tracking-widest flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[10px]">১</span>
+                    অনুদানের ফ্রিকোয়েন্সি নির্বাচন করুন
+                  </label>
+                  <div className="grid grid-cols-2 gap-2 bg-emerald-50/50 p-2 rounded-2.5xl border border-emerald-100">
+                    <button
+                      type="button"
+                      onClick={() => setQardAutoDonationFrequency('monthly')}
+                      className={`py-3 px-2 text-xs font-black rounded-2xl transition cursor-pointer text-center flex flex-col items-center gap-1 ${
+                        qardAutoDonationFrequency === 'monthly'
+                          ? 'bg-emerald-600 text-white shadow-lg scale-[1.02]'
+                          : 'text-slate-600 hover:text-emerald-700 hover:bg-emerald-100/50'
+                      }`}
+                    >
+                      <Calendar className="w-5 h-5" />
+                      প্রতি মাসে
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setQardAutoDonationFrequency('custom_monthly')}
+                      className={`py-3 px-2 text-xs font-black rounded-2xl transition cursor-pointer text-center flex flex-col items-center gap-1 ${
+                        qardAutoDonationFrequency === 'custom_monthly'
+                          ? 'bg-emerald-600 text-white shadow-lg scale-[1.02]'
+                          : 'text-slate-600 hover:text-emerald-700 hover:bg-emerald-100/50'
+                      }`}
+                    >
+                      <Sparkles className="w-5 h-5" />
+                      ১২ মাস কাস্টম
+                    </button>
+                  </div>
+                </div>
+
+                {/* Sub-Option A: প্রতি মাসে (Monthly) */}
+                {qardAutoDonationFrequency === 'monthly' && (
+                  <div className="bg-white border border-emerald-100 rounded-3xl p-5 space-y-5 shadow-sm">
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-50 pb-4">
+                      <span className="text-sm font-black text-slate-800">প্রতি মাসের কত তারিখে কাটা হবে?</span>
+                      <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-2xl">
+                        <select
+                          value={qardAutoDonationDay}
+                          onChange={(e) => setQardAutoDonationDay(Number(e.target.value))}
+                          className="bg-transparent text-emerald-700 font-mono font-black text-sm focus:outline-none cursor-pointer"
+                        >
+                          {Array.from({ length: 28 }, (_, i) => i + 1).map((day) => (
+                            <option key={day} value={day} className="bg-white text-slate-900">
+                              {day} তারিখ
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <span className="text-xs font-bold text-slate-500 block uppercase tracking-wider">মাসিক অনুদানের পরিমাণ (টাকা):</span>
+                      <div className="flex items-center bg-slate-50 border-2 border-slate-100 focus-within:border-emerald-500 focus-within:bg-white rounded-2.5xl px-4 py-3.5 transition">
+                        <span className="text-emerald-600 font-black text-xl mr-2">৳</span>
+                        <input
+                          type="number"
+                          min={5}
+                          value={qardAutoDonationAmount || ''}
+                          onChange={(e) => setQardAutoDonationAmount(Math.max(1, Number(e.target.value)))}
+                          className="w-full bg-transparent text-slate-900 font-mono font-black text-2xl focus:outline-none"
+                          placeholder="পরিমাণ লিখুন"
+                        />
+                      </div>
+                      <div className="grid grid-cols-5 gap-2 pt-1">
+                        {[20, 30, 50, 100, 200].map((amt) => (
+                          <button
+                            key={amt}
+                            type="button"
+                            onClick={() => setQardAutoDonationAmount(amt)}
+                            className={`py-2.5 text-xs sm:text-sm font-black rounded-xl border-2 font-mono transition active:scale-95 cursor-pointer ${
+                              qardAutoDonationAmount === amt
+                                ? 'bg-amber-400 text-slate-950 border-amber-400 shadow-md scale-[1.05]'
+                                : 'bg-white text-slate-600 border-slate-100 hover:border-emerald-200'
+                            }`}
+                          >
+                            ৳{amt}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Sub-Option C: ১২ মাস কাস্টম পরিমাণ (Custom Month Amounts) */}
+                {qardAutoDonationFrequency === 'custom_monthly' && (
+                  <div className="bg-white border border-emerald-100 rounded-3xl p-5 space-y-5 shadow-sm">
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-50 pb-4">
+                      <div className="min-w-0">
+                        <span className="text-sm font-black text-slate-800 block">১২ মাসের ভিন্ন ভিন্ন পরিমাণ</span>
+                        <span className="text-[11px] text-slate-500 font-medium block truncate">
+                          প্রতিটি মাসের জন্য কাস্টম করযে হাসানা দান সেট করুন
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-2xl shrink-0">
+                        <select
+                          value={qardAutoDonationDay}
+                          onChange={(e) => setQardAutoDonationDay(Number(e.target.value))}
+                          className="bg-transparent text-emerald-700 font-mono font-black text-sm focus:outline-none cursor-pointer"
+                        >
+                          {Array.from({ length: 28 }, (_, i) => i + 1).map((day) => (
+                            <option key={day} value={day} className="bg-white text-slate-900">
+                              {day} তারিখ
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* 12 Months Grid */}
+                    <div className="grid grid-cols-3 gap-3">
+                      {[
+                        { id: '1', name: 'জানু.' },
+                        { id: '2', name: 'ফেব্রু.' },
+                        { id: '3', name: 'মার্চ' },
+                        { id: '4', name: 'এপ্রিল' },
+                        { id: '5', name: 'মে' },
+                        { id: '6', name: 'জুন' },
+                        { id: '7', name: 'জুলাই' },
+                        { id: '8', name: 'আগস্ট' },
+                        { id: '9', name: 'সেপ্টে.' },
+                        { id: '10', name: 'অক্টো.' },
+                        { id: '11', name: 'নভে.' },
+                        { id: '12', name: 'ডিসে.' },
+                      ].map((m) => (
+                        <div key={m.id} className="bg-emerald-50/30 border border-emerald-100 rounded-2xl p-2.5 space-y-1.5 transition hover:bg-emerald-50">
+                          <span className="text-[10px] font-black text-emerald-800 block truncate text-center uppercase tracking-tighter">
+                            {m.name}
+                          </span>
+                          <div className="flex items-center bg-white border border-emerald-200 focus-within:border-amber-400 rounded-xl px-1.5 py-1.5 shadow-xs transition">
+                            <span className="text-[11px] text-emerald-600 font-bold mr-0.5">৳</span>
+                            <input
+                              type="number"
+                              min={0}
+                              value={qardAutoDonationMonthAmounts[m.id] || ''}
+                              onChange={(e) => {
+                                const val = Math.max(0, Number(e.target.value));
+                                setQardAutoDonationMonthAmounts(prev => ({
+                                  ...prev,
+                                  [m.id]: val
+                                }));
+                              }}
+                              className="w-full bg-transparent text-slate-900 font-mono font-black text-xs focus:outline-none text-center"
+                              placeholder="৫০"
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Privacy & Anonymous Checkbox */}
+                <label className="flex items-center gap-3 bg-white border border-slate-100 hover:border-emerald-200 rounded-3xl px-5 py-4 cursor-pointer transition select-none group shadow-sm">
+                  <input
+                    type="checkbox"
+                    checked={qardAutoDonationAnonymous}
+                    onChange={(e) => setQardAutoDonationAnonymous(e.target.checked)}
+                    className="w-5 h-5 accent-emerald-600 rounded-lg cursor-pointer shrink-0"
+                  />
+                  <div className="min-w-0 text-left">
+                    <span className="text-sm font-black text-slate-800 block leading-tight group-hover:text-emerald-700 transition">
+                      স্বয়ংক্রিয় করযে হাসানাতেও পরিচয় গোপন রাখুন
+                    </span>
+                    <span className="text-[10px] text-slate-500 block leading-tight mt-1.5 font-medium">
+                      অনলাইন খতিয়ান ও তালিকায় আপনার নাম গোপন থাকবে
+                    </span>
+                  </div>
+                </label>
+
+                {/* Helpful Reminder Note */}
+                <div className="bg-amber-50 border border-amber-200 rounded-3xl p-5 flex items-start gap-4 shadow-inner">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center shrink-0 shadow-sm">
+                    <ShieldCheck className="w-6 h-6" />
+                  </div>
+                  <div className="flex-1">
+                    <strong className="text-amber-900 font-black text-sm block mb-1">নিরাপত্তা ও নীতিমালা:</strong>
+                    <p className="text-[11px] text-amber-800/80 leading-relaxed font-semibold">
+                      নির্ধারিত দিনে আপনার প্রধান ব্যালেন্স থেকে করযে হাসানা দান কর্তন হবে। ব্যালেন্স অপর্যাপ্ত থাকলে কোনো জরিমানা হবে না এবং পরবর্তী মাসে সিডিউলটি পুনরায় সচল থাকবে।
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer Controls */}
+              <div className="bg-white border-t border-slate-100 p-4 sm:p-6 flex items-center justify-between gap-4 shrink-0 shadow-[0_-4px_20px_rgba(0,0,0,0.03)]">
+                <button
+                  type="button"
+                  disabled={qardAutoDonationSaving}
+                  onClick={() => handleSaveQardAutoDonation(true)}
+                  className="px-6 py-4 bg-amber-50 hover:bg-amber-100 active:scale-95 text-amber-700 border-2 border-amber-200 font-black text-sm rounded-2xl transition cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  <Zap className="w-4 h-4 fill-amber-500" />
+                  <span>{qardAutoDonationSaving ? 'চলছে...' : 'টেস্ট রান ⚡'}</span>
+                </button>
+
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowQardAutoDonationModal(false)}
+                    className="px-6 py-4 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-600 font-black text-sm rounded-2xl transition cursor-pointer"
+                  >
+                    বন্ধ করুন
+                  </button>
+                  <button
+                    type="button"
+                    disabled={qardAutoDonationSaving}
+                    onClick={() => handleSaveQardAutoDonation(false)}
+                    className="px-8 py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-95 text-white font-black text-sm rounded-2xl transition cursor-pointer shadow-lg flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    <Check className="w-5 h-5 text-white stroke-[3]" />
+                    <span>{qardAutoDonationSaving ? 'সংরক্ষণ হচ্ছে...' : 'সিডিউল সংরক্ষণ করুন'}</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
       </AnimatePresence>
 
       {/* ==================== REPAYMENT FULL-SCREEN PORTAL (টাকা/ঋণ পরিশোধ ও অন্যের কিস্তি পরিশোধ) ==================== */}
       <AnimatePresence>
         {showRepayModal && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-slate-900/90 z-[10000] flex flex-col w-full h-full min-h-screen overflow-hidden font-sans text-slate-800"
-          >
-            <motion.div 
-              initial={{ y: 20 }}
+          <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
+            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            <motion.div
+              initial={{ y: "100%" }}
               animate={{ y: 0 }}
-              exit={{ y: 20 }}
-              className="bg-white w-full h-full flex flex-col overflow-hidden"
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden shadow-2xl"
             >
-              {/* Full-Screen Top Navigation Bar */}
-              <div className="bg-gradient-to-r from-emerald-700 via-teal-700 to-emerald-800 text-white px-4 py-3.5 flex items-center justify-between shrink-0 shadow-md">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-2xl bg-white/20 flex items-center justify-center text-white shrink-0">
-                    <Zap className="w-5 h-5 text-amber-300" />
+              {/* Header */}
+              <div className="bg-[#004a2c] text-white px-6 py-5 flex items-center justify-between shadow-lg">
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 bg-white/10 rounded-2xl flex items-center justify-center backdrop-blur-md">
+                    <Zap className="w-6 h-6 text-amber-300" />
                   </div>
                   <div>
-                    <h2 className="text-sm sm:text-base font-black text-white leading-tight">
-                      করযে হাসানা টাকা / ঋণ পরিশোধ কেন্দ্র
-                    </h2>
-                    <p className="text-[10.5px] text-emerald-100 font-semibold">
-                      শুধুমাত্র করযে হাসানা সুদমুক্ত ঋণ ও কিস্তি পরিশোধের জন্য নিবেদিত
-                    </p>
+                    <h3 className="text-base font-black text-white leading-tight">করযে হাসানা পরিশোধ কেন্দ্র</h3>
+                    <p className="text-[11px] text-emerald-100/80 font-bold uppercase tracking-wider">ঋণ ও কিস্তি পরিশোধের জন্য নিবেদিত</p>
                   </div>
                 </div>
                 <button 
@@ -5642,10 +7623,9 @@ BNB Business Co-operative Welfare Fund
                     setRepaySubTab('my_loan');
                     setShowRepayModal(false);
                   }}
-                  className="px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-xl text-xs font-black transition active:scale-95 cursor-pointer flex items-center gap-1"
+                  className="w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/20 rounded-2xl transition-all active:scale-90"
                 >
-                  <X className="w-4 h-4" />
-                  <span>বন্ধ করুন</span>
+                  <X className="w-6 h-6 text-white" />
                 </button>
               </div>
 
@@ -6170,7 +8150,7 @@ BNB Business Co-operative Welfare Fund
               </div>
 
             </motion.div>
-          </motion.div>
+          </div>
         )}
       </AnimatePresence>
         </div>
