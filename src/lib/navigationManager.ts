@@ -16,31 +16,45 @@ class NavigationManager {
   private isProcessingBack = false;
   private lastHandledTick = 0;
   private lastNativeBackTick = 0;
+  private lastPopStateTick = 0;
   private trapArmed = false;
+  private backBlocked = false;
+  private isIgnoringNextPopState = false;
 
   constructor() {
     this.armBrowserHistoryTrap();
   }
 
-  public setExitConfirmCallback(cb: (show: boolean) => void) {
+  public setExitConfirmCallback(cb: ((show: boolean) => void) | null) {
     this.showExitConfirmCallback = cb;
   }
 
-  public setExitToastCallback(cb: (show: boolean) => void) {
+  public setExitToastCallback(cb: ((show: boolean) => void) | null) {
     this.showExitToastCallback = cb;
   }
 
   /**
-   * Arm the browser history trap with a stable 2-step state:
-   * Base state { amb_root: true } -> Active state { amb_active: true }
-   * When Android back gesture or browser back occurs, popstate fires and we immediately re-arm.
+   * Blocks or unblocks all back navigation while a payment or transaction is processing.
+   */
+  public setBackBlocked(blocked: boolean) {
+    this.backBlocked = Boolean(blocked);
+  }
+
+  public isBackBlocked(): boolean {
+    return this.backBlocked;
+  }
+
+  /**
+   * Single owner of browser history:
+   * Arms a single stable 2-step history trap ({ amb_root: true } -> { amb_active: true }).
    */
   public armBrowserHistoryTrap() {
     if (typeof window !== 'undefined' && window.history) {
       try {
         if (!this.trapArmed) {
-          window.history.replaceState({ amb_root: true }, '');
-          window.history.pushState({ amb_active: true }, '');
+          const currentPath = window.location.pathname + window.location.search + window.location.hash;
+          window.history.replaceState({ amb_root: true }, '', currentPath);
+          window.history.pushState({ amb_active: true }, '', currentPath);
           this.trapArmed = true;
         }
       } catch (e) {
@@ -50,41 +64,58 @@ class NavigationManager {
   }
 
   /**
-   * Re-arms history state on gesture pop
+   * Resets the browser history trap cleanly (e.g. on login, logout, or returning home from payment result)
+   * so the user cannot navigate back to Login after logging in, or back into inner screens after logging out.
    */
-  public rearmHistory() {
+  public resetHistoryTrap(targetUrl?: string) {
     if (typeof window !== 'undefined' && window.history) {
       try {
-        window.history.pushState({ amb_active: true }, '');
+        const url = targetUrl || (window.location.pathname + window.location.search + window.location.hash);
+        window.history.replaceState({ amb_root: true }, '', url);
+        window.history.pushState({ amb_active: true }, '', url);
+        this.trapArmed = true;
       } catch (e) {}
     }
   }
 
   /**
-   * Pushes a history entry for section or tab navigation
+   * Re-arms the single history trap entry only when popstate popped off amb_active.
    */
-  public pushNavigationState(type: string, id: string) {
+  public rearmHistory() {
     if (typeof window !== 'undefined' && window.history) {
       try {
-        window.history.pushState({ bnb_nav: type, id, ts: Date.now() }, '');
+        if (!window.history.state || !window.history.state.amb_active) {
+          const currentPath = window.location.pathname + window.location.search + window.location.hash;
+          window.history.pushState({ amb_active: true }, '', currentPath);
+        }
+        this.trapArmed = true;
       } catch (e) {}
+    }
+  }
+
+  /**
+   * Does NOT push duplicate browser history entries; keeps history under single trap ownership.
+   */
+  public pushNavigationState(_type: string, _id: string) {
+    if (!this.trapArmed) {
+      this.armBrowserHistoryTrap();
     }
   }
 
   /**
    * Register a BackHandler in LIFO (stack) order.
-   * Priority can be used if higher priority handlers should run first.
    * Priority hierarchy:
    *  95-100: Exit confirmation modal / alert
-   *  70-90:  Full modals / Dialogs / Location / PIN prompt / Drawer
-   *  30-40:  Sub-views / Sections (one of 12 sections)
-   *  15-20:  Tab History (step-by-step)
-   *  10:     Default fallback
+   *  70-90:  Full modals / Dialogs / Location / PIN prompt / Payment Notice / Drawer
+   *  50:     Admin Panel
+   *  30-40:  Dashboard modals
+   *  25-30:  Sub-views / Internal tabs inside one of 12 sections
+   *  18:     Active Service Section close (modalStack pop)
+   *  15:     Tab History step-by-step back
    */
   public register(handler: BackHandler, priority = 10): () => void {
     const id = 'h_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now();
     this.handlers.push({ id, handler, priority });
-    // Sort by priority ascending so highest priority is at the end of the array (LIFO)
     this.handlers.sort((a, b) => a.priority - b.priority);
 
     return () => {
@@ -100,10 +131,18 @@ class NavigationManager {
    * Handles browser popstate event (e.g. from Android edge gesture or browser back).
    */
   public handlePopState() {
+    if (this.isIgnoringNextPopState) {
+      this.isIgnoringNextPopState = false;
+      this.rearmHistory();
+      return;
+    }
+
     this.rearmHistory();
     const now = Date.now();
-    // If native back button fired in the last 400ms, ignore duplicate popstate
-    if (now - this.lastNativeBackTick < 400) {
+    this.lastPopStateTick = now;
+
+    // If native Capacitor backButton already fired in the last 450ms, ignore duplicate popstate
+    if (now - this.lastNativeBackTick < 450) {
       return;
     }
     this.handleBack('browser');
@@ -112,21 +151,31 @@ class NavigationManager {
   /**
    * Execute global back action.
    * Returns:
-   *  true -> Handled internally (modal closed, subpage returned, tab switched, or exit confirmation shown)
-   *  false -> Root exit confirmed
+   *  true  -> Handled internally (or blocked during transaction processing)
+   *  false -> Nothing left to go back to (at Root Home / Standalone Admin root), caller should exit app
    */
   public handleBack(source = 'unknown'): boolean {
     const now = Date.now();
 
     if (source === 'capacitor' || source === 'native') {
+      // If popstate already handled this exact press within 450ms, do not run twice
+      if (now - this.lastPopStateTick < 450) {
+        this.lastNativeBackTick = now;
+        return true;
+      }
       this.lastNativeBackTick = now;
     }
 
-    // Debounce rapid duplicate hardware vibrations / bounce (250ms window)
+    // Debounce rapid duplicate hardware bounce (250ms window)
     if (now - this.lastHandledTick < 250) {
       return true;
     }
     this.lastHandledTick = now;
+
+    // Ignore back completely while payment/transaction is processing
+    if (this.backBlocked) {
+      return true;
+    }
 
     if (this.isProcessingBack) return true;
     this.isProcessingBack = true;
@@ -138,7 +187,6 @@ class NavigationManager {
         try {
           const handled = item.handler();
           if (handled) {
-            // Handled by active sub-modal, tab, or sub-page!
             return true;
           }
         } catch (err) {
@@ -146,26 +194,23 @@ class NavigationManager {
         }
       }
 
-      // 2. If we reach here, we are on the Root Home Screen with no modals or sections open
-      return this.handleHomeScreenExit();
+      // 2. Reached Root (Home Screen): return false so Capacitor backButton can call CapApp.exitApp()
+      return this.handleHomeScreenExit(source);
     } finally {
       this.isProcessingBack = false;
     }
   }
 
   /**
-   * Handles root Home Screen back press:
-   * Displays the "অ্যাপ থেকে বের হতে চান?" confirmation modal.
-   * The app will ONLY close if the user explicitly confirms "হ্যাঁ".
+   * Handles root Home Screen back press.
+   * Returns false when no exit modal callback overrides it, allowing CapApp.exitApp() on native Android.
    */
-  public handleHomeScreenExit(): boolean {
-    if (this.showExitConfirmCallback) {
+  public handleHomeScreenExit(source = 'unknown'): boolean {
+    if (this.showExitConfirmCallback && source === 'browser') {
       this.showExitConfirmCallback(true);
       return true;
     }
-
-    // Fallback if no modal callback registered
-    return true;
+    return false;
   }
 }
 
@@ -195,4 +240,17 @@ export function useBackHandler(handler: BackHandler, active = true, priority = 1
       unregister();
     };
   }, [active, priority]);
+}
+
+/**
+ * React Hook for blocking back navigation while a transaction/payment is submitting.
+ */
+export function useBackBlock(blocked: boolean) {
+  useEffect(() => {
+    if (!blocked) return;
+    navigationManager.setBackBlocked(true);
+    return () => {
+      navigationManager.setBackBlocked(false);
+    };
+  }, [blocked]);
 }

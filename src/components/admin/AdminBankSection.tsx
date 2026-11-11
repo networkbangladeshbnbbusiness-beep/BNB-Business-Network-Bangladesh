@@ -967,8 +967,9 @@ return (
 
                 await updateDoc(doc(db, 'users', targetUser.uid), { balance: finalBal, mainBalance: finalBal });
 
-                await addDoc(collection(db, 'transactions'), {
-                  id: `tx-voucher-${Date.now()}`,
+                const txId = `tx-voucher-${targetUser.uid}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+                await setDoc(doc(db, 'transactions', txId), {
+                  id: txId,
                   userId: targetUser.uid,
                   userName: targetUser.name,
                   memberId: targetUser.memberId,
@@ -981,7 +982,9 @@ return (
                   description: description
                 });
 
-                await addDoc(collection(db, 'user_notifications'), {
+                const notifId = `notif-voucher-${targetUser.uid}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+                await setDoc(doc(db, 'user_notifications', notifId), {
+                  id: notifId,
                   userId: targetUser.uid,
                   memberId: targetUser.memberId,
                   title: notifTitle,

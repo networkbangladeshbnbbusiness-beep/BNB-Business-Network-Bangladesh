@@ -1437,7 +1437,25 @@ export default function App() {
     navigationManager.setExitConfirmCallback(setShowExitConfirmModal);
   }, []);
 
-  // Top-level App layer back handlers (Priority order: Exit Confirm > Modal overlays > Drawers > Admin > Tab History)
+  // Block back navigation while payment session is restoring or verifying
+  useEffect(() => {
+    const isPaymentVerifying = Boolean(isRestoringPaymentSession || paymentNotice?.status === 'verifying');
+    navigationManager.setBackBlocked(isPaymentVerifying);
+  }, [isRestoringPaymentSession, paymentNotice?.status]);
+
+  // Reset history trap on login/logout transition so user cannot go back to Login after login, or back to inner screens after logout
+  const prevLoggedInRef = useRef<boolean>(Boolean(currentUser));
+  useEffect(() => {
+    const isNowLoggedIn = Boolean(currentUser);
+    if (prevLoggedInRef.current !== isNowLoggedIn) {
+      prevLoggedInRef.current = isNowLoggedIn;
+      setTabHistory(['home']);
+      setSelectedAction(null);
+      navigationManager.resetHistoryTrap();
+    }
+  }, [currentUser]);
+
+  // Top-level App layer back handlers (Priority order: Exit Confirm > Modal overlays > Drawers > Admin > Section > Tab History -> Root Home)
   useBackHandler(() => {
     if (showExitConfirmModal) {
       setShowExitConfirmModal(false);
@@ -1471,11 +1489,19 @@ export default function App() {
     return false;
   }, showAdminPinModal, 80);
 
+  // Payment result screen back -> directly to Home (not back to payment form); ignored while verifying
   useBackHandler(() => {
     if (paymentNotice) {
+      if (paymentNotice.status === 'verifying') {
+        return true;
+      }
       setPaymentNotice(null);
       setTabHistory(['home']);
       setSelectedAction(null);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('bnb_force_return_to_dashboard'));
+      }
+      navigationManager.resetHistoryTrap();
       return true;
     }
     return false;
@@ -1501,6 +1527,10 @@ export default function App() {
           return true;
         }
       }
+      // In standalone admin mode (/admin or ?app=admin), never bounce out to the member app on root back
+      if (isStandaloneAdminRoute()) {
+        return false;
+      }
       setAdminOpen(false);
       return true;
     }
@@ -1525,7 +1555,12 @@ export default function App() {
 
     try {
       CapApp.addListener('backButton', () => {
-        navigationManager.handleBack('capacitor');
+        const handledInternally = navigationManager.handleBack('capacitor');
+        if (!handledInternally) {
+          try {
+            CapApp.exitApp();
+          } catch (e) {}
+        }
       }).then(listener => {
         capListener = listener;
       }).catch(() => {});
@@ -1719,23 +1754,12 @@ export default function App() {
       changed = true;
     }
 
-    // Retain Samity status only if explicitly approved or admin
-    if (
-      updatedUser.role === 'admin' ||
-      updatedUser.role === 'sub_admin'
-    ) {
-      if (updatedUser.samityStatus !== 'approved') {
-        updatedUser.samityStatus = 'approved';
-        changed = true;
-      }
-    }
-
     if (changed) {
       try {
         await updateDoc(doc(db, 'users', user.uid), {
           memberId: updatedUser.memberId,
           isDemo: updatedUser.isDemo ?? false,
-          samityStatus: updatedUser.samityStatus || 'pending'
+          samityStatus: updatedUser.samityStatus || 'none'
         });
       } catch (e: any) {
         // Ignore non-critical metadata sync errors
@@ -2246,6 +2270,19 @@ export default function App() {
     setPreferRegister(toRegister);
     setShowLocationModal(false);
 
+    // 1.5. Clear transaction cache items
+    try {
+      const keysToRemove = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('amb_tx_cache_')) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(key => localStorage.removeItem(key));
+    } catch (e) {}
+
+
     // 2. Perform background cleanup
     if (uid && isOwnerDevice) {
       updateDoc(doc(db, 'users', uid), {
@@ -2415,12 +2452,11 @@ export default function App() {
               <AdminPanel 
                 currentUser={currentUser} 
                 onBack={() => {
-                  sessionStorage.removeItem('amb_admin_active_view');
-                  if (typeof window !== 'undefined' && (window.location.pathname.toLowerCase().startsWith('/admin') || window.location.search.includes('standalone=1'))) {
-                    try {
-                      window.history.replaceState({}, '', '/');
-                    } catch (e) {}
+                  if (isStandaloneAdminRoute()) {
+                    setShowExitConfirmModal(true);
+                    return;
                   }
+                  sessionStorage.removeItem('amb_admin_active_view');
                   setAdminOpen(false);
                 }} 
                 appConfig={appConfig}

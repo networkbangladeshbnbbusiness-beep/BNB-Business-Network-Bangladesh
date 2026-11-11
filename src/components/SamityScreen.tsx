@@ -4,6 +4,7 @@ import { processUserSamitySavingsAutoDeduction, getUnpaidSamityMonths, isUserMon
 import { db } from '../lib/firebase';
 import SamityAdmin from './SamityAdmin';
 import SamityInvestmentsView from './SamityInvestmentsView';
+import SamityRequestForm from './SamityRequestForm';
 import UnifiedBackButton from './UnifiedBackButton';
 import { BNBPaymentReceiptModal, PaymentReceiptData } from './BNBPaymentReceiptModal';
 import { verifyUserPin } from '../lib/memberUtils';
@@ -2041,15 +2042,32 @@ export const SamityScreen = React.memo(function SamityScreen({
     try {
       const userRef = doc(db, 'users', targetUser.uid);
       const mId = targetUser.memberId || autoGenerateMemberId();
-      await updateDoc(userRef, {
+      const heldInstallment = Number(targetUser.samityApplicationInstallmentAmount) || 0;
+      const alreadyCredited = Boolean((targetUser as any).samityFirstInstallmentCredited);
+      const currentSavings = Number(targetUser.savings) || 0;
+      const currentDps = Number(targetUser.dpsBalance !== undefined ? targetUser.dpsBalance : currentSavings) || 0;
+
+      const userUpdatePayload: Record<string, any> = {
         memberId: mId,
-        samityStatus: 'approved'
-      });
+        samityStatus: 'approved',
+        samityApproved: true,
+        isSamityMember: true,
+        samityAppliedAt: targetUser.samityAppliedAt || new Date().toISOString()
+      };
+
+      if (heldInstallment > 0 && !alreadyCredited) {
+        userUpdatePayload.savings = currentSavings + heldInstallment;
+        userUpdatePayload.dpsBalance = currentDps + heldInstallment;
+        userUpdatePayload.samityFirstInstallmentCredited = true;
+      }
+
+      await updateDoc(userRef, userUpdatePayload);
 
       try {
         await updateDoc(doc(db, 'samity_applications', targetUser.uid), {
           status: 'approved',
           samityStatus: 'approved',
+          approved: true,
           approvedAt: new Date().toISOString()
         });
       } catch (e) {
@@ -2078,14 +2096,30 @@ export const SamityScreen = React.memo(function SamityScreen({
       async () => {
         try {
           const userRef = doc(db, 'users', targetUser.uid);
-          await updateDoc(userRef, {
-            samityStatus: 'rejected'
-          });
+          const heldInstallment = Number(targetUser.samityApplicationInstallmentAmount) || 0;
+          const alreadyCredited = Boolean((targetUser as any).samityFirstInstallmentCredited);
+          const currentMainBal = Number(targetUser.balance !== undefined ? targetUser.balance : targetUser.mainBalance) || 0;
+
+          const rejectUpdatePayload: Record<string, any> = {
+            samityStatus: 'rejected',
+            samityApproved: false,
+            isSamityMember: false
+          };
+
+          if (targetUser.samityStatus === 'pending' && heldInstallment > 0 && !alreadyCredited) {
+            const refundedBal = currentMainBal + heldInstallment;
+            rejectUpdatePayload.balance = refundedBal;
+            rejectUpdatePayload.mainBalance = refundedBal;
+            rejectUpdatePayload.samityApplicationInstallmentAmount = 0;
+          }
+
+          await updateDoc(userRef, rejectUpdatePayload);
 
           try {
             await updateDoc(doc(db, 'samity_applications', targetUser.uid), {
               status: 'rejected',
               samityStatus: 'rejected',
+              approved: false,
               rejectedAt: new Date().toISOString()
             });
           } catch (e) {
@@ -2095,7 +2129,7 @@ export const SamityScreen = React.memo(function SamityScreen({
           await addDoc(collection(db, 'user_notifications'), {
             userId: targetUser.uid,
             title: '⚠️ সমবায় সদস্যপদ আবেদন সংক্রান্ত বার্তা',
-            message: `সম্মানিত ${targetUser.name}, আপনার সমবায় সমিতির সদস্যপদ আবেদনটি বর্তমানে মঞ্জুর করা সম্ভব হয়নি। অনুগ্রহ করে বিস্তারিত জানতে এডমিন সাপোর্ট টিমে যোগাযোগ করুন।`,
+            message: `সম্মানিত ${targetUser.name}, আপনার সমবায় সমিতির সদস্যপদ আবেদনটি বর্তমানে মঞ্জুর করা সম্ভব হয়নি। ১ম কিস্তির হোল্ডকৃত টাকা আপনার মেইন ব্যালেন্সে ফেরত দেওয়া হয়েছে।`,
             type: 'samity_rejected',
             read: false,
             createdAt: new Date().toISOString()
@@ -2481,6 +2515,11 @@ export const SamityScreen = React.memo(function SamityScreen({
       return;
     }
 
+    if (depositPurpose === 'savings' && amt < 500) {
+      setFormError('⚠️ BNB কোম্পানি ইনভেস্টর সেকশনে সর্বনিম্ন ইনভেস্টমেন্ট ৳৫০০ টাকা হতে হবে।');
+      return;
+    }
+
     const currentBal = getEffectiveBalance(user);
     if (currentBal < amt) {
       setFormError(`দুঃখিত! আপনার মেইন ব্যালেন্স পর্যাপ্ত নয়। আপনার বর্তমান মেইন ব্যালেন্স ৳${currentBal.toLocaleString('bn-BD')} BDT.`);
@@ -2570,6 +2609,11 @@ export const SamityScreen = React.memo(function SamityScreen({
 
     if (!amountToDeposit || isNaN(amountToDeposit) || amountToDeposit <= 0) {
       setFormError('দয়া করে সঠিক জমার পরিমাণ প্রদান করুন।');
+      return;
+    }
+
+    if (amountToDeposit < 500) {
+      setFormError('⚠️ BNB কোম্পানি ইনভেস্টর সেকশনে সর্বনিম্ন ইনভেস্টমেন্ট ৳৫০০ টাকা হতে হবে।');
       return;
     }
 
@@ -2838,8 +2882,8 @@ export const SamityScreen = React.memo(function SamityScreen({
     setFormError('');
     setFormSuccess('');
     
-    if (selectedInvestmentAmount < 500 || selectedInvestmentAmount > 5000) {
-      setFormError('বিনিযোগের পরিমাণ সর্বনিম্ন 500 টাকা এবং সর্বোচ্চ 5,000 টাকা হতে হবে।');
+    if (selectedInvestmentAmount < 500) {
+      setFormError('⚠️ BNB কোম্পানি ইনভেস্টর সেকশনে সর্বনিম্ন ইনভেস্টমেন্ট ৳৫০০ টাকা হতে হবে।');
       return;
     }
     
@@ -3319,6 +3363,108 @@ export const SamityScreen = React.memo(function SamityScreen({
     if (!showBalance) return '••••••';
     return `৳ ${val.toLocaleString('bn-BD')}`;
   };
+
+  // Membership Gatekeeper Check for Samity Section
+  const hasSubmittedSamityApplication = Boolean(
+    effectiveUser.samityAppliedAt ||
+    Number(effectiveUser.samityApplicationInstallmentAmount) > 0 ||
+    Number(effectiveUser.savings) > 0 ||
+    Number(effectiveUser.dpsBalance) > 0
+  );
+
+  const isApprovedSamityMember = Boolean(
+    isAdminView ||
+    (hasSubmittedSamityApplication &&
+      effectiveUser.samityStatus === 'approved' &&
+      effectiveUser.samityApproved !== false)
+  );
+
+  const isSamityPending = Boolean(
+    !isApprovedSamityMember &&
+    hasSubmittedSamityApplication &&
+    effectiveUser.samityStatus === 'pending'
+  );
+
+  if (!isApprovedSamityMember) {
+    if (isSamityPending) {
+      return (
+        <div className="min-h-screen bg-[#0b6623] text-slate-800 font-sans flex flex-col relative">
+          <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-safe pb-3.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-20 flex items-center justify-between">
+            <UnifiedBackButton onClick={onBack} variant="dark" title="পিছনে যান" />
+            <span className="text-sm font-black text-white font-sans">সমবায় সমিতি অনলাইন পোর্টাল</span>
+            <div className="w-8" />
+          </header>
+          <div className="flex-1 max-w-lg mx-auto w-full p-4 sm:p-6 flex flex-col justify-center text-center space-y-5 my-auto">
+            <div className="bg-white border border-emerald-100 rounded-3xl p-6 sm:p-8 space-y-4 shadow-xl">
+              <div className="w-16 h-16 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-center text-amber-600 mx-auto shadow-inner animate-pulse">
+                <Hourglass className="w-9 h-9" />
+              </div>
+              <span className="inline-block bg-amber-100 text-amber-900 border border-amber-300 font-black text-[10px] px-3 py-1 rounded-full uppercase tracking-wider">
+                ⌛ সমবায় সদস্যপদ আবেদন পর্যালোচনায় রয়েছে
+              </span>
+              <h2 className="text-base font-black text-slate-900 leading-tight">
+                আপনার আবেদনটি সাবমিট হয়েছে এবং এডমিন অনুমোদনের অপেক্ষায় আছে
+              </h2>
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-left text-xs space-y-2">
+                <div className="flex justify-between border-b border-slate-200 pb-1.5">
+                  <span className="text-slate-500 font-medium">সদস্যের নাম:</span>
+                  <span className="font-bold text-slate-800">{effectiveUser.name}</span>
+                </div>
+                <div className="flex justify-between border-b border-slate-200 pb-1.5">
+                  <span className="text-slate-500 font-medium">মোবাইল নম্বর:</span>
+                  <span className="font-bold font-mono text-slate-800">{effectiveUser.phone}</span>
+                </div>
+                <div className="flex justify-between border-b border-slate-200 pb-1.5">
+                  <span className="text-slate-500 font-medium">মাসিক ইনভেস্টমেন্ট / ডিপোজিট হার:</span>
+                  <span className="font-extrabold text-emerald-800">
+                    ৳{(effectiveUser.monthlySavingsTarget || effectiveUser.samityApplicationInstallmentAmount || 500).toLocaleString('bn-BD')} / মাস
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-medium">১ম মাসের জমা দেওয়া ইনভেস্টমেন্ট:</span>
+                  <span className="font-extrabold text-emerald-700 font-mono">
+                    ৳{(effectiveUser.samityApplicationInstallmentAmount || effectiveUser.monthlySavingsTarget || 500).toLocaleString('bn-BD')}
+                  </span>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-600 leading-relaxed font-sans">
+                আপনার মেইন ব্যালেন্স হতে ১ম মাসের ইনভেস্টমেন্ট কিস্তি কেটে হোল্ড রাখা হয়েছে। এডমিন প্যানেল আপনার এনআইডি ও নমিনি তথ্য যাচাই করার পর সদস্যপদ চূড়ান্ত অনুমোদন দেবে।
+              </p>
+              <div className="pt-2 flex flex-col sm:flex-row gap-2.5">
+                <button
+                  type="button"
+                  onClick={onBack}
+                  className="flex-1 py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition border border-slate-200 cursor-pointer"
+                >
+                  হোমে ফিরে যান
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="min-h-screen bg-[#0b6623] text-slate-800 font-sans flex flex-col relative">
+        <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-safe pb-3.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-20 flex items-center justify-between">
+          <UnifiedBackButton onClick={onBack} variant="dark" title="পিছনে যান" />
+          <span className="text-sm font-black text-white font-sans">BNB কোম্পানি ইনভেস্টর আবেদন ফরম</span>
+          <div className="w-8" />
+        </header>
+        <div className="flex-1 max-w-xl mx-auto w-full px-3 py-4 overflow-y-auto">
+          <SamityRequestForm
+            user={effectiveUser}
+            appConfig={(appConfig || { appName: 'BNB' }) as AppConfig}
+            onClose={onBack}
+            onSubmitSuccess={() => {
+              if (syncLiveProfile) syncLiveProfile();
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#0b6623] text-slate-800 font-sans flex flex-col relative" id="samity-screen-root">
@@ -5617,9 +5763,9 @@ export const SamityScreen = React.memo(function SamityScreen({
 
                 {/* Quick Deposit Buttons */}
                 <div className="space-y-1.5">
-                  <span className="block text-[9.5px] text-slate-400 font-extrabold uppercase">দ্রুত পরিমাণ নির্বাচন করুনঃ</span>
+                  <span className="block text-[9.5px] text-slate-400 font-extrabold uppercase">দ্রুত পরিমাণ নির্বাচন করুন (সর্বনিম্ন ৳৫০০):</span>
                   <div className="grid grid-cols-5 gap-1.5">
-                    {[10, 50, 100, 200, 500].map((amount) => (
+                    {[500, 1000, 2000, 5000, 10000].map((amount) => (
                       <button
                         key={amount}
                         type="button"
@@ -5630,7 +5776,7 @@ export const SamityScreen = React.memo(function SamityScreen({
                             : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
                         }`}
                       >
-                        ৳{amount}
+                        ৳{amount.toLocaleString('bn-BD')}
                       </button>
                     ))}
                   </div>
@@ -5638,12 +5784,13 @@ export const SamityScreen = React.memo(function SamityScreen({
 
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-[9.5px] text-slate-400 font-extrabold uppercase mb-1">অথবা কাস্টম পরিমাণ (৳):</label>
+                    <label className="block text-[9.5px] text-slate-400 font-extrabold uppercase mb-1">অথবা কাস্টম পরিমাণ (সর্বনিম্ন ৳৫০০):</label>
                     <input
                       type="number"
+                      min="500"
                       value={customDepositAmount}
                       onChange={(e) => setCustomDepositAmount(e.target.value)}
-                      placeholder="৳ জমার পরিমাণ লিখুন"
+                      placeholder="৳ জমার পরিমাণ লিখুন (সর্বনিম্ন ৫০০ টাকা)"
                       className="w-full bg-slate-50 border border-slate-200 p-2.5 rounded-xl text-xs text-slate-805 font-bold focus:outline-none focus:bg-white focus:border-amber-500"
                     />
                   </div>

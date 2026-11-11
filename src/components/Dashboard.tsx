@@ -5,7 +5,7 @@ import { isUserQuarterlyPaid } from '../lib/samitySavingsEngine';
 import { sortTransactionsNewestFirst } from '../lib/transactionUtils';
 import UserTransactionsStatement, { getTxTimestamp, formatTxDate, getNormalizedStatus } from './UserTransactionsStatement';
 import { BNBPaymentReceiptModal } from './BNBPaymentReceiptModal';
-import { NotificationInboxModal } from './NotificationInboxModal';
+import { NotificationInboxModal, isGeneralTransactionNotif } from './NotificationInboxModal';
 import { BNBVirtualAssistant } from './BNBVirtualAssistant';
 import TransactionExchangeIcon from './TransactionExchangeIcon';
 import { filterTransactionsLast60Days, cleanupExpiredTransactions } from '../lib/transactionCleanup';
@@ -1056,6 +1056,16 @@ const getTxt = (key: string, fallback: string) => {
   const [newPushBody, setNewPushBody] = useState('');
   const [livePushToast, setLivePushToast] = useState<{ id: string; title: string; body: string } | null>(null);
 
+  // Auto-dismiss top floating push notification toast after 3 seconds (3000ms)
+  useEffect(() => {
+    if (livePushToast) {
+      const timer = setTimeout(() => {
+        setLivePushToast(null);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [livePushToast]);
+
   // Forms modal toggling & stack
   const [modalStack, setModalStack] = useState<string[]>([]);
   const modalType = (modalStack.length > 0 ? modalStack[modalStack.length - 1] : null) as 'deposit' | 'loan' | 'telecom' | 'shop' | 'withdraw' | 'members' | 'notices' | 'invest' | 'bank' | 'total_money' | 'samity' | 'qard' | 'agent' | 'about' | 'chat' | 'safedeals' | 'safi' | 'ration' | 'salary' | 'bill_pay' | 'auto_recharge' | 'edu' | 'exchange' | 'courier' | 'hisab' | null;
@@ -1367,7 +1377,13 @@ const getTxt = (key: string, fallback: string) => {
       if (txDebounceTimer) clearTimeout(txDebounceTimer);
       txDebounceTimer = setTimeout(() => {
         const mergedMap = new Map<string, Transaction>();
-        [
+        const userTargetUids = new Set([
+          user.uid,
+          (user as any).id,
+          (user as any).docId
+        ].filter(Boolean));
+
+        const allDocs = [
           ...txListByUid,
           ...txListByMember,
           ...txListByUserPhone,
@@ -1375,12 +1391,40 @@ const getTxt = (key: string, fallback: string) => {
           ...txListByReceiverPhone,
           ...txListByReceiverUid,
           ...txListByReceiverId
-        ].forEach((tx) => {
+        ];
+
+        // Track TrxIDs for documents created directly for this logged-in user (where userId matches user.uid or memberId)
+        const myTrxIds = new Set<string>();
+        allDocs.forEach((tx) => {
+          const txUserId = String((tx as any).userId || '');
+          const txMemberId = String((tx as any).memberId || '');
+          const isOwn = userTargetUids.has(txUserId) || (Boolean(user.memberId) && txMemberId === user.memberId);
+          if (isOwn) {
+            const tId = tx.trxId || (tx as any).transactionId || tx.description?.match(/TrxID:\s*([A-Z0-9]+)/i)?.[1];
+            if (tId) myTrxIds.add(String(tId).trim());
+          }
+        });
+
+        allDocs.forEach((tx) => {
+          const txUserId = String((tx as any).userId || '');
+          const txMemberId = String((tx as any).memberId || '');
+          const isUserOwnDoc = userTargetUids.has(txUserId) || (Boolean(user.memberId) && txMemberId === user.memberId);
+
+          // If this doc was created with another user's userId as primary owner:
+          if (!isUserOwnDoc) {
+            const tId = tx.trxId || (tx as any).transactionId || tx.description?.match(/TrxID:\s*([A-Z0-9]+)/i)?.[1];
+            // If the current user ALREADY has their own primary transaction document for this TrxID, skip the other user's doc!
+            if (tId && myTrxIds.has(String(tId).trim())) {
+              return;
+            }
+          }
+
           const idKey = tx.id || (tx as any).docId || (tx as any).transactionId || Math.random().toString();
           if (!mergedMap.has(idKey)) {
             mergedMap.set(idKey, tx);
           }
         });
+
         const combined = sortTransactionsNewestFirst(Array.from(mergedMap.values()));
         setAllTransactions(combined);
         try {
@@ -4065,7 +4109,8 @@ const getTxt = (key: string, fallback: string) => {
           {/* Right: Bell & Admin Button */}
           <div className="flex items-center gap-1.5 shrink-0">
             {(() => {
-              const unreadCount = userNotifications.filter(n => !isNotificationRead(n)).length;
+              const bellNotifications = userNotifications.filter(n => !isGeneralTransactionNotif(n));
+              const unreadCount = bellNotifications.filter(n => !isNotificationRead(n)).length;
               const hasUnread = unreadCount > 0;
               return (
                 <button 

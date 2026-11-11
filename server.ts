@@ -2142,6 +2142,636 @@ async function startServer() {
     }
   });
 
+  app.post('/api/wallet/send-money', async (req, res) => {
+    try {
+      if (!db) {
+        return res.status(500).json({ success: false, error: 'লেনদেন সম্পন্ন হয়নি / অবস্থা অনিশ্চিত হলে লেনদেন পাতা দেখে নিন, তারপর আবার চেষ্টা করুন।' });
+      }
+
+      const {
+        userId,
+        channel,
+        amount: rawAmount,
+        clientCharge: rawClientCharge,
+        requestId,
+        transactionId: rawTxId,
+        method: rawMethod,
+        selectedMobileOp,
+        targetPhone,
+        selectedBankOp,
+        bankName,
+        accountTitle,
+        accountNumber,
+        branch,
+        routingNumber,
+        receiverIdentifier
+      } = req.body || {};
+
+      const cleanUserId = String(userId || '').trim();
+      const cleanRequestId = String(requestId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+      const validChannels = ['mobile_bank', 'bank_wallet', 'abroad', 'bnb_to_bnb'];
+
+      if (!cleanUserId || !cleanRequestId || !validChannels.includes(channel)) {
+        return res.status(400).json({ success: false, error: 'অবৈধ লেনদেন অনুরোধ। প্রয়োজনীয় তথ্য অনুপস্থিত।' });
+      }
+
+      const amount = Number(rawAmount);
+      if (!Number.isFinite(amount) || amount < 10) {
+        return res.status(400).json({ success: false, error: 'সর্বনিম্ন স্থানান্তরের পরিমাণ 10 BDT হতে হবে।' });
+      }
+
+      // Fast pre-check for idempotency outside transaction, plus strict check inside transaction
+      const idempRef = doc(db, 'ledger_idempotency', `SM_${cleanRequestId}`);
+
+      // If channel === 'bnb_to_bnb', resolve receiverUid before entering runTransaction
+      let resolvedReceiverUid = '';
+      let isVirtualSomitiAcc = false;
+      const trimmedReceiver = String(receiverIdentifier || '').trim();
+
+      if (channel === 'bnb_to_bnb') {
+        if (!trimmedReceiver) {
+          return res.status(400).json({ success: false, error: 'প্রাপকের অ্যাকাউন্ট পাওয়া যায়নি। সঠিক মেম্বার আইডি বা মোবাইল নম্বর দিন।' });
+        }
+
+        const isVirtualEndingInZero = trimmedReceiver.endsWith('0') && trimmedReceiver.length >= 10;
+        const cleanReceiver = isVirtualEndingInZero ? trimmedReceiver.slice(0, -1) : trimmedReceiver;
+
+        const q1 = query(collection(db, 'users'), where('memberId', '==', trimmedReceiver));
+        const q2 = query(collection(db, 'users'), where('phone', '==', trimmedReceiver));
+        const q3 = isVirtualEndingInZero ? query(collection(db, 'users'), where('memberId', '==', cleanReceiver)) : null;
+        const q4 = isVirtualEndingInZero ? query(collection(db, 'users'), where('phone', '==', cleanReceiver)) : null;
+        const q5 = (isVirtualEndingInZero && cleanReceiver.startsWith('0')) ? query(collection(db, 'users'), where('phone', '==', cleanReceiver.substring(1))) : null;
+        const q6 = (isVirtualEndingInZero && cleanReceiver.startsWith('0')) ? query(collection(db, 'users'), where('phone', '==', '+88' + cleanReceiver)) : null;
+
+        const [snap1, snap2, snap3, snap4, snap5, snap6] = await Promise.all([
+          getDocs(q1).catch(() => ({ empty: true, docs: [] } as any)),
+          getDocs(q2).catch(() => ({ empty: true, docs: [] } as any)),
+          q3 ? getDocs(q3).catch(() => ({ empty: true, docs: [] } as any)) : Promise.resolve({ empty: true, docs: [] } as any),
+          q4 ? getDocs(q4).catch(() => ({ empty: true, docs: [] } as any)) : Promise.resolve({ empty: true, docs: [] } as any),
+          q5 ? getDocs(q5).catch(() => ({ empty: true, docs: [] } as any)) : Promise.resolve({ empty: true, docs: [] } as any),
+          q6 ? getDocs(q6).catch(() => ({ empty: true, docs: [] } as any)) : Promise.resolve({ empty: true, docs: [] } as any)
+        ]);
+
+        let receiverDoc: any = null;
+        if (!snap1.empty && snap1.docs.length > 0) {
+          receiverDoc = snap1.docs[0];
+          if (trimmedReceiver.endsWith('0')) isVirtualSomitiAcc = true;
+        } else if (!snap2.empty && snap2.docs.length > 0) {
+          receiverDoc = snap2.docs[0];
+          if (trimmedReceiver.endsWith('0')) isVirtualSomitiAcc = true;
+        } else if (snap3 && !snap3.empty && snap3.docs.length > 0) {
+          receiverDoc = snap3.docs[0];
+          isVirtualSomitiAcc = true;
+        } else if (snap4 && !snap4.empty && snap4.docs.length > 0) {
+          receiverDoc = snap4.docs[0];
+          isVirtualSomitiAcc = true;
+        } else if (snap5 && !snap5.empty && snap5.docs.length > 0) {
+          receiverDoc = snap5.docs[0];
+          isVirtualSomitiAcc = true;
+        } else if (snap6 && !snap6.empty && snap6.docs.length > 0) {
+          receiverDoc = snap6.docs[0];
+          isVirtualSomitiAcc = true;
+        }
+
+        if (trimmedReceiver.endsWith('0') || isVirtualEndingInZero) {
+          isVirtualSomitiAcc = true;
+        }
+
+        if (!receiverDoc) {
+          return res.status(404).json({ success: false, error: 'প্রাপকের অ্যাকাউন্ট পাওয়া যায়নি। সঠিক মেম্বার আইডি বা মোবাইল নম্বর দিন।' });
+        }
+
+        resolvedReceiverUid = receiverDoc.id;
+        if (resolvedReceiverUid === cleanUserId) {
+          return res.status(400).json({ success: false, error: 'আপনি নিজের অ্যাকাউন্টে ফান্ড ট্রান্সফার করতে পারবেন না।' });
+        }
+      }
+
+      const senderRef = doc(db, 'users', cleanUserId);
+      const configRef = doc(db, 'system_settings', 'app_config');
+      const receiverRef = channel === 'bnb_to_bnb' && resolvedReceiverUid ? doc(db, 'users', resolvedReceiverUid) : null;
+      const finalTxId = String(rawTxId || `BN${Date.now().toString().slice(-6)}${Math.floor(10 + Math.random() * 90)}`).trim();
+
+      const txResult = await runTransaction(db, async (t) => {
+        // 1. All reads first
+        const idempSnap = await t.get(idempRef);
+        if (idempSnap.exists()) {
+          const existing = idempSnap.data();
+          return {
+            alreadyProcessed: true,
+            newBalance: Number(existing.newBalance),
+            transactionId: String(existing.transactionId || finalTxId),
+            recordId: String(existing.recordId || existing.transactionId || cleanRequestId),
+            charge: Number(existing.charge || 0),
+            totalRequired: Number(existing.totalRequired || amount),
+            receiverName: existing.receiverName || '',
+            receiverPhone: existing.receiverPhone || '',
+            receiverMemberId: existing.receiverMemberId || '',
+            isVirtualSomitiAcc: Boolean(existing.isVirtualSomitiAcc)
+          };
+        }
+
+        const [configSnap, senderSnap, receiverSnap] = await Promise.all([
+          t.get(configRef),
+          t.get(senderRef),
+          receiverRef ? t.get(receiverRef) : Promise.resolve(null)
+        ]);
+
+        if (!senderSnap.exists()) {
+          throw new Error('প্রেরক অ্যাকাউন্ট পাওয়া যায়নি।');
+        }
+        if (channel === 'bnb_to_bnb' && (!receiverSnap || !receiverSnap.exists())) {
+          throw new Error('গ্রহীতা অ্যাকাউন্ট পাওয়া যায়নি।');
+        }
+
+        const appConfigData = configSnap.exists() ? configSnap.data() : {};
+        const senderData = senderSnap.data();
+        const receiverData = receiverSnap && receiverSnap.exists() ? receiverSnap.data() : null;
+
+        // 2. Compute authoritative charge on the server from system_settings/app_config
+        const {
+          sendMoneyMobileBankFlatCharge = 4.90,
+          sendMoneyMobileBankServiceChargePerThousand = 1,
+          sendMoneyBankFlatCharge = 7.90,
+          sendMoneyBankServiceChargePerThousand = 7.90
+        } = appConfigData || {};
+
+        let flat = 0;
+        let service = 0;
+        if (channel === 'mobile_bank') {
+          flat = Number(sendMoneyMobileBankFlatCharge);
+          service = Math.ceil(amount / 1000) * Number(sendMoneyMobileBankServiceChargePerThousand);
+        } else if (channel === 'bank_wallet') {
+          flat = Number(sendMoneyBankFlatCharge);
+          service = Math.ceil(amount / 1000) * Number(sendMoneyBankServiceChargePerThousand);
+        } else {
+          // 'abroad' and 'bnb_to_bnb' have 0 charge
+          flat = 0;
+          service = 0;
+        }
+        const serverCharge = flat + service;
+
+        if (rawClientCharge !== undefined && rawClientCharge !== null && rawClientCharge !== '') {
+          const clientChargeNum = Number(rawClientCharge);
+          if (!Number.isFinite(clientChargeNum) || Math.abs(clientChargeNum - serverCharge) > 0.01) {
+            throw new Error('চার্জের পরিমাণে অসামঞ্জস্যতা পাওয়া গেছে। অনুগ্রহ করে পুনরায় চেষ্টা করুন।');
+          }
+        }
+
+        const totalRequired = Number((amount + serverCharge).toFixed(2));
+
+        // 3. Authoritative balance from sender's users.balance (strictly users.balance)
+        const rawSenderBal = Number(senderData.balance ?? 0);
+        const senderBalance = Number.isFinite(rawSenderBal) ? rawSenderBal : 0;
+
+        if (totalRequired > senderBalance || (senderBalance - totalRequired) < 0) {
+          throw new Error('অপর্যাপ্ত ব্যালেন্স');
+        }
+
+        const newSenderBalance = Number((senderBalance - totalRequired).toFixed(2));
+        if (newSenderBalance < 0) {
+          throw new Error('অপর্যাপ্ত ব্যালেন্স');
+        }
+
+        const nowIso = new Date().toISOString();
+
+        // 4. Deduct from sender's users document
+        t.update(senderRef, {
+          balance: newSenderBalance,
+          mainBalance: newSenderBalance,
+          updatedAt: nowIso
+        });
+
+        // 5. Write sender's DEBIT entry in wallet_ledger
+        const senderLedgerRef = doc(db, 'wallet_ledger', `LEDGER_${cleanRequestId}_S`);
+        t.set(senderLedgerRef, {
+          id: senderLedgerRef.id,
+          requestId: cleanRequestId,
+          transactionId: finalTxId,
+          userId: cleanUserId,
+          type: 'DEBIT',
+          channel,
+          amount,
+          charge: serverCharge,
+          totalDeducted: totalRequired,
+          previousBalance: senderBalance,
+          newBalance: newSenderBalance,
+          beforeBalance: senderBalance,
+          afterBalance: newSenderBalance,
+          createdAt: nowIso
+        });
+
+        let primaryTxRecordId = '';
+
+        if (channel === 'bnb_to_bnb' && receiverRef && receiverData) {
+          let finalReceiverBal = 0;
+          const rawReceiverWallBal = Number(receiverData.balance ?? 0);
+          const receiverPrevBalance = Number.isFinite(rawReceiverWallBal) ? rawReceiverWallBal : 0;
+
+          if (isVirtualSomitiAcc) {
+            finalReceiverBal = Number(((Number(receiverData.savings) || 0) + amount).toFixed(2));
+            t.update(receiverRef, {
+              savings: finalReceiverBal,
+              dpsBalance: finalReceiverBal,
+              updatedAt: nowIso
+            });
+          } else {
+            finalReceiverBal = Number((receiverPrevBalance + amount).toFixed(2));
+            t.update(receiverRef, {
+              balance: finalReceiverBal,
+              mainBalance: finalReceiverBal,
+              updatedAt: nowIso
+            });
+          }
+
+          const receiverLedgerRef = doc(db, 'wallet_ledger', `LEDGER_${cleanRequestId}_R`);
+          t.set(receiverLedgerRef, {
+            id: receiverLedgerRef.id,
+            requestId: cleanRequestId,
+            transactionId: `${finalTxId}-R`,
+            userId: resolvedReceiverUid,
+            type: 'CREDIT',
+            channel,
+            amount,
+            charge: 0,
+            totalDeducted: 0,
+            previousBalance: isVirtualSomitiAcc ? (Number(receiverData.savings) || 0) : receiverPrevBalance,
+            newBalance: finalReceiverBal,
+            beforeBalance: isVirtualSomitiAcc ? (Number(receiverData.savings) || 0) : receiverPrevBalance,
+            afterBalance: finalReceiverBal,
+            createdAt: nowIso
+          });
+
+          const txSenderRef = doc(collection(db, 'transactions'));
+          const txReceiverRef = doc(collection(db, 'transactions'));
+          const notifReceiverRef = doc(collection(db, 'user_notifications'));
+          primaryTxRecordId = txSenderRef.id;
+
+          const senderDesc = `মেম্বার ${receiverData.name || ''} (${receiverData.memberId || ''}) কে ফান্ড পাঠানো হয়েছে`;
+          const receiverDesc = `মেম্বার ${senderData.name || ''} (${senderData.memberId || ''}) থেকে ফান্ড গ্রহণ`;
+
+          t.set(txSenderRef, {
+            id: txSenderRef.id,
+            userId: cleanUserId,
+            userName: senderData.name || '',
+            userPhone: senderData.phone || '',
+            memberId: senderData.memberId || '',
+            amount,
+            charge: 0,
+            totalDeducted: amount,
+            postBalance: newSenderBalance,
+            type: isVirtualSomitiAcc ? 'coop_savings_deposit' : 'transfer',
+            typeLabel: isVirtualSomitiAcc ? 'সমিতি ওয়ালেটে অটো ফান্ড জমা' : 'ফান্ড ট্রান্সফার',
+            category: 'bnb_to_bnb',
+            method: rawMethod || 'BNB Wallet',
+            status: 'success',
+            paymentMethod: 'BNB Wallet',
+            phone: receiverData.phone || '',
+            targetPhone: receiverData.phone || '',
+            accountNumber: receiverData.memberId || receiverData.phone || '',
+            receiverUid: resolvedReceiverUid,
+            receiverId: receiverData.memberId || '',
+            receiverName: receiverData.name || '',
+            transactionId: finalTxId,
+            trxId: finalTxId,
+            requestId: cleanRequestId,
+            createdAt: nowIso,
+            timestamp: nowIso,
+            details: senderDesc,
+            description: senderDesc
+          });
+
+          t.set(txReceiverRef, {
+            id: txReceiverRef.id,
+            userId: resolvedReceiverUid,
+            userName: receiverData.name || '',
+            userPhone: receiverData.phone || '',
+            memberId: receiverData.memberId || '',
+            amount,
+            charge: 0,
+            totalDeducted: 0,
+            postBalance: finalReceiverBal,
+            type: isVirtualSomitiAcc ? 'coop_savings_deposit' : 'add_money',
+            typeLabel: isVirtualSomitiAcc ? 'সমিতি একাউন্টে সঞ্চয় জমা' : 'ফান্ড গ্রহণ',
+            category: 'bnb_to_bnb',
+            method: rawMethod || 'BNB Wallet',
+            status: 'success',
+            paymentMethod: 'BNB Wallet',
+            phone: senderData.phone || '',
+            targetPhone: senderData.phone || '',
+            accountNumber: senderData.memberId || senderData.phone || '',
+            senderUid: cleanUserId,
+            senderName: senderData.name || '',
+            transactionId: `${finalTxId}-R`,
+            trxId: finalTxId,
+            requestId: cleanRequestId,
+            createdAt: nowIso,
+            timestamp: nowIso,
+            details: receiverDesc,
+            description: receiverDesc
+          });
+
+          t.set(notifReceiverRef, {
+            userId: resolvedReceiverUid,
+            title: isVirtualSomitiAcc ? '📥 সমিতি একাউন্টে সঞ্চয় জমা' : 'ফান্ড জমা হয়েছে',
+            message: isVirtualSomitiAcc
+              ? `মেম্বার ${senderData.name || ''} (${senderData.memberId || ''}) থেকে ৳${amount.toLocaleString('en-US')} আপনার সমিতি একাউন্টে (${trimmedReceiver}) জমা হয়েছে।`
+              : `মেম্বার ${senderData.name || ''} (${senderData.memberId || ''}) থেকে ৳${amount.toLocaleString('en-US')} আপনার ওয়ালেটে জমা হয়েছে।`,
+            read: false,
+            createdAt: nowIso
+          });
+        } else if (channel === 'mobile_bank') {
+          const cleanOp = String(selectedMobileOp || '').trim();
+          const cleanTargetPhone = String(targetPhone || accountNumber || '').trim();
+          if (!cleanOp) {
+            throw new Error('দয়া করে অপারেটর সিলেক্ট করুন।');
+          }
+          if (!cleanTargetPhone) {
+            throw new Error('গ্রহীতা মোবাইল ওয়ালেট নম্বর দিন।');
+          }
+
+          let opName = '';
+          let opType = '';
+          if (cleanOp.startsWith('bkash')) { opName = 'BKASH'; }
+          else if (cleanOp.startsWith('nagad')) { opName = 'NAGAD'; }
+          else if (cleanOp.startsWith('rocket')) { opName = 'ROCKET'; }
+          else if (cleanOp.startsWith('upay')) { opName = 'UPAY'; }
+
+          if (cleanOp.endsWith('cashout')) { opType = 'ক্যাশ আউট'; }
+          else { opType = 'সেন্ড মানি'; }
+
+          const paymentMethodString = rawMethod || `${opName} (${opType === 'ক্যাশ আউট' ? 'CashOut' : 'SendMoney'})`;
+          const descString = `${opName === 'BKASH' ? 'বিকাশ' : opName === 'NAGAD' ? 'নগদ' : opName === 'ROCKET' ? 'রকেট' : 'উপায়'} (${cleanTargetPhone}) নম্বরে ৳${amount.toLocaleString('en-US')} ${opType} স্থানান্তর আবেদন`;
+
+          const txRef = doc(collection(db, 'transactions'));
+          const adminNotifRef = doc(collection(db, 'admin_notifications'));
+          const userNotifRef = doc(collection(db, 'user_notifications'));
+          primaryTxRecordId = txRef.id;
+
+          t.set(txRef, {
+            id: txRef.id,
+            userId: cleanUserId,
+            userName: senderData.name || '',
+            userPhone: senderData.phone || '',
+            memberId: senderData.memberId || '',
+            amount,
+            charge: serverCharge,
+            totalDeducted: totalRequired,
+            postBalance: newSenderBalance,
+            type: 'withdraw',
+            typeLabel: 'উইথড্র / ক্যাশআউট',
+            category: 'send_money_mobile',
+            method: paymentMethodString,
+            status: 'pending',
+            paymentMethod: paymentMethodString,
+            phone: cleanTargetPhone,
+            targetPhone: cleanTargetPhone,
+            senderPhone: cleanTargetPhone,
+            accountNumber: cleanTargetPhone,
+            accountTitle: senderData.name || '',
+            accountName: senderData.name || '',
+            transactionId: finalTxId,
+            trxId: finalTxId,
+            requestId: cleanRequestId,
+            createdAt: nowIso,
+            timestamp: nowIso,
+            details: descString,
+            description: descString
+          });
+
+          t.set(adminNotifRef, {
+            title: '💸 নতুন মোবাইল ক্যাশআউট / উইথড্র আবেদন',
+            message: `${senderData.name || 'সদস্য'} (${senderData.memberId || 'N/A'}) ${paymentMethodString} মাধ্যমে ৳${amount.toLocaleString('en-US')} টাকা ক্যাশআউট আবেদন করেছেন (নম্বর: ${cleanTargetPhone})।`,
+            userId: cleanUserId,
+            userName: senderData.name || '',
+            memberId: senderData.memberId || '',
+            userPhone: senderData.phone || '',
+            amount,
+            type: 'withdraw',
+            read: false,
+            createdAt: nowIso
+          });
+
+          t.set(userNotifRef, {
+            userId: cleanUserId,
+            title: 'ফান্ড স্থানান্তর আবেদন সাবমিট হয়েছে',
+            message: `আপনার ৳${amount.toLocaleString('en-US')} এর সেন্ড মানি আবেদনটি সফলভাবে সাবমিট হয়েছে (চার্জসহ মোট ৳${totalRequired.toLocaleString('en-US')} ওয়ালেট হতে কেটে নেওয়া হয়েছে)। এডমিন অনুমোদন করলে সম্পন্ন হবে।`,
+            read: false,
+            createdAt: nowIso
+          });
+        } else if (channel === 'bank_wallet') {
+          const cleanAccNo = String(accountNumber || '').trim();
+          const cleanAccTitle = String(accountTitle || '').trim();
+          const cleanBranch = String(branch || '').trim();
+          const cleanRouting = String(routingNumber || '').trim();
+
+          if (!selectedBankOp && !bankName) {
+            throw new Error('দয়া করে ব্যাংক সিলেক্ট করুন।');
+          }
+          if (!cleanAccNo || !cleanAccTitle) {
+            throw new Error('হিসাব নম্বর এবং হিসাবের নাম আবশ্যক।');
+          }
+
+          const allBanks = appConfigData?.paymentBanks || [];
+          const selectedBankObj = allBanks.find((b: any) => b.id === selectedBankOp);
+          let selectedBankNameFull = bankName || (selectedBankObj ? selectedBankObj.name : 'Dutch-Bangla Bank PLC. (DBBL)');
+          if (!bankName && !selectedBankObj) {
+            if (selectedBankOp === 'dbbl') selectedBankNameFull = 'Dutch-Bangla Bank PLC. (DBBL)';
+            else if (selectedBankOp === 'sonali') selectedBankNameFull = 'Sonali Bank PLC.';
+            else if (selectedBankOp === 'islami') selectedBankNameFull = 'Islami Bank Bangladesh PLC.';
+            else if (selectedBankOp === 'city') selectedBankNameFull = 'City Bank PLC.';
+            else if (selectedBankOp === 'brac') selectedBankNameFull = 'BRAC Bank PLC.';
+            else if (selectedBankOp === 'pubali') selectedBankNameFull = 'Pubali Bank PLC.';
+          }
+
+          const paymentMethodString = rawMethod || `Bank Transfer - ${selectedBankNameFull}`;
+          const descString = `Bank Transfer - ${selectedBankNameFull} | অ্যাকাউন্টের নাম: ${cleanAccTitle} | অ্যাকাউন্ট নম্বর: ${cleanAccNo}${cleanBranch ? ` | শাখা: ${cleanBranch}` : ''}${cleanRouting ? ` | Routing Number: ${cleanRouting}` : ''}`;
+
+          const txRef = doc(collection(db, 'transactions'));
+          const adminNotifRef = doc(collection(db, 'admin_notifications'));
+          const userNotifRef = doc(collection(db, 'user_notifications'));
+          primaryTxRecordId = txRef.id;
+
+          t.set(txRef, {
+            id: txRef.id,
+            userId: cleanUserId,
+            userName: senderData.name || '',
+            userPhone: senderData.phone || '',
+            memberId: senderData.memberId || '',
+            amount,
+            charge: serverCharge,
+            totalDeducted: totalRequired,
+            postBalance: newSenderBalance,
+            type: 'withdraw',
+            typeLabel: 'উইথড্র / ক্যাশআউট',
+            category: 'send_money_bank',
+            method: paymentMethodString,
+            status: 'pending',
+            paymentMethod: paymentMethodString,
+            bankName: selectedBankNameFull,
+            accountTitle: cleanAccTitle,
+            accountName: cleanAccTitle,
+            accountHolder: cleanAccTitle,
+            accountNumber: cleanAccNo,
+            branch: cleanBranch,
+            branchName: cleanBranch,
+            routingNumber: cleanRouting,
+            routingNo: cleanRouting,
+            phone: cleanAccNo,
+            targetPhone: cleanAccNo,
+            senderPhone: cleanAccNo,
+            transactionId: finalTxId,
+            trxId: finalTxId,
+            requestId: cleanRequestId,
+            createdAt: nowIso,
+            timestamp: nowIso,
+            details: descString,
+            description: descString
+          });
+
+          t.set(adminNotifRef, {
+            title: '🏛️ নতুন ব্যাংক ট্রান্সফার / উইথড্র আবেদন',
+            message: `${senderData.name || 'সদস্য'} (${senderData.memberId || 'N/A'}) ${selectedBankNameFull} অ্যাকাউন্টে ৳${amount.toLocaleString('en-US')} টাকা উইথড্র আবেদন করেছেন (হিসাব: ${cleanAccNo})।`,
+            userId: cleanUserId,
+            userName: senderData.name || '',
+            memberId: senderData.memberId || '',
+            userPhone: senderData.phone || '',
+            amount,
+            type: 'withdraw',
+            read: false,
+            createdAt: nowIso
+          });
+
+          t.set(userNotifRef, {
+            userId: cleanUserId,
+            title: 'ফান্ড স্থানান্তর আবেদন সাবমিট হয়েছে',
+            message: `আপনার ৳${amount.toLocaleString('en-US')} এর সেন্ড মানি আবেদনটি সফলভাবে সাবমিট হয়েছে (চার্জসহ মোট ৳${totalRequired.toLocaleString('en-US')} ওয়ালেট হতে কেটে নেওয়া হয়েছে)। এডমিন অনুমোদন করলে সম্পন্ন হবে।`,
+            read: false,
+            createdAt: nowIso
+          });
+        } else if (channel === 'abroad') {
+          const cleanAccNo = String(accountNumber || '').trim();
+          const cleanAccTitle = String(accountTitle || '').trim();
+          const cleanBranch = String(branch || '').trim();
+          const cleanRouting = String(routingNumber || '').trim();
+
+          if (!selectedBankOp && !bankName) {
+            throw new Error('দয়া করে বিদেশি ব্যাংক সিলেক্ট করুন।');
+          }
+          if (!cleanAccNo || !cleanAccTitle) {
+            throw new Error('গ্রহীতার একাউন্ট নম্বর/আইবান এবং নাম আবশ্যক।');
+          }
+
+          const allBanks = appConfigData?.paymentBanks || [];
+          const selectedBankObj = allBanks.find((b: any) => b.id === selectedBankOp);
+          const selectedBankNameFull = bankName || (selectedBankObj ? selectedBankObj.name : 'Foreign Bank Transfer');
+          const paymentMethodString = rawMethod || `Foreign Bank Transfer - ${selectedBankNameFull}`;
+          const descString = `Foreign Bank Transfer - ${selectedBankNameFull} | অ্যাকাউন্টের নাম: ${cleanAccTitle} | অ্যাকাউন্ট নম্বর: ${cleanAccNo}${cleanBranch ? ` | শাখা: ${cleanBranch}` : ''}${cleanRouting ? ` | Routing Number: ${cleanRouting}` : ''}`;
+
+          const txRef = doc(collection(db, 'transactions'));
+          const userNotifRef = doc(collection(db, 'user_notifications'));
+          primaryTxRecordId = txRef.id;
+
+          t.set(txRef, {
+            id: txRef.id,
+            userId: cleanUserId,
+            userName: senderData.name || '',
+            userPhone: senderData.phone || '',
+            memberId: senderData.memberId || '',
+            amount,
+            charge: serverCharge,
+            totalDeducted: totalRequired,
+            postBalance: newSenderBalance,
+            type: 'remittance',
+            typeLabel: 'রেমিট্যান্স / বিদেশি ব্যাংক স্থানান্তর',
+            category: 'send_money_abroad',
+            method: paymentMethodString,
+            status: 'pending',
+            paymentMethod: paymentMethodString,
+            bankName: selectedBankNameFull,
+            accountTitle: cleanAccTitle,
+            accountName: cleanAccTitle,
+            accountHolder: cleanAccTitle,
+            accountNumber: cleanAccNo,
+            branch: cleanBranch,
+            branchName: cleanBranch,
+            routingNumber: cleanRouting,
+            routingNo: cleanRouting,
+            phone: cleanAccNo,
+            targetPhone: cleanAccNo,
+            senderPhone: cleanAccNo,
+            transactionId: finalTxId,
+            trxId: finalTxId,
+            requestId: cleanRequestId,
+            createdAt: nowIso,
+            timestamp: nowIso,
+            details: descString,
+            description: descString
+          });
+
+          t.set(userNotifRef, {
+            userId: cleanUserId,
+            title: 'ফান্ড স্থানান্তর আবেদন সাবমিট হয়েছে',
+            message: `আপনার ৳${amount.toLocaleString('en-US')} এর সেন্ড মানি আবেদনটি সফলভাবে সাবমিট হয়েছে (চার্জসহ মোট ৳${totalRequired.toLocaleString('en-US')} ওয়ালেট হতে কেটে নেওয়া হয়েছে)। এডমিন অনুমোদন করলে সম্পন্ন হবে।`,
+            read: false,
+            createdAt: nowIso
+          });
+        }
+
+        // 6. Save idempotency record inside the same transaction
+        t.set(idempRef, {
+          requestId: cleanRequestId,
+          transactionId: finalTxId,
+          recordId: primaryTxRecordId,
+          userId: cleanUserId,
+          channel,
+          amount,
+          charge: serverCharge,
+          totalRequired,
+          previousBalance: senderBalance,
+          newBalance: newSenderBalance,
+          receiverName: receiverData?.name || '',
+          receiverPhone: receiverData?.phone || '',
+          receiverMemberId: receiverData?.memberId || '',
+          isVirtualSomitiAcc,
+          createdAt: nowIso
+        });
+
+        return {
+          alreadyProcessed: false,
+          newBalance: newSenderBalance,
+          transactionId: finalTxId,
+          recordId: primaryTxRecordId,
+          charge: serverCharge,
+          totalRequired,
+          receiverName: receiverData?.name || '',
+          receiverPhone: receiverData?.phone || '',
+          receiverMemberId: receiverData?.memberId || '',
+          isVirtualSomitiAcc
+        };
+      });
+
+      return res.json({
+        success: true,
+        alreadyProcessed: txResult.alreadyProcessed,
+        newBalance: txResult.newBalance,
+        transactionId: txResult.transactionId,
+        recordId: txResult.recordId,
+        charge: txResult.charge,
+        totalRequired: txResult.totalRequired,
+        receiverName: txResult.receiverName,
+        receiverPhone: txResult.receiverPhone,
+        receiverMemberId: txResult.receiverMemberId,
+        isVirtualSomitiAcc: txResult.isVirtualSomitiAcc
+      });
+    } catch (err: any) {
+      return res.status(400).json({
+        success: false,
+        error: err?.message || 'লেনদেন সম্পন্ন হয়নি / অবস্থা অনিশ্চিত হলে লেনদেন পাতা দেখে নিন, তারপর আবার চেষ্টা করুন।'
+      });
+    }
+  });
+
   app.get('/api/health', (req, res) => {
     res.json({
       ok: true,

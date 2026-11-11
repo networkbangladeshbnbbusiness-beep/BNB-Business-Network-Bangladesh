@@ -28,6 +28,99 @@ interface NotificationInboxModalProps {
   onClearAllNotifications?: () => void;
 }
 
+// Helper to identify standard peer-to-peer financial transactions that belong in bottom navigation transaction history
+export const isGeneralTransactionNotif = (n: UserNotification): boolean => {
+  if (!n) return false;
+  const type = String(n.type || '').toLowerCase().trim();
+  const category = String(n.category || '').toLowerCase().trim();
+  const title = String(n.title || '').toLowerCase().trim();
+  const body = String(n.body || n.message || '').toLowerCase().trim();
+
+  // Explicit flag for transaction history items (unless it's an admin profile bonus/fine)
+  if (n.isTransactionHistory === true && !title.includes('বোনাস') && !title.includes('কর্তন') && !title.includes('জরিমানা') && !title.includes('এডমিন')) {
+    return true;
+  }
+
+  // Check financial transaction types
+  const txTypes = [
+    'send_money', 'transfer', 'money_sent', 'money_received', 'received_transfer',
+    'recharge', 'telecom', 'bill_pay', 'add_money_request', 'withdraw', 'cash_out',
+    'auto_recharge', 'samity_deposit', 'coop_savings_deposit'
+  ];
+  if (txTypes.includes(type) || txTypes.includes(category)) {
+    if (title.includes('এডমিন') || title.includes('বোনাস') || title.includes('জরিমানা') || title.includes('কর্তন')) {
+      return false;
+    }
+    return true;
+  }
+
+  // Common payment / send money title phrases
+  const txTitleKeywords = [
+    'টাকা পাঠানো সফল', 'money sent', 'টাকা গ্রহণ সফল', 'money received',
+    'ক্যাশ আউট সফল', 'রিচার্জ সফল', 'বিল পে সফল', 'সেন্ড মানি'
+  ];
+
+  if (txTitleKeywords.some(kw => title.includes(kw))) {
+    if (!title.includes('বোনাস') && !title.includes('কর্তন') && !title.includes('জরিমানা') && !title.includes('এডমিন')) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
+// Category 1: Admin Bonus / Credit
+export const isBonusNotif = (n: UserNotification): boolean => {
+  if (isGeneralTransactionNotif(n)) return false;
+  const type = String(n.type || '').toLowerCase().trim();
+  const category = String(n.category || '').toLowerCase().trim();
+  const title = String(n.title || '').toLowerCase().trim();
+  const body = String(n.body || n.message || '').toLowerCase().trim();
+
+  return (
+    type === 'bonus' || 
+    category === 'bonus' || 
+    n.notifyType === 'credit' ||
+    type === 'admin_credit' ||
+    title.includes('বোনাস') || 
+    title.includes('কমিশন') || 
+    title.includes('রিওয়ার্ড') ||
+    title.includes('মূল ব্যালেন্স আপডেট (জমা)') ||
+    (title.includes('এডমিন') && (title.includes('যোগ') || title.includes('জমা') || title.includes('বোনাস'))) ||
+    (body.includes('এডমিন কর্তৃক') && (body.includes('যোগ') || body.includes('জমা')))
+  );
+};
+
+// Category 2: Admin Deduction / Penalty / Fine
+export const isDeductionNotif = (n: UserNotification): boolean => {
+  if (isGeneralTransactionNotif(n)) return false;
+  const type = String(n.type || '').toLowerCase().trim();
+  const category = String(n.category || '').toLowerCase().trim();
+  const title = String(n.title || '').toLowerCase().trim();
+  const body = String(n.body || n.message || '').toLowerCase().trim();
+
+  return (
+    type === 'fine' || 
+    category === 'fine' || 
+    category === 'deduction' || 
+    n.notifyType === 'debit' ||
+    type === 'admin_debit' ||
+    title.includes('কর্তন') || 
+    title.includes('জরিমানা') || 
+    title.includes('ফাইন') || 
+    title.includes('মূল ব্যালেন্স আপডেট (কর্তন)') ||
+    (title.includes('এডমিন') && (title.includes('কর্তন') || title.includes('জরিমানা'))) ||
+    (body.includes('এডমিন কর্তৃক') && (body.includes('কর্তন') || body.includes('কমানো')))
+  );
+};
+
+// Category 3: Admin Emergency Notice / System Announcement
+export const isNoticeNotif = (n: UserNotification): boolean => {
+  if (isGeneralTransactionNotif(n)) return false;
+  if (isBonusNotif(n) || isDeductionNotif(n)) return false;
+  return true;
+};
+
 export const NotificationInboxModal: React.FC<NotificationInboxModalProps> = ({
   isOpen,
   onClose,
@@ -41,50 +134,35 @@ export const NotificationInboxModal: React.FC<NotificationInboxModalProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedNotif, setSelectedNotif] = useState<UserNotification | null>(null);
 
-  // Categorize helper
-  const isBonusNotif = (n: UserNotification) => {
-    return (
-      n.type === 'bonus' || 
-      n.category === 'bonus' || 
-      n.notifyType === 'credit' ||
-      (n.title && (n.title.includes('বোনাস') || n.title.includes('জমা') || n.title.includes('কমিশন')))
-    );
-  };
+  // Filter allowed notifications for Top Bell Inbox (Excludes general transaction receipts)
+  const allowedNotifications = useMemo(() => {
+    return userNotifications.filter(n => !isGeneralTransactionNotif(n));
+  }, [userNotifications]);
 
-  const isDeductionNotif = (n: UserNotification) => {
-    return (
-      n.type === 'fine' || 
-      n.category === 'fine' || 
-      n.category === 'deduction' || 
-      n.notifyType === 'debit' ||
-      (n.title && (n.title.includes('কর্তন') || n.title.includes('জরিমানা') || n.title.includes('চার্জ') || n.title.includes('ফি')))
-    );
-  };
-
-  // Counts
+  // Counts for Bell Notification Inbox
   const counts = useMemo(() => {
     let unread = 0;
     let bonus = 0;
     let deduction = 0;
     let notice = 0;
 
-    userNotifications.forEach(n => {
+    allowedNotifications.forEach(n => {
       if (!n.read) unread++;
       if (isBonusNotif(n)) bonus++;
       else if (isDeductionNotif(n)) deduction++;
       else notice++;
     });
 
-    return { total: userNotifications.length, unread, bonus, deduction, notice };
-  }, [userNotifications]);
+    return { total: allowedNotifications.length, unread, bonus, deduction, notice };
+  }, [allowedNotifications]);
 
-  // Filtered list
+  // Filtered list based on active tab & search
   const filteredNotifications = useMemo(() => {
-    return userNotifications.filter(n => {
+    return allowedNotifications.filter(n => {
       // 1. Tab filter
       if (activeTab === 'bonus' && !isBonusNotif(n)) return false;
       if (activeTab === 'deduction' && !isDeductionNotif(n)) return false;
-      if (activeTab === 'notice' && (isBonusNotif(n) || isDeductionNotif(n))) return false;
+      if (activeTab === 'notice' && !isNoticeNotif(n)) return false;
 
       // 2. Search query filter
       if (searchQuery.trim()) {
@@ -97,7 +175,7 @@ export const NotificationInboxModal: React.FC<NotificationInboxModalProps> = ({
 
       return true;
     });
-  }, [userNotifications, activeTab, searchQuery]);
+  }, [allowedNotifications, activeTab, searchQuery]);
 
   if (!isOpen) return null;
 

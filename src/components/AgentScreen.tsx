@@ -108,6 +108,11 @@ interface Agent {
   whatsapp?: string;
   messenger?: string;
   liveLocationEnabled?: boolean;
+  address?: string;
+  agentCode?: string;
+  badgeLabel?: string;
+  openingHours?: string;
+  approvalStatus?: 'approved' | 'pending' | 'rejected';
 }
 
 export default function AgentScreen({ user, onBack, appConfig }: AgentScreenProps) {
@@ -137,21 +142,30 @@ export default function AgentScreen({ user, onBack, appConfig }: AgentScreenProp
   const [locationError, setLocationError] = useState<string | null>(null);
   const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
 
-  const handleRequestUserLocation = useCallback(async () => {
+  const handleRequestUserLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      setUserLocation(null);
+      setLocationError('আপনার ব্রাউজারটি জিপিএস লোকেশন সমর্থন করে না।');
+      return;
+    }
     setIsLocating(true);
     setLocationError(null);
-    try {
-      const pos = await getHighPrecisionPosition();
-      if (pos) {
-        setUserLocation({ lat: pos.lat, lng: pos.lng, accuracy: pos.accuracy });
-      } else {
-        setLocationError('অবস্থান সনাক্ত করা সম্ভব হয়নি।');
-      }
-    } catch (err: any) {
-      setLocationError(err?.message || 'অবস্থান পারমিশন দেওয়া হয়নি।');
-    } finally {
-      setIsLocating(false);
-    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setUserLocation({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+        });
+        setIsLocating(false);
+      },
+      () => {
+        setUserLocation(null);
+        setLocationError('জিপিএস লোকেশন পারমিশন দেওয়া হয়নি।');
+        setIsLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
   }, []);
 
   // Privacy: Share My Location toggle
@@ -382,8 +396,8 @@ export default function AgentScreen({ user, onBack, appConfig }: AgentScreenProp
 
   const detectUserLocation = () => {
     if (!navigator.geolocation) {
-      setUserLocation({ lat: 23.8103, lng: 90.4125 });
-      setLocationError('আপনার ব্রাউজারটি জিপিএস লোকেশন সনাক্তকরণ সমর্থন করে না (ডিফল্ট ঢাকা কেন্দ্র সক্রিয়)।');
+      setUserLocation(null);
+      setLocationError('আপনার ব্রাউজারটি জিপিএস লোকেশন সনাক্তকরণ সমর্থন করে না।');
       return;
     }
     setIsLocating(true);
@@ -392,15 +406,13 @@ export default function AgentScreen({ user, onBack, appConfig }: AgentScreenProp
       (position) => {
         setUserLocation({
           lat: position.coords.latitude,
-          lng: position.coords.longitude
+          lng: position.coords.longitude,
         });
         setIsLocating(false);
       },
-      (error) => {
-        console.error(error);
-        // Fallback to central location so distance calculations work anyway!
-        setUserLocation({ lat: 23.8103, lng: 90.4125 });
-        setLocationError('জিপিএস সিগন্যাল বিলম্বিত। ঢাকা কেন্দ্র থেকে দূরত্ব হিসাব করা হচ্ছে।');
+      () => {
+        setUserLocation(null);
+        setLocationError('জিপিএস অনুমতি পাওয়া যায়নি।');
         setIsLocating(false);
       },
       { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
@@ -730,75 +742,68 @@ const matchesCountryName = (agentCountry: string, filter: string) => {
 };
 
 const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
-  return list.map((agent, index) => {
+  return list.map((agent) => {
     const meta = resolveCountryMetadata(agent.country, agent.city, agent.district);
     const resolvedCountry = meta.country;
     const resolvedFlag = agent.flag && agent.flag !== '🌐' && agent.flag !== '🇧🇩' ? agent.flag : meta.flag;
 
-    // Check if real GPS coordinates already exist for this user/agent
+    // Keep exact static coordinates if present
     if (
-      agent.hasRealGPS ||
-      (
-        typeof agent.realLat === 'number' && 
-        typeof agent.realLng === 'number' && 
-        agent.realLat !== 0 && 
-        agent.realLng !== 0 &&
-        !(Math.abs(agent.realLat - 23.8103) < 0.00001 && Math.abs(agent.realLng - 90.4125) < 0.00001)
-      )
+      typeof agent.lat === 'number' &&
+      typeof agent.lng === 'number' &&
+      !isNaN(agent.lat) &&
+      !isNaN(agent.lng) &&
+      agent.lat !== 0 &&
+      agent.lng !== 0
     ) {
       return {
         ...agent,
         country: resolvedCountry,
-        flag: resolvedFlag
+        flag: resolvedFlag,
+        realLat: agent.realLat || agent.lat,
+        realLng: agent.realLng || agent.lng,
       };
     }
 
-    // If international agent, use country default coordinates with small offset
     if (resolvedCountry !== 'Bangladesh') {
-      const latOffset = (((index * 7) % 11) - 5) * 0.015;
-      const lngOffset = (((index * 13) % 13) - 6) * 0.015;
-      const finalLat = Number((meta.defaultLat + latOffset).toFixed(5));
-      const finalLng = Number((meta.defaultLng + lngOffset).toFixed(5));
       return {
         ...agent,
         country: resolvedCountry,
         flag: resolvedFlag,
-        lat: agent.lat || finalLat,
-        lng: agent.lng || finalLng,
-        realLat: agent.realLat || finalLat,
-        realLng: agent.realLng || finalLng
+        lat: meta.defaultLat,
+        lng: meta.defaultLng,
+        realLat: meta.defaultLat,
+        realLng: meta.defaultLng,
       };
     }
 
-    // Bangladesh agent logic without exact GPS - lookup district coordinates
     const distLower = (agent.district || agent.city || agent.thana || '').toLowerCase().trim();
     let baseCoord = districtCoordinatesMap[distLower];
-
     if (!baseCoord) {
-      const foundKey = Object.keys(districtCoordinatesMap).find(k => distLower.includes(k) || k.includes(distLower));
+      const foundKey = Object.keys(districtCoordinatesMap).find(
+        (k) => distLower.includes(k) || k.includes(distLower)
+      );
       if (foundKey) {
         baseCoord = districtCoordinatesMap[foundKey];
       }
     }
 
     if (!baseCoord) {
-      baseCoord = bdSpreadGrid[index % bdSpreadGrid.length];
+      return {
+        ...agent,
+        country: resolvedCountry,
+        flag: resolvedFlag,
+      };
     }
-
-    const latOffset = (((index * 13) % 17) - 8) * 0.012;
-    const lngOffset = (((index * 29) % 19) - 9) * 0.012;
-
-    const finalLat = Number((baseCoord.lat + latOffset).toFixed(5));
-    const finalLng = Number((baseCoord.lng + lngOffset).toFixed(5));
 
     return {
       ...agent,
       country: resolvedCountry,
       flag: resolvedFlag,
-      lat: agent.lat || finalLat,
-      lng: agent.lng || finalLng,
-      realLat: agent.realLat || finalLat,
-      realLng: agent.realLng || finalLng
+      lat: baseCoord.lat,
+      lng: baseCoord.lng,
+      realLat: baseCoord.lat,
+      realLng: baseCoord.lng,
     };
   });
 };
@@ -850,24 +855,87 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
     return undefined;
   };
 
+  // Geocode a permanent address using Google Maps Geocoding API (env variable key only)
+  const geocodeAddressWithGoogle = async (
+    addressText: string
+  ): Promise<{ lat: number; lng: number; formattedAddress?: string } | null> => {
+    if (!addressText || !addressText.trim()) return null;
+    const directCoords = parseCoordinatesFromInput(addressText);
+    if (directCoords) {
+      return { lat: directCoords.lat, lng: directCoords.lng, formattedAddress: addressText.trim() };
+    }
+
+    const gmpKey =
+      import.meta.env.VITE_GOOGLE_MAPS_API_KEY ||
+      (typeof process !== 'undefined' &&
+        process.env &&
+        (process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY)) ||
+      '';
+
+    if (gmpKey) {
+      try {
+        const res = await fetch(
+          `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
+            addressText.trim()
+          )}&key=${encodeURIComponent(gmpKey)}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data.status === 'OK' && data.results && data.results.length > 0) {
+            const loc = data.results[0].geometry?.location;
+            if (loc && typeof loc.lat === 'number' && typeof loc.lng === 'number') {
+              return {
+                lat: loc.lat,
+                lng: loc.lng,
+                formattedAddress: data.results[0].formatted_address || addressText.trim(),
+              };
+            }
+          }
+        }
+      } catch {
+        // Fallback below if network error
+      }
+    }
+    return null;
+  };
+
   const fetchAgents = async () => {
     try {
       const agentsMap = new globalThis.Map<string, Agent>();
+      const nonApprovedKeys = new Set<string>();
+      const explicitlyApprovedKeys = new Set<string>();
 
       const processDataAndAdd = (docId: string, data: any) => {
         if (!data) return;
+
+        // Strictly enforce status === "approved" rule: never include pending or rejected
+        const rawApproval = String(data.approvalStatus || data.status || '').toLowerCase().trim();
+        if (rawApproval === 'pending' || rawApproval === 'rejected') {
+          return;
+        }
+        const isApprovedRecord =
+          rawApproval === 'approved' ||
+          data.role === 'Approved Agent' ||
+          (data.verified === true && rawApproval !== 'pending' && rawApproval !== 'rejected');
+
+        if (!isApprovedRecord) return;
+
         const name = data.name || data.userName || data.fullName || data.agentName || data.memberName || '';
         const phone = data.phone || data.mobile || data.whatsNumber || data.userPhone || data.phoneNumber || '';
         if (!name && !phone) return;
 
-        const avatar = resolveAgentAvatar(data, name);
+        const key = phone.trim() || docId;
+        if (nonApprovedKeys.has(key) && !explicitlyApprovedKeys.has(key) && rawApproval !== 'approved') {
+          return;
+        }
 
+        const avatar = resolveAgentAvatar(data, name);
         const shopMapLink = data.shopMapLink || data.manualMapLink || data.mapLink || data.googleMapUrl || data.locationUrl || data.shopLocationLink || '';
         const locationNumber = data.locationNumber || data.shopNumber || data.locationCode || '';
 
-        // Safely extract lat/lng from all possible property names
-        const rawLat = data.realLat ?? data.lat ?? data.latitude ?? data.gpsLat ?? data.userLat ?? (data.location && (data.location.lat ?? data.location.latitude));
-        const rawLng = data.realLng ?? data.lng ?? data.longitude ?? data.gpsLng ?? data.userLng ?? (data.location && (data.location.lng ?? data.location.longitude));
+        // Safely extract static lat/lng
+        const rawLat = data.realLat ?? data.lat ?? data.latitude ?? (data.location && (data.location.lat ?? data.location.latitude));
+        const rawLng = data.realLng ?? data.lng ?? data.longitude ?? (data.location && (data.location.lng ?? data.location.longitude));
 
         let parsedLat = parseCoord(rawLat);
         let parsedLng = parseCoord(rawLng);
@@ -881,19 +949,39 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
         }
 
         const meta = resolveCountryMetadata(data.country, data.city || data.area, data.district);
+        const hasRealGPS = parsedLat !== undefined && parsedLng !== undefined;
 
-        const hasRealGPS = data.hasRealGPS === true || (parsedLat !== undefined && parsedLng !== undefined &&
-                           !(Math.abs(parsedLat - 23.8103) < 0.00001 && Math.abs(parsedLng - 90.4125) < 0.00001));
+        const lat = parsedLat !== undefined ? parsedLat : 0;
+        const lng = parsedLng !== undefined ? parsedLng : 0;
 
-        const lat = parsedLat !== undefined ? parsedLat : meta.defaultLat;
-        const lng = parsedLng !== undefined ? parsedLng : meta.defaultLng;
+        const permanentAddress =
+          data.address ||
+          data.writtenLocation ||
+          [data.postOffice, data.thana || data.area, data.district || data.city, meta.country]
+            .filter(Boolean)
+            .join(', ');
 
-        const key = phone.trim() || docId;
+        // Deterministic agent code (e.g., AG-2041) or Official Center badge
+        const numericSeed =
+          String(phone || docId)
+            .replace(/[^0-9]/g, '')
+            .slice(-4) || '2041';
+        const paddedDigits = numericSeed.padStart(4, '2');
+        const agentCode = data.agentCode || data.agentId || `AG-${paddedDigits}`;
+        const isOfficialCenter =
+          String(data.role || '').toLowerCase().includes('official') ||
+          String(data.role || '').includes('অফিসিয়াল সেন্টার') ||
+          data.isOfficialCenter === true;
+        const badgeLabel = data.badgeLabel || (isOfficialCenter ? 'অফিসিয়াল সেন্টার' : `এজেন্ট পয়েন্ট • ${agentCode}`);
+        const openingHours = data.openingHours || data.hours || data.schedule || 'সকাল ৯:০০ - রাত ১০:০০';
 
         const agentObj: Agent = {
           id: docId,
+          agentCode,
+          badgeLabel,
+          openingHours,
           name: name || 'এজেন্ট সদস্য',
-          role: data.role || data.agentRole || (data.isAgent ? 'অফিসিয়াল এজেন্ট' : 'সহযোগী সদস্য'),
+          role: data.role || data.agentRole || 'Approved Agent',
           country: meta.country,
           flag: meta.flag,
           city: data.city || data.area || data.district || 'ঢাকা',
@@ -911,12 +999,14 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
           district: data.district || data.division || data.state || '',
           thana: data.thana || data.areaName || data.upazila || data.area || data.postOffice || '',
           postOffice: data.postOffice || '',
-          verified: data.verified !== undefined ? data.verified : true,
+          address: permanentAddress,
+          verified: true,
           status: data.status === 'Busy' ? 'Busy' : data.status === 'Offline' ? 'Offline' : 'Available',
+          approvalStatus: 'approved',
           lastSeen: data.lastSeen || 'Active Now',
           whatsapp: data.whatsapp || data.whatsNumber || phone,
           messenger: data.messenger || '',
-          liveLocationEnabled: data.liveLocationEnabled !== undefined ? data.liveLocationEnabled : true
+          liveLocationEnabled: false,
         };
 
         if (!agentsMap.has(key)) {
@@ -930,79 +1020,70 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
             existing.realLng = lng;
             existing.hasRealGPS = true;
           }
-          if (!existing.img.includes('ui-avatars.com') && avatar.includes('ui-avatars.com')) {
-            // Keep existing custom photo
-          } else if (avatar && !avatar.includes('ui-avatars.com')) {
+          if (avatar && !avatar.includes('ui-avatars.com')) {
             existing.img = avatar;
           }
           if (!existing.district && (data.district || data.division)) existing.district = data.district || data.division;
           if (!existing.thana && (data.thana || data.areaName || data.area)) existing.thana = data.thana || data.areaName || data.area;
+          if (!existing.address && permanentAddress) existing.address = permanentAddress;
           if (!existing.phone && phone) existing.phone = phone;
         }
       };
 
-      // 1. Query 'agents' collection
-      try {
-        const snap1 = await getDocs(collection(db, 'agents'));
-        snap1.forEach((doc) => processDataAndAdd(doc.id, doc.data()));
-      } catch (e) {
-        console.error('Error loading agents collection:', e);
-      }
-
-      // 2. Query 'bap_agents' collection
-      try {
-        const snap2 = await getDocs(collection(db, 'bap_agents'));
-        snap2.forEach((doc) => processDataAndAdd(doc.id, doc.data()));
-      } catch (e) {
-        console.error('Error loading bap_agents collection:', e);
-      }
-
-      // 3. Query 'agent_requests' collection
+      // 1. First inspect 'agent_requests' to strictly filter out pending/rejected and include only status === 'approved'
       try {
         const snap3 = await getDocs(collection(db, 'agent_requests'));
-        snap3.forEach((doc) => processDataAndAdd(doc.id, doc.data()));
+        snap3.forEach((docSnap) => {
+          const d = docSnap.data();
+          const st = String(d?.status || '').toLowerCase().trim();
+          const pKey = (d?.phone || d?.mobile || '').trim() || d?.userId || docSnap.id;
+          if (st === 'approved') {
+            explicitlyApprovedKeys.add(pKey);
+            if (d?.userId) explicitlyApprovedKeys.add(d.userId);
+            processDataAndAdd(docSnap.id, { ...d, approvalStatus: 'approved' });
+          } else if (st === 'pending' || st === 'rejected') {
+            nonApprovedKeys.add(pKey);
+            if (d?.userId) nonApprovedKeys.add(d.userId);
+          }
+        });
       } catch (e) {
         console.error('Error loading agent_requests collection:', e);
       }
 
-      // 4. Query 'users' collection - ONLY load those with agent roles
+      // 2. Query 'agents' collection (only approved agents)
       try {
-        const snap4 = await getDocs(query(collection(db, 'users'), where('role', '==', 'agent')));
-        snap4.forEach((doc) => {
-          const data = doc.data();
-          processDataAndAdd(doc.id, data);
-        });
+        const snap1 = await getDocs(collection(db, 'agents'));
+        snap1.forEach((docSnap) => processDataAndAdd(docSnap.id, docSnap.data()));
       } catch (e) {
-        console.error('Error loading agent users:', e);
+        console.error('Error loading agents collection:', e);
       }
 
-      // 5. Query 'agentLocations' - REMOVED live tracking consumption to prioritize static locations from profile
-      /* 
+      // 3. Query 'bap_agents' collection (only approved agents)
       try {
-        const snapLocs = await getDocs(collection(db, 'agentLocations'));
-        // ... (Disabled to prevent live tracking overwriting static points)
+        const snap2 = await getDocs(collection(db, 'bap_agents'));
+        snap2.forEach((docSnap) => processDataAndAdd(docSnap.id, docSnap.data()));
       } catch (e) {
-        console.error('Error loading agentLocations:', e);
+        console.error('Error loading bap_agents collection:', e);
       }
-      */
 
       let fetchedAgentsList: Agent[] = Array.from(agentsMap.values());
 
-      // Filter out demo keywords if explicitly named "demo" or "test"
-      fetchedAgentsList = fetchedAgentsList.filter(agent => {
+      // Strictly keep only approved agents and filter out any demo/mock entries
+      fetchedAgentsList = fetchedAgentsList.filter((agent) => {
+        if (agent.approvalStatus !== 'approved') return false;
         const nameLower = agent.name.toLowerCase();
         const idLower = agent.id.toLowerCase();
         if (nameLower.includes('demo') || nameLower.includes('mock') || idLower.startsWith('demo-')) return false;
         return true;
       });
 
-      // Spread and assign unique coordinates to every agent so all show up on map
+      // Resolve static coordinates from permanent address/district if needed
       fetchedAgentsList = assignUniqueAgentCoordinates(fetchedAgentsList);
 
       setAgentsList(fetchedAgentsList);
 
       // Match current logged in user
-      const matched = fetchedAgentsList.find(a => a.phone === user.phone || a.id === user.uid);
+      const matched = fetchedAgentsList.find((a) => a.phone === user.phone || a.id === user.uid);
       if (matched) {
         setMyAgentProfile(matched);
         setDashName(matched.name);
@@ -1014,28 +1095,6 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
         setDashDist(matched.district || '');
         setDashThana(matched.thana || '');
         setDashPost(matched.postOffice || '');
-      } else if (user.role === 'agent') {
-        const userAvatar = resolveAgentAvatar(user, user.name || 'নতুন এজেন্ট');
-        const stubAgent: Agent = {
-          id: user.uid,
-          name: user.name || 'নতুন এজেন্ট অংশীদার',
-          role: 'Co-op Agent',
-          country: 'Bangladesh',
-          flag: '🇧🇩',
-          city: 'Dhaka',
-          phone: user.phone || '',
-          lat: 23.8103,
-          lng: 90.4125,
-          img: userAvatar,
-          verified: true,
-          status: 'Available',
-          lastSeen: 'Active Now'
-        };
-        setMyAgentProfile(stubAgent);
-        setDashName(stubAgent.name);
-        setDashCity(stubAgent.city);
-        setDashCountry(stubAgent.country);
-        setDashPhone(stubAgent.phone);
       }
     } catch (err) {
       console.error('Error fetching dynamic agents: ', err);
@@ -1044,27 +1103,6 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
 
   useEffect(() => {
     fetchAgents();
-    detectUserLocation();
-
-    // Static Location Mode: Live watcher disabled to save data and maintain permanent coordinates
-    /*
-    let stopWatcher: (() => void) | null = null;
-    if (user.uid && isSharingLocation) {
-      stopWatcher = startWatchingHighPrecisionLocation(
-        user.uid,
-        {
-          name: user.name || 'সদস্য',
-          phone: user.phone || '',
-          role: user.role === 'agent' ? 'অফিসিয়াল এজেন্ট' : 'মেম্বার',
-          profileImage: resolveAgentAvatar(user, user.name || 'User')
-        },
-        (coords) => {
-          setUserLocation(coords);
-          setGpsAccuracy(coords.accuracy || null);
-        }
-      );
-    }
-    */
 
     // Subscribe to system settings / app_config for real-time manual vs auto location setting
     const unsubConfig = onSnapshot(doc(db, 'system_settings', 'app_config'), (snap) => {
@@ -1076,21 +1114,18 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
       }
     });
 
-    // Subscribe to real-time updates for agents, requests, users, and high precision agentLocations
-    const unsub1 = onSnapshot(collection(db, 'agents'), () => fetchAgents(), err => console.error(err));
-    const unsub2 = onSnapshot(collection(db, 'bap_agents'), () => fetchAgents(), err => console.error(err));
-    const unsub3 = onSnapshot(collection(db, 'agent_requests'), () => fetchAgents(), err => console.error(err));
-    const unsub4 = onSnapshot(query(collection(db, 'users'), where('role', '==', 'agent')), () => fetchAgents(), err => console.error(err));
+    // Subscribe to real-time updates for approved agents and requests (no live GPS tracking)
+    const unsub1 = onSnapshot(collection(db, 'agents'), () => fetchAgents(), (err) => console.error(err));
+    const unsub2 = onSnapshot(collection(db, 'bap_agents'), () => fetchAgents(), (err) => console.error(err));
+    const unsub3 = onSnapshot(collection(db, 'agent_requests'), () => fetchAgents(), (err) => console.error(err));
 
     return () => {
-      // if (stopWatcher) stopWatcher();
       unsubConfig();
       unsub1();
       unsub2();
       unsub3();
-      unsub4();
     };
-  }, [user.uid, isSharingLocation]);
+  }, [user.uid]);
 
   // Auto fetch address when applicant opens application tab
   useEffect(() => {
@@ -1104,18 +1139,15 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
     if (!user.uid) return;
     setLoadingApps(true);
     try {
-      const qApps = (user.role === 'admin' || user.role === 'sub_admin')
-        ? collection(db, 'agent_requests')
-        : query(
-            collection(db, 'agent_requests'),
-            where('userId', '==', user.uid)
-          );
+      const qApps =
+        user.role === 'admin' || user.role === 'sub_admin'
+          ? collection(db, 'agent_requests')
+          : query(collection(db, 'agent_requests'), where('userId', '==', user.uid));
       const snap = await getDocs(qApps);
       const list: any[] = [];
-      snap.forEach((doc) => {
-        list.push({ id: doc.id, ...doc.data() });
+      snap.forEach((docSnap) => {
+        list.push({ id: docSnap.id, ...docSnap.data() });
       });
-      // Sort client-side by createdAt descending
       list.sort((a, b) => {
         const timeA = a.createdAt?.seconds || 0;
         const timeB = b.createdAt?.seconds || 0;
@@ -1132,42 +1164,64 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
   const handleApproveApplication = async (app: any) => {
     if (!window.confirm('আপনি কি নিশ্চিতভাবে এই এজেন্ট আবেদনটি অনুমোদন করতে চান?')) return;
     try {
-      // 1. Update request status to approved
+      const fullAddress =
+        app.writtenLocation ||
+        app.address ||
+        app.shopMapLink ||
+        [app.postOffice, app.thana || app.area, app.district, app.country || 'Bangladesh']
+          .filter(Boolean)
+          .join(', ');
+
+      const geocoded = await geocodeAddressWithGoogle(fullAddress);
+      const finalLat = geocoded?.lat ?? parseCoord(app.lat) ?? 23.685;
+      const finalLng = geocoded?.lng ?? parseCoord(app.lng) ?? 90.356;
+      const resolvedAddress = geocoded?.formattedAddress || fullAddress;
+
+      // 1. Update request status to approved along with geocoded lat/lng
       await updateDoc(doc(db, 'agent_requests', app.id), {
         status: 'approved',
-        processedAt: serverTimestamp()
+        approvalStatus: 'approved',
+        lat: finalLat,
+        lng: finalLng,
+        realLat: finalLat,
+        realLng: finalLng,
+        address: resolvedAddress,
+        processedAt: serverTimestamp(),
       });
 
-      // 2. Add to active agents collection
-      const newAgentId = 'agent_' + app.userId;
+      // 2. Save approved agent with permanent geocoded coordinates to 'agents' & 'bap_agents'
+      const newAgentId = app.userId || 'agent_' + app.id;
       const newAgentObj = {
         id: newAgentId,
-        name: app.userName,
-        role: app.role || 'BNB Co-op Agent',
+        name: app.userName || app.fullName || 'অনুমোদিত এজেন্ট',
+        role: app.role || 'Approved Agent',
         country: app.country || 'Bangladesh',
         flag: '🇧🇩',
-        city: app.area || 'ঢাকা',
-        phone: app.phone,
-        lat: app.lat || 23.8103, // default lat for Dhaka
-        lng: app.lng || 90.4125, // default lng for Dhaka
-        realLat: app.lat || 23.8103,
-        realLng: app.lng || 90.4125,
+        city: app.area || app.city || app.district || 'ঢাকা',
+        phone: app.phone || '',
+        lat: finalLat,
+        lng: finalLng,
+        realLat: finalLat,
+        realLng: finalLng,
         hasRealGPS: true,
+        address: resolvedAddress,
         shopMapLink: app.shopMapLink || '',
         locationNumber: app.locationNumber || '',
         img: resolveAgentAvatar(app, app.userName),
-        district: app.district || 'ঢাকা',
-        thana: app.thana || 'গুলশান',
-        postOffice: app.postOffice || 'ঢাকা',
+        district: app.district || '',
+        thana: app.thana || app.area || '',
+        postOffice: app.postOffice || '',
         verified: true,
         status: 'Available',
-        lastSeen: 'সদ্য অনলাইন',
-        whatsapp: app.whatsNumber || app.phone,
+        approvalStatus: 'approved',
+        lastSeen: 'Active Now',
+        whatsapp: app.whatsNumber || app.whatsapp || app.phone || '',
         messenger: '',
-        liveLocationEnabled: true,
-        createdAt: serverTimestamp()
+        liveLocationEnabled: false,
+        createdAt: serverTimestamp(),
       };
-      await setDoc(doc(db, 'agents', newAgentId), newAgentObj);
+      await setDoc(doc(db, 'agents', newAgentId), newAgentObj, { merge: true });
+      await setDoc(doc(db, 'bap_agents', newAgentId), newAgentObj, { merge: true }).catch(() => {});
 
       // 3. Dispatch dynamic notification to user's inbox
       const noticeId = 'notice_' + Date.now();
@@ -1175,12 +1229,11 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
         id: noticeId,
         userId: app.userId,
         title: '🛡️ এজেন্ট অনুমোদন বিজ্ঞপ্তি',
-        content: `অভিনন্দন ${app.userName}! আপনার কো-অপারেটিভ এজেন্ট হওয়ার আবেদনটি সফলভাবে অনুমোদিত হয়েছে। এখন থেকে আপনি আমাদের অফিসিয়াল রিপ্রেজেন্টেティブ ম্যাপে যুক্ত হয়েছেন।`,
+        content: `অভিনন্দন ${app.userName}! আপনার কো-অপারেটিভ এজেন্ট হওয়ার আবেদনটি সফলভাবে অনুমোদিত হয়েছে। এখন থেকে আপনি আমাদের অফিসিয়াল রিপ্রেজেন্টেটিভ ম্যাপে যুক্ত হয়েছেন।`,
         createdAt: new Date().toISOString(),
-        read: false
+        read: false,
       });
 
-      console.log('আবেদনপত্রটি সফলভাবে অনুমোদিত হয়েছে এবং এজেন্ট সক্রিয় করা হয়েছে!');
       fetchMyApplications();
       fetchAgents();
     } catch (err: any) {
@@ -1217,12 +1270,52 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
     }
   };
 
-  const handleDeleteAgent = async (id: string) => {
+  const handleDeleteAgent = async (targetOrId: any) => {
     try {
-      await deleteDoc(doc(db, 'agents', id));
-      console.log('এজেন্ট সফলভাবে ডিলিট করা হয়েছে!');
-      // Also reset selected agent state
+      const isObj = targetOrId && typeof targetOrId === 'object';
+      const rawId = String(isObj ? targetOrId.id || targetOrId.docId || '' : targetOrId || '').trim();
+      const targetUserId = String(isObj ? targetOrId.userId || targetOrId.uid || '' : '').trim();
+      const targetPhone = String(isObj ? targetOrId.phone || targetOrId.mobile || '' : '').trim();
+
+      const candidateIds = Array.from(
+        new Set([rawId, targetUserId, targetUserId ? `agent_${targetUserId}` : ''].filter(Boolean))
+      );
+
+      for (const cid of candidateIds) {
+        await deleteDoc(doc(db, 'agents', cid)).catch(() => {});
+        await deleteDoc(doc(db, 'bap_agents', cid)).catch(() => {});
+        await deleteDoc(doc(db, 'agent_requests', cid)).catch(() => {});
+        await deleteDoc(doc(db, 'agent_applications', cid)).catch(() => {});
+      }
+
+      const collectionsToClean = ['agents', 'bap_agents', 'agent_requests', 'agent_applications'];
+      for (const colName of collectionsToClean) {
+        try {
+          const snap = await getDocs(collection(db, colName));
+          for (const d of snap.docs) {
+            const data = d.data() || {};
+            const dPhone = String(data.phone || data.mobile || '').trim();
+            const dUserId = String(data.userId || data.uid || '').trim();
+            const dId = String(data.id || d.id || '').trim();
+            if (
+              (rawId && (d.id === rawId || dId === rawId)) ||
+              (targetUserId && (d.id === targetUserId || dUserId === targetUserId)) ||
+              (targetPhone && dPhone && dPhone === targetPhone)
+            ) {
+              await deleteDoc(doc(db, colName, d.id)).catch(() => {});
+            }
+          }
+        } catch {
+          // Ignore single collection error
+        }
+      }
+
+      if (targetUserId) {
+        await updateDoc(doc(db, 'users', targetUserId), { role: 'user' }).catch(() => {});
+      }
+
       setHighlightedAgentId(null);
+      fetchMyApplications();
       fetchAgents();
     } catch (err: any) {
       console.error('ত্রুটিঃ ' + err.message);
@@ -1977,33 +2070,54 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
         {activeTab === 'map' && (
           <div className="space-y-4 animate-fade-in text-left">
             
-            {/* Real Google Maps Integration Component */}
-            <GoogleAgentMap
-              agents={processedAgents.map((a: any) => ({
-                id: a.id,
-                name: a.name,
-                phone: a.phone,
-                whatsapp: a.whatsapp,
-                role: a.role,
-                country: a.country,
-                city: a.city,
-                district: a.district,
-                thana: a.thana,
-                address: a.address || `${a.thana || ''}, ${a.district || ''}`,
-                img: a.img,
-                lat: Number(a.realLat || a.lat || 0),
-                lng: Number(a.realLng || a.lng || 0),
-                active: a.active ?? true,
-                distanceKm: a.distanceKm,
-              }))}
-              mapType={mapType}
-              onMapTypeChange={(type) => setMapType(type)}
-              selectedAgentId={highlightedAgentId}
-              onSelectAgent={(id) => setHighlightedAgentId(id)}
-              userLocation={userLocation}
-              onRequestUserLocation={handleRequestUserLocation}
-              locatingUser={isLocating}
-            />
+            {/* Real Google Maps Integration Component (Only Public Data Passed) */}
+            <div id="agent-google-map-container">
+              <GoogleAgentMap
+                agents={processedAgents
+                  .filter((a: any) => a.approvalStatus === 'approved')
+                  .map((a: any) => ({
+                    id: a.id,
+                    agentCode: a.agentCode,
+                    badgeLabel: a.badgeLabel,
+                    name: a.name,
+                    country: a.country || 'Bangladesh',
+                    city: a.city || a.district || '',
+                    address:
+                      a.address ||
+                      [a.postOffice, a.thana, a.district, a.city, a.country]
+                        .filter(Boolean)
+                        .join(', '),
+                    openingHours: a.openingHours || 'সকাল ৯:০০ - রাত ১০:০০',
+                    phone: a.phone || '',
+                    lat: Number(a.realLat || a.lat || 0),
+                    lng: Number(a.realLng || a.lng || 0),
+                    distanceKm: userLocation ? a.distanceKm : null,
+                  }))}
+                mapType={mapType}
+                onMapTypeChange={(type) => {
+                  setMapType(type);
+                  if (type === 'bangladesh') {
+                    setSelectedCountryFilter('Bangladesh');
+                  } else {
+                    setSelectedCountryFilter('all');
+                  }
+                }}
+                selectedAgentId={highlightedAgentId}
+                onSelectAgent={(id) => {
+                  setHighlightedAgentId(id);
+                  if (id) {
+                    setTimeout(() => {
+                      document
+                        .getElementById(`agent-card-${id}`)
+                        ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    }, 100);
+                  }
+                }}
+                userLocation={userLocation}
+                onRequestUserLocation={handleRequestUserLocation}
+                locatingUser={isLocating}
+              />
+            </div>
 
 
 
@@ -2429,147 +2543,111 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
             </div>
 
             {/* ================= ACTIVE AGENTS GRID ================= */}
-            <div className="grid grid-cols-2 gap-3">
-              {processedAgents.map((agent, idx) => (
-                <div 
-                  key={`${agent.id}-${idx}`}
-                  className={`bg-white border rounded-2.5xl p-3 flex flex-col justify-between hover:shadow-md transition-all duration-200 shadow-3xs text-left group relative overflow-hidden ${highlightedAgentId === agent.id ? 'border-emerald-500 shadow-sm shadow-emerald-50' : 'border-slate-200'}`}
-                >
-                  <div className="absolute top-2 right-2 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
-                    <span className="text-[7.5px] font-extrabold text-green-700 bg-green-50 px-1 py-0.5 rounded uppercase leading-none">Active</span>
-                  </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {processedAgents.map((agent, idx) => {
+                const agentLat = agent.realLat !== undefined ? agent.realLat : agent.lat;
+                const agentLng = agent.realLng !== undefined ? agent.realLng : agent.lng;
+                const isSelected = highlightedAgentId === agent.id;
+                const displayAddress =
+                  agent.address ||
+                  [agent.postOffice, agent.thana, agent.district, agent.city]
+                    .filter(Boolean)
+                    .join(', ');
 
-                  {/* Profile Layout with avatar */}
-                  <div className="flex items-center gap-2 mt-1">
-                    <img 
-                      src={agent.img} 
-                      alt={agent.name}
-                      referrerPolicy="no-referrer"
-                      className="w-10 h-10 rounded-full object-cover border border-slate-100 shrink-0 shadow-3xs" 
-                    />
-                    <div className="min-w-0">
-                      <h4 className="text-[11.5px] font-black text-slate-800 leading-tight truncate">{agent.name}</h4>
-                      <div className="flex items-center gap-1 text-[8px] text-slate-500 font-bold truncate">
-                        <span>{agent.flag}</span>
-                        <span className="truncate">{agent.country}</span>
-                      </div>
-                    </div>
-                  </div>
+                const focusAgentOnMap = () => {
+                  setHighlightedAgentId(agent.id);
+                  const isBD =
+                    (agent.country || '').toLowerCase().includes('bangladesh') ||
+                    (agent.country || '').includes('বাংলাদেশ');
+                  if (!isBD && mapType === 'bangladesh') {
+                    setMapType('world');
+                  }
+                  setZoomLevel(1.5);
+                  document
+                    .getElementById('agent-google-map-container')
+                    ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                };
 
-                  {/* Body Content */}
-                  <div className="space-y-1.5 my-2.5 font-sans">
-                    <div className="flex items-center gap-1 text-[8.5px] text-slate-600 font-bold leading-normal">
-                      <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
-                      <span className="truncate">{agent.city}</span>
-                    </div>
-                    
-                    {/* Detailed Permanent Address */}
-                    {(agent.district || agent.thana || agent.postOffice) && (
-                      <div className="bg-slate-50 p-2 rounded-2xl border border-slate-100 text-[8.5px] text-slate-600 font-semibold space-y-0.5 leading-tight text-left">
-                        <p className="text-[7.5px] font-black text-teal-650 uppercase tracking-wider">🏠 ঠিকানা / লোকেশনঃ</p>
-                        {agent.postOffice && <p>গ্রাম/পোস্টঃ {agent.postOffice}</p>}
-                        {agent.thana && <p>থানা/উপজেলাঃ {agent.thana}</p>}
-                        {agent.district && <p>জেলা/শহরঃ {agent.district}</p>}
-                      </div>
-                    )}
+                return (
+                  <div
+                    id={`agent-card-${agent.id}`}
+                    key={`${agent.id}-${idx}`}
+                    onClick={focusAgentOnMap}
+                    className={`bg-white rounded-2.5xl p-3.5 flex flex-col justify-between transition-all duration-200 text-left group relative overflow-hidden cursor-pointer ${
+                      isSelected
+                        ? 'border-2 border-orange-500 ring-2 ring-orange-400/50 bg-orange-50/20 shadow-md'
+                        : 'border border-slate-200 hover:shadow-md shadow-3xs'
+                    }`}
+                  >
+                    {/* Top Row: Badge (Agent Point + ID or Official Center) & Distance (only if GPS active) */}
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <span className="inline-flex items-center gap-1 text-[9.5px] font-black px-2.5 py-0.5 rounded-full bg-blue-50 text-[#1E3A8A] border border-blue-200">
+                        {agent.badgeLabel || `এজেন্ট পয়েন্ট • ${agent.agentCode || 'AG-2041'}`}
+                      </span>
 
-                    {/* GPS Coordinates & Google Maps Link */}
-                    {(agent.realLat !== undefined || agent.lat !== undefined) && (agent.realLng !== undefined || agent.lng !== undefined) && (
-                      <div className="bg-emerald-50/90 border border-emerald-200/80 p-2 rounded-xl text-[8.5px] font-mono font-extrabold text-emerald-950 flex flex-wrap items-center justify-between gap-1">
-                        <span className="flex items-center gap-1 shrink-0">
-                          <span>🛰️</span> {Number(agent.realLat !== undefined ? agent.realLat : agent.lat).toFixed(6)}, {Number(agent.realLng !== undefined ? agent.realLng : agent.lng).toFixed(6)}
+                      {userLocation && agent.distanceKm != null && !isNaN(agent.distanceKm) && (
+                        <span className="inline-flex items-center gap-1 text-[9.5px] font-black px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 shrink-0">
+                          📍 {agent.distanceKm < 1
+                            ? `${toBanglaDigits(Math.round(agent.distanceKm * 1000))} মিটার`
+                            : `${toBanglaDigits(agent.distanceKm.toFixed(1))} কি.মি.`}
                         </span>
-                        <a
-                          href={`https://www.google.com/maps/search/?api=1&query=${agent.realLat !== undefined ? agent.realLat : agent.lat},${agent.realLng !== undefined ? agent.realLng : agent.lng}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-teal-700 hover:underline font-black text-[8px]"
-                        >
-                          (গুগল ম্যাপে দেখুন ↗)
-                        </a>
-                      </div>
-                    )}
-
-                    {/* Proximity Distance Badge or GPS request button */}
-                    {agent.distance !== null ? (
-                      <div className="bg-emerald-50/90 border border-emerald-200 rounded-xl p-2 text-[8.5px] text-emerald-850 font-bold space-y-0.5">
-                        <div className="flex items-center justify-between">
-                          <span className="flex items-center gap-1 font-black text-emerald-800">
-                            <span>{agent.travelType === 'হাঁটা পথ' ? '🚶' : '🚗'}</span>
-                            <span>
-                              দূরত্বঃ {agent.distance < 1 
-                                ? `${toBanglaDigits(Math.round(agent.distance * 1000))} মিটার` 
-                                : `${toBanglaDigits(agent.distance.toFixed(1))} কি.মি.`}
-                            </span>
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between text-[8px] text-teal-800 font-extrabold border-t border-emerald-100 pt-0.5 mt-0.5">
-                          <span>⏱️ যেতে সময়ঃ</span>
-                          <span className="bg-emerald-100 px-1.5 py-0.5 rounded font-black text-emerald-900">
-                            {agent.estTime} ({agent.travelType || 'ড্রাইভ'})
-                          </span>
-                        </div>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={detectUserLocation}
-                        className="w-full py-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 rounded-xl text-[8.5px] font-bold flex items-center justify-center gap-1 cursor-pointer transition"
-                      >
-                        <span>📍 জিপিএস দিয়ে দূরত্ব ও সময় দেখুন</span>
-                      </button>
-                    )}
-
-                    <div className="flex items-center gap-1 text-[8.5px] text-slate-600 font-mono font-extrabold leading-normal">
-                      <Phone className="w-3 h-3 text-slate-400 shrink-0" />
-                      <span>{agent.phone}</span>
-                    </div>
-                  </div>
-
-                  {/* Comprehensive Action Buttons */}
-                  <div className="space-y-1.5 pt-1">
-                    <div className="grid grid-cols-2 gap-1">
-                      {/* WhatsApp Button */}
-                      <a 
-                        href={`https://wa.me/${agent.whatsapp ? agent.whatsapp.replace(/[^0-9]/g, '') : agent.phone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent('আসসালামু আলাইকুম, আমি BNB কো-অপারেটিভ অ্যাপ থেকে যোগাযোগ করছি।')}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="py-1.5 bg-[#25D366] hover:bg-[#20ba56] text-white text-[8.5px] font-black rounded-xl flex items-center justify-center gap-1 transition text-center shadow-3xs cursor-pointer"
-                      >
-                        <span>💬 WhatsApp</span>
-                      </a>
-
-                      {/* Google Maps Direction Link */}
-                      <a 
-                        href={`https://www.google.com/maps/dir/?api=1&destination=${agent.realLat !== undefined ? agent.realLat : agent.lat},${agent.realLng !== undefined ? agent.realLng : agent.lng}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="py-1.5 bg-sky-600 hover:bg-sky-700 text-white text-[8.5px] font-black rounded-xl flex items-center justify-center gap-1 transition text-center shadow-3xs cursor-pointer"
-                      >
-                        <Navigation className="w-2.5 h-2.5 shrink-0" />
-                        <span>গুগল ম্যাপ</span>
-                      </a>
+                      )}
                     </div>
 
-                    {/* Interactive Map Pin Button */}
-                    <button 
-                      onClick={() => {
-                        setHighlightedAgentId(agent.id);
-                        if (agent.country === 'Bangladesh') {
-                          setMapType('bangladesh');
-                        } else {
-                          setMapType('world');
-                        }
-                        setZoomLevel(1.5);
+                    {/* Agent Name */}
+                    <h4
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        focusAgentOnMap();
                       }}
-                      className={`w-full py-1.5 bg-[#0D9488] hover:bg-[#0B7A70] text-white text-[9px] font-black rounded-xl transition duration-150 flex items-center justify-center gap-1 cursor-pointer text-center shadow-3xs ${highlightedAgentId === agent.id ? 'bg-emerald-600 ring-2 ring-emerald-300' : ''}`}
+                      className="text-xs sm:text-[13px] font-black text-slate-900 hover:text-[#1E3A8A] leading-snug truncate cursor-pointer"
                     >
-                      <Globe className="w-3 h-3 shrink-0" /> পিন হাইলাইট করুন
-                    </button>
+                      {agent.name}
+                    </h4>
+
+                    {/* Public Details: Address, Opening Hours, Phone Number */}
+                    <div className="space-y-1.5 my-2.5 font-sans text-[10px] text-slate-700">
+                      <div className="flex items-start gap-1.5 font-semibold leading-snug">
+                        <MapPin className="w-3.5 h-3.5 text-[#0D9488] shrink-0 mt-0.5" />
+                        <span>{displayAddress || agent.city}</span>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 font-semibold text-slate-600">
+                        <Calendar className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span>খোলার সময়: {agent.openingHours || 'সকাল ৯:০০ - রাত ১০:০০'}</span>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 font-mono font-extrabold text-slate-800">
+                        <Phone className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span>{agent.phone}</span>
+                      </div>
+                    </div>
+
+                    {/* Action Buttons: "কল করুন" & "দিকনির্দেশনা (Map)" */}
+                    <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100">
+                      <a
+                        href={`tel:${agent.phone}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="py-2 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black rounded-xl flex items-center justify-center gap-1.5 transition text-center shadow-2xs cursor-pointer"
+                      >
+                        <Phone className="w-3 h-3 shrink-0" />
+                        <span>কল করুন</span>
+                      </a>
+
+                      <a
+                        href={`https://www.google.com/maps/dir/?api=1&destination=${agentLat},${agentLng}&travelmode=driving`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="py-2 px-2.5 bg-[#1E3A8A] hover:bg-blue-900 text-white text-[10px] font-black rounded-xl flex items-center justify-center gap-1.5 transition text-center shadow-2xs cursor-pointer"
+                      >
+                        <Navigation className="w-3 h-3 shrink-0" />
+                        <span>দিকনির্দেশনা (Map)</span>
+                      </a>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               
               {processedAgents.length === 0 && (
                 <div className="col-span-2 bg-slate-50 border border-slate-150 rounded-2.5xl p-6 text-center text-slate-400 text-xs font-bold font-sans">
@@ -2593,7 +2671,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                 <div className="w-7 h-7 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-1">
                   <Globe className="w-4 h-4" />
                 </div>
-                <h4 className="text-xs font-black text-sky-850 leading-none">{toBanglaDigits(new Set(agentsList.map((a, _idx) => a.country?.trim().toLowerCase()).filter(Boolean)).size || 1)} টি</h4>
+                <h4 className="text-xs font-black text-sky-850 leading-none">{toBanglaDigits(new Set(agentsList.map((a, _idx) => a.country?.trim().toLowerCase()).filter(Boolean)).size)} টি</h4>
                 <p className="text-[7.5px] text-slate-400 font-extrabold leading-none truncate block">সক্রিয় দেশ</p>
                 <p className="text-[7.5px] text-slate-400 font-extrabold leading-none truncate block">বিশ্বজুড়ে</p>
               </div>
@@ -2602,7 +2680,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                 <div className="w-7 h-7 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-1">
                   <MapPin className="w-4 h-4" />
                 </div>
-                <h4 className="text-xs font-black text-slate-800 leading-none">{toBanglaDigits(new Set(agentsList.map((a, _idx) => a.city?.trim().toLowerCase()).filter(Boolean)).size || 1)} টি</h4>
+                <h4 className="text-xs font-black text-slate-800 leading-none">{toBanglaDigits(new Set(agentsList.map((a, _idx) => a.city?.trim().toLowerCase()).filter(Boolean)).size)} টি</h4>
                 <p className="text-[7.5px] text-slate-400 font-extrabold leading-none truncate block">শহর কভারেজ</p>
                 <p className="text-[7.5px] text-slate-400 font-extrabold leading-none truncate block">সেবা সর্বত্র</p>
               </div>
@@ -2692,25 +2770,37 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                         </div>
 
                         {/* Admin Action Bar */}
-                        {(user.role === 'admin' || user.role === 'sub_admin') && isPending && (
+                        {(user.role === 'admin' || user.role === 'sub_admin') && (
                           <div className="bg-amber-50 border border-amber-200/60 p-2.5 rounded-xl space-y-1.5">
                             <p className="text-[8.5px] font-black text-amber-900 uppercase">🛡️ প্রশাসনিক আবেদন নিয়ন্ত্রণ প্যানেল</p>
-                            <div className="flex gap-2">
-                              <button
-                                type="button"
-                                onClick={() => handleApproveApplication(app)}
-                                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-1.5 px-2.5 rounded-lg text-[9px] cursor-pointer text-center"
-                              >
-                                অনুমোদন করুন ✓
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleRejectApplication(app)}
-                                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold py-1.5 px-2.5 rounded-lg text-[9px] cursor-pointer text-center"
-                              >
-                                বাতিল করুন ✕
-                              </button>
-                            </div>
+                            {isPending ? (
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleApproveApplication(app)}
+                                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-1.5 px-2.5 rounded-lg text-[9px] cursor-pointer text-center"
+                                >
+                                  অনুমোদন করুন ✓
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRejectApplication(app)}
+                                  className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold py-1.5 px-2.5 rounded-lg text-[9px] cursor-pointer text-center"
+                                >
+                                  বাতিল করুন ✕
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteAgent(app)}
+                                  className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold py-1.5 px-2.5 rounded-lg text-[9px] cursor-pointer text-center"
+                                >
+                                  🗑️ এজেন্ট রিমুভ করুন (ম্যাপ ও তালিকা থেকে মুছুন)
+                                </button>
+                              </div>
+                            )}
                           </div>
                         )}
 

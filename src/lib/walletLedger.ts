@@ -120,3 +120,75 @@ export async function reconcileUserLedger(userId: string): Promise<{ reconciled:
   const currentBalance = getEffectiveBalance(userData);
   return { reconciled: false, correctedBalance: currentBalance, discrepancy: 0 };
 }
+
+export interface SendMoneyServerRequest {
+  userId: string;
+  channel: 'mobile_bank' | 'bank_wallet' | 'abroad' | 'bnb_to_bnb';
+  amount: number;
+  clientCharge?: number;
+  requestId: string;
+  transactionId?: string;
+  method?: string;
+  selectedMobileOp?: string;
+  targetPhone?: string;
+  selectedBankOp?: string;
+  bankName?: string;
+  accountTitle?: string;
+  accountNumber?: string;
+  branch?: string;
+  routingNumber?: string;
+  receiverIdentifier?: string;
+}
+
+export interface SendMoneyServerResponse {
+  success: boolean;
+  alreadyProcessed?: boolean;
+  newBalance: number;
+  transactionId: string;
+  recordId: string;
+  charge: number;
+  totalRequired: number;
+  receiverName?: string;
+  receiverPhone?: string;
+  receiverMemberId?: string;
+  isVirtualSomitiAcc?: boolean;
+}
+
+export async function processSendMoneyServer(req: SendMoneyServerRequest): Promise<SendMoneyServerResponse> {
+  let resp: Response;
+  try {
+    resp = await fetch(apiUrl('/api/wallet/send-money'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req)
+    });
+  } catch (_networkErr) {
+    throw new Error('লেনদেন সম্পন্ন হয়নি / অবস্থা অনিশ্চিত হলে লেনদেন পাতা দেখে নিন, তারপর আবার চেষ্টা করুন।');
+  }
+
+  let data: any = null;
+  try {
+    data = await resp.json();
+  } catch (_parseErr) {
+    throw new Error('লেনদেন সম্পন্ন হয়নি / অবস্থা অনিশ্চিত হলে লেনদেন পাতা দেখে নিন, তারপর আবার চেষ্টা করুন।');
+  }
+
+  if (!resp.ok || !data?.success) {
+    throw new Error(data?.error || 'লেনদেন সম্পন্ন হয়নি / অবস্থা অনিশ্চিত হলে লেনদেন পাতা দেখে নিন, তারপর আবার চেষ্টা করুন।');
+  }
+
+  return {
+    success: true,
+    alreadyProcessed: Boolean(data.alreadyProcessed),
+    newBalance: Number(data.newBalance),
+    transactionId: String(data.transactionId || req.transactionId || req.requestId),
+    recordId: String(data.recordId || data.transactionId || req.requestId),
+    charge: Number(data.charge || 0),
+    totalRequired: Number(data.totalRequired || req.amount),
+    receiverName: data.receiverName,
+    receiverPhone: data.receiverPhone,
+    receiverMemberId: data.receiverMemberId,
+    isVirtualSomitiAcc: Boolean(data.isVirtualSomitiAcc)
+  };
+}
+

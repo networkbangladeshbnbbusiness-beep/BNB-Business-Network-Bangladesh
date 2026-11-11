@@ -1,5 +1,5 @@
 // Source: Google Maps Platform Code Assist
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import {
   APIProvider,
   Map,
@@ -7,24 +7,21 @@ import {
   InfoWindow,
   useMap,
 } from '@vis.gl/react-google-maps';
-import { MapPin, Navigation, Phone, Globe, Compass } from 'lucide-react';
+import { MapPin, Navigation, Phone, Globe, Compass, Clock } from 'lucide-react';
 
 export interface AgentLocationData {
   id: string;
+  agentCode?: string;
+  badgeLabel?: string;
   name: string;
+  country: string;
+  city: string;
+  address: string;
+  openingHours?: string;
   phone: string;
-  whatsapp?: string;
-  role?: string;
-  country?: string;
-  countryCode?: string;
-  city?: string;
-  district?: string;
-  thana?: string;
-  address?: string;
-  img?: string;
   lat: number;
   lng: number;
-  active?: boolean;
+  img?: string;
   distanceKm?: number | null;
 }
 
@@ -39,7 +36,28 @@ interface GoogleAgentMapProps {
   locatingUser?: boolean;
 }
 
-// Controller to smoothly pan map camera when selected agent or mapType changes
+function isBangladeshAgent(agent: AgentLocationData): boolean {
+  const c = (agent.country || '').toLowerCase().trim();
+  if (
+    c === 'bangladesh' ||
+    c === 'বাংলাদেশ' ||
+    c === 'bd' ||
+    c.includes('bangladesh') ||
+    c.includes('বাংলাদেশ')
+  ) {
+    return true;
+  }
+  if (!c) {
+    const lat = Number(agent.lat);
+    const lng = Number(agent.lng);
+    if (lat >= 20.5 && lat <= 26.7 && lng >= 88.0 && lng <= 92.7) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Controller to smoothly pan and zoom map camera when selected agent or mapType changes
 function MapCameraController({
   center,
   zoom,
@@ -71,31 +89,59 @@ export const GoogleAgentMap: React.FC<GoogleAgentMapProps> = ({
 }) => {
   const apiKey =
     import.meta.env.VITE_GOOGLE_MAPS_API_KEY ||
-    (typeof window !== 'undefined' && (window as any).VITE_GOOGLE_MAPS_API_KEY) ||
+    (typeof process !== 'undefined' &&
+      process.env &&
+      (process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY)) ||
     '';
 
-  // Map viewport center & zoom calculation
-  const mapCenter = useMemo(() => {
-    if (selectedAgentId) {
-      const selected = agents.find((a) => a.id === selectedAgentId);
-      if (selected && selected.lat && selected.lng) {
-        return { lat: Number(selected.lat), lng: Number(selected.lng) };
+  // Filter visible agents based on map tab:
+  // - 'world': all approved agents worldwide
+  // - 'bangladesh': only approved agents in Bangladesh
+  const visibleAgents = useMemo(() => {
+    return agents.filter((agent) => {
+      if (
+        !agent ||
+        typeof agent.lat !== 'number' ||
+        typeof agent.lng !== 'number' ||
+        isNaN(agent.lat) ||
+        isNaN(agent.lng) ||
+        (agent.lat === 0 && agent.lng === 0)
+      ) {
+        return false;
       }
-    }
-    if (mapType === 'bangladesh') {
-      return { lat: 23.685, lng: 90.3563 };
-    }
-    return { lat: 20, lng: 20 };
-  }, [selectedAgentId, mapType, agents]);
-
-  const mapZoom = useMemo(() => {
-    if (selectedAgentId) return 13;
-    return mapType === 'bangladesh' ? 7 : 2;
-  }, [selectedAgentId, mapType]);
+      if (mapType === 'bangladesh') {
+        return isBangladeshAgent(agent);
+      }
+      return true;
+    });
+  }, [agents, mapType]);
 
   const selectedAgent = useMemo(() => {
-    return agents.find((a) => a.id === selectedAgentId) || null;
-  }, [agents, selectedAgentId]);
+    if (!selectedAgentId) return null;
+    return (
+      visibleAgents.find((a) => a.id === selectedAgentId) ||
+      agents.find((a) => a.id === selectedAgentId) ||
+      null
+    );
+  }, [visibleAgents, agents, selectedAgentId]);
+
+  // Map viewport center & street-level zoom (17) when an agent is selected
+  const mapCenter = useMemo(() => {
+    if (selectedAgent && selectedAgent.lat && selectedAgent.lng) {
+      return { lat: Number(selectedAgent.lat), lng: Number(selectedAgent.lng) };
+    }
+    if (mapType === 'bangladesh') {
+      return { lat: 23.685, lng: 90.356 };
+    }
+    return { lat: 20, lng: 20 };
+  }, [selectedAgent, mapType]);
+
+  const mapZoom = useMemo(() => {
+    if (selectedAgent && selectedAgent.lat && selectedAgent.lng) {
+      return 17;
+    }
+    return mapType === 'bangladesh' ? 7 : 2;
+  }, [selectedAgent, mapType]);
 
   return (
     <div className="w-full space-y-3">
@@ -131,13 +177,13 @@ export const GoogleAgentMap: React.FC<GoogleAgentMapProps> = ({
         </button>
       </div>
 
-      {/* Main Google Maps Container */}
-      <div className="relative w-full h-[400px] sm:h-[450px] rounded-3xl overflow-hidden border border-emerald-900/20 shadow-md bg-slate-900">
+      {/* Main Google Maps Container (light/clean map style preserved) */}
+      <div className="relative w-full h-[400px] sm:h-[450px] rounded-3xl overflow-hidden border border-emerald-900/20 shadow-md bg-white">
         {!apiKey ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-slate-900 text-white space-y-3">
-            <Compass className="w-10 h-10 text-emerald-400 animate-spin" />
-            <h3 className="text-sm font-black text-emerald-300">Google Maps Integration Active</h3>
-            <p className="text-xs text-slate-300 max-w-sm font-medium">
+          <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-slate-50 text-slate-700 space-y-3">
+            <Compass className="w-10 h-10 text-emerald-600 animate-spin" />
+            <h3 className="text-sm font-black text-emerald-800">Google Maps Integration Active</h3>
+            <p className="text-xs text-slate-500 max-w-sm font-medium">
               গুগল ম্যাপস লোড হচ্ছে...
             </p>
           </div>
@@ -145,7 +191,10 @@ export const GoogleAgentMap: React.FC<GoogleAgentMapProps> = ({
           <APIProvider apiKey={apiKey}>
             <Map
               mapId="DEMO_MAP_ID"
-              internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
+              internalUsageAttributionIds={[
+                'gmp_mcp_codeassist_v1_aistudio',
+                'gmp_git_agentskills_v1',
+              ]}
               defaultCenter={mapCenter}
               defaultZoom={mapZoom}
               gestureHandling="greedy"
@@ -155,7 +204,7 @@ export const GoogleAgentMap: React.FC<GoogleAgentMapProps> = ({
             >
               <MapCameraController center={mapCenter} zoom={mapZoom} />
 
-              {/* User Current Location Marker */}
+              {/* User Current Location Marker (only when requested via 'আমার জিপিএস লোকেশন') */}
               {userLocation && (
                 <AdvancedMarker
                   position={{ lat: userLocation.lat, lng: userLocation.lng }}
@@ -170,15 +219,10 @@ export const GoogleAgentMap: React.FC<GoogleAgentMapProps> = ({
                 </AdvancedMarker>
               )}
 
-              {/* Agent Custom Circular Avatar Markers */}
-              {agents.map((agent) => {
+              {/* Approved Agent Static Markers (Dark Blue Pin when selected) */}
+              {visibleAgents.map((agent) => {
                 if (!agent.lat || !agent.lng) return null;
                 const isSelected = selectedAgentId === agent.id;
-                const avatarSrc =
-                  agent.img ||
-                  `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
-                    agent.name || agent.id
-                  )}`;
 
                 return (
                   <AdvancedMarker
@@ -187,30 +231,28 @@ export const GoogleAgentMap: React.FC<GoogleAgentMapProps> = ({
                     title={agent.name}
                     onClick={() => onSelectAgent(agent.id)}
                   >
-                    <div
-                      className={`relative group cursor-pointer transition-transform duration-200 ${
-                        isSelected ? 'scale-125 z-50' : 'hover:scale-115 z-10'
-                      }`}
-                    >
-                      {/* Outer pulse ring for active agents */}
-                      <span className="absolute -inset-1 bg-emerald-400/40 rounded-full animate-pulse blur-2xs" />
-
-                      {/* Circular Avatar Frame */}
-                      <div className="relative w-11 h-11 rounded-full border-2 border-emerald-500 overflow-hidden bg-white shadow-md shadow-slate-900/30 flex items-center justify-center">
-                        <img
-                          src={avatarSrc}
-                          alt={agent.name}
-                          className="w-full h-full object-cover"
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).src =
-                              'https://api.dicebear.com/7.x/avataaars/svg?seed=agent';
-                          }}
-                        />
+                    {isSelected ? (
+                      /* Dark Blue Pin on Selection */
+                      <div className="relative flex flex-col items-center cursor-pointer z-50 transition-transform duration-200 scale-110">
+                        <div className="px-2 py-0.5 mb-1 bg-[#1E3A8A] text-white text-[10px] font-black rounded-md shadow-md whitespace-nowrap border border-white">
+                          {agent.name}
+                        </div>
+                        <div className="relative flex items-center justify-center">
+                          <span className="absolute w-10 h-10 bg-blue-900/30 rounded-full animate-ping" />
+                          <div className="w-9 h-9 bg-[#1E3A8A] border-2 border-white rounded-full shadow-xl flex items-center justify-center text-white">
+                            <MapPin className="w-5 h-5 text-white fill-blue-300" />
+                          </div>
+                        </div>
+                        <div className="w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[8px] border-t-[#1E3A8A] -mt-0.5" />
                       </div>
-
-                      {/* Small Active Badge Dot */}
-                      <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full shadow-xs" />
-                    </div>
+                    ) : (
+                      <div className="relative group cursor-pointer transition-transform duration-200 hover:scale-110 z-10 flex flex-col items-center">
+                        <div className="w-8 h-8 bg-[#1E40AF] border-2 border-white rounded-full shadow-md flex items-center justify-center text-white">
+                          <MapPin className="w-4 h-4 text-white" />
+                        </div>
+                        <div className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-[#1E40AF] -mt-0.5" />
+                      </div>
+                    )}
                   </AdvancedMarker>
                 );
               })}
@@ -223,52 +265,45 @@ export const GoogleAgentMap: React.FC<GoogleAgentMapProps> = ({
                     lng: Number(selectedAgent.lng),
                   }}
                   onCloseClick={() => onSelectAgent(null)}
-                  pixelOffset={[0, -20]}
+                  pixelOffset={[0, -38]}
                 >
-                  <div className="p-1 min-w-[200px] max-w-[260px] space-y-2 text-slate-800 font-sans">
-                    <div className="flex items-center gap-2.5">
-                      <img
-                        src={
-                          selectedAgent.img ||
-                          `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
-                            selectedAgent.name
-                          )}`
-                        }
-                        alt={selectedAgent.name}
-                        className="w-10 h-10 rounded-full object-cover border border-emerald-500 shrink-0"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <h4 className="text-xs font-black text-slate-900 truncate">
-                          {selectedAgent.name}
-                        </h4>
-                        <p className="text-[10px] text-emerald-700 font-bold">
-                          {selectedAgent.country || 'বাংলাদেশ'} • {selectedAgent.city || selectedAgent.district || 'এজেন্ট'}
+                  <div className="p-1.5 min-w-[215px] max-w-[270px] space-y-2 text-slate-800 font-sans">
+                    <div className="space-y-1">
+                      <span className="inline-block text-[9px] font-black px-2 py-0.5 rounded-full bg-blue-50 text-[#1E3A8A] border border-blue-200">
+                        {selectedAgent.badgeLabel || `এজেন্ট পয়েন্ট • ${selectedAgent.agentCode || 'AG-2041'}`}
+                      </span>
+                      <h4 className="text-xs font-black text-slate-900">
+                        {selectedAgent.name}
+                      </h4>
+                      <p className="text-[10.5px] text-slate-700 font-semibold leading-snug break-words">
+                        📍 {selectedAgent.address || [selectedAgent.city, selectedAgent.country].filter(Boolean).join(', ')}
+                      </p>
+                      {selectedAgent.openingHours && (
+                        <p className="text-[10px] text-slate-600 font-bold flex items-center gap-1">
+                          <Clock className="w-3 h-3 text-emerald-600 shrink-0" />
+                          <span>{selectedAgent.openingHours}</span>
                         </p>
-                        {selectedAgent.distanceKm != null && (
-                          <span className="inline-block mt-0.5 text-[9px] bg-emerald-100 text-emerald-800 font-black px-1.5 py-0.5 rounded-full">
-                            📏 {selectedAgent.distanceKm.toFixed(1)} কি.মি. দূরত্বে
-                          </span>
-                        )}
-                      </div>
+                      )}
+                      <p className="text-[10.5px] text-emerald-700 font-mono font-extrabold">
+                        📞 {selectedAgent.phone}
+                      </p>
                     </div>
 
-                    <div className="pt-1.5 border-t border-slate-100 flex items-center justify-between text-[10px]">
+                    <div className="pt-1.5 border-t border-slate-100 flex items-center justify-between gap-2 text-[10.5px]">
                       <a
                         href={`tel:${selectedAgent.phone}`}
-                        className="px-2.5 py-1 bg-emerald-600 text-white font-bold rounded-lg flex items-center gap-1 hover:bg-emerald-700 transition"
+                        className="px-2.5 py-1.5 bg-emerald-600 text-white font-bold rounded-lg flex items-center justify-center gap-1 hover:bg-emerald-700 transition flex-1 text-center"
                       >
-                        <Phone className="w-3 h-3" /> কল করুন
+                        <Phone className="w-3 h-3 shrink-0" /> কল করুন
                       </a>
-                      {selectedAgent.whatsapp && (
-                        <a
-                          href={`https://wa.me/${selectedAgent.whatsapp.replace(/[^0-9]/g, '')}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="px-2.5 py-1 bg-[#25D366] text-white font-bold rounded-lg flex items-center gap-1 hover:bg-emerald-600 transition"
-                        >
-                          WhatsApp
-                        </a>
-                      )}
+                      <a
+                        href={`https://www.google.com/maps/dir/?api=1&destination=${selectedAgent.lat},${selectedAgent.lng}&travelmode=driving`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1.5 bg-[#1E3A8A] text-white font-bold rounded-lg flex items-center justify-center gap-1 hover:bg-blue-900 transition flex-1 text-center"
+                      >
+                        <Navigation className="w-3 h-3 shrink-0" /> দিকনির্দেশনা (Map)
+                      </a>
                     </div>
                   </div>
                 </InfoWindow>
@@ -277,7 +312,7 @@ export const GoogleAgentMap: React.FC<GoogleAgentMapProps> = ({
           </APIProvider>
         )}
 
-        {/* Top-Right GPS Action Floating Button */}
+        {/* Top-Right GPS Action Floating Button (kept as-is) */}
         <div className="absolute top-3 right-3 z-20">
           <button
             type="button"
@@ -291,6 +326,21 @@ export const GoogleAgentMap: React.FC<GoogleAgentMapProps> = ({
             <span>{locatingUser ? 'খুঁজছে...' : 'আমার জিপিএস লোকেশন'}</span>
           </button>
         </div>
+
+        {/* Corner Distance Badge when an agent is selected AND user GPS is permitted */}
+        {selectedAgent &&
+          userLocation &&
+          selectedAgent.distanceKm != null &&
+          !isNaN(selectedAgent.distanceKm) && (
+            <div className="absolute bottom-3 left-3 z-20 bg-[#1E3A8A]/95 text-white px-3 py-1.5 rounded-2xl shadow-lg border border-white/20 flex items-center gap-1.5 text-[11px] font-black">
+              <MapPin className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+              <span>
+                দূরত্ব: {selectedAgent.distanceKm < 1
+                  ? `${Math.round(selectedAgent.distanceKm * 1000)} মিটার`
+                  : `${selectedAgent.distanceKm.toFixed(1)} কি.মি.`}
+              </span>
+            </div>
+          )}
       </div>
     </div>
   );

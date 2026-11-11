@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { User, AppConfig } from '../types';
 import { db } from '../lib/firebase';
-import { doc, updateDoc, setDoc, addDoc, collection } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, setDoc, addDoc, collection } from 'firebase/firestore';
 import { 
   Building2, 
   ArrowLeft, 
@@ -49,6 +49,20 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
   // Desired monthly savings rates states (minimum 500 BDT)
   const [monthlySavingsOption, setMonthlySavingsOption] = useState<string>('');
   const [customSavingsAmount, setCustomSavingsAmount] = useState<string>('');
+
+  const parseAmountInput = (raw: string): number => {
+    const normalized = String(raw || '')
+      .replace(/[০-৯]/g, (d) => String('০১২৩৪৫৬৭৮৯'.indexOf(d)))
+      .replace(/[^0-9]/g, '');
+    return parseInt(normalized, 10) || 0;
+  };
+
+  const currentMainBalance = Number(user.balance !== undefined ? user.balance : user.mainBalance) || 0;
+  const selectedMonthlyAmount =
+    monthlySavingsOption === 'custom'
+      ? parseAmountInput(customSavingsAmount)
+      : parseInt(monthlySavingsOption, 10) || 0;
+  const hasInsufficientBalance = selectedMonthlyAmount > 0 && currentMainBalance < selectedMonthlyAmount;
 
   // Countries List for Global Citizens
   const countriesList = [
@@ -150,22 +164,26 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
     }
 
     if (!monthlySavingsOption) {
-      setErrorCode('অনুগ্রহ করে আপনার কাঙ্ক্ষিত মাসিক সঞ্চয় স্কিম নির্বাচন করুন।');
+      setErrorCode('অনুগ্রহ করে আপনি প্রতি মাসে কত টাকা ডিপোজিট / ইনভেস্ট করবেন তা নির্বাচন করুন।');
       return;
     }
 
-    let savingsTarget = 1000;
+    let savingsTarget = 500;
     let selectedCategory: 'owner' | 'shareholder' | 'investor' | 'supporter' | 'regular' = 'supporter';
 
     if (monthlySavingsOption === 'custom') {
-      const parsedAmt = parseInt(customSavingsAmount, 10);
-      if (isNaN(parsedAmt) || parsedAmt < 500) {
-        setErrorCode('আপনার কাঙ্ক্ষিত মাসিক সঞ্চয় অনুগ্রহ করে সংখ্যায় লিখুন এবং এটি অবশ্যই সর্বনিম্ন ৫০০ টাকা হতে হবে।');
+      const parsedAmt = parseAmountInput(customSavingsAmount);
+      if (!parsedAmt || parsedAmt < 500) {
+        setErrorCode('⚠️ সর্বনিম্ন ইনভেস্টমেন্ট ৳৫০০ টাকা! অনুগ্রহ করে কমপক্ষে ৫০০ টাকা বা তার বেশি সংখ্যায় লিখুন।');
         return;
       }
       savingsTarget = parsedAmt;
     } else {
       savingsTarget = parseInt(monthlySavingsOption, 10);
+      if (isNaN(savingsTarget) || savingsTarget < 500) {
+        setErrorCode('⚠️ সর্বনিম্ন ইনভেস্টমেন্ট ৳৫০০ টাকা হতে হবে।');
+        return;
+      }
     }
 
     if (savingsTarget >= 5000) selectedCategory = 'owner';
@@ -175,24 +193,35 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
     else selectedCategory = 'supporter';
 
     const requiredFirstMonthAmount = savingsTarget;
-    const userCurrentMainBalance = Number(user.balance !== undefined ? user.balance : user.mainBalance) || 0;
+    const localMainBalance = Number(user.balance !== undefined ? user.balance : user.mainBalance) || 0;
 
-    if (userCurrentMainBalance < requiredFirstMonthAmount) {
-      setErrorCode(`⚠️ আপনার মেইন ওয়ালেটে ১ম মাসের সঞ্চয় কিস্তি ৳${requiredFirstMonthAmount.toLocaleString('bn-BD')} টাকা নেই! (আপনার বর্তমান মেইন ব্যালেন্স ৳${userCurrentMainBalance.toLocaleString('bn-BD')})। সমিতিতে আবেদনের পূর্বে অনুগ্রহ করে বিকাশ/নগদে অটো এড মানি করে মেইন ওয়ালেটে রিচার্জ করুন।`);
+    if (localMainBalance < requiredFirstMonthAmount) {
+      setErrorCode(`⚠️ আপনার মেইন ব্যালেন্সে ১ম মাসের ইনভেস্টমেন্ট বাবদ ৳${requiredFirstMonthAmount.toLocaleString('bn-BD')} টাকা নেই! (আপনার বর্তমান মেইন ব্যালেন্স: ৳${localMainBalance.toLocaleString('bn-BD')})। আপনি যে পরিমাণ মাসিক ইনভেস্টমেন্ট সিলেক্ট করবেন, আবেদন করার সময় আপনার মেইন ব্যালেন্সে কমপক্ষে সেই পরিমাণ টাকা থাকতে হবে।`);
       return;
     }
 
     setLoading(true);
     try {
       const userRef = doc(db, 'users', user.uid);
+      const latestUserSnap = await getDoc(userRef);
+      const latestUserData = latestUserSnap.exists() ? latestUserSnap.data() : null;
+      const userCurrentMainBalance = latestUserData
+        ? (Number(latestUserData.balance !== undefined ? latestUserData.balance : latestUserData.mainBalance) || 0)
+        : localMainBalance;
+
+      if (userCurrentMainBalance < requiredFirstMonthAmount) {
+        setErrorCode(`⚠️ আপনার মেইন ব্যালেন্সে ১ম মাসের ইনভেস্টমেন্ট বাবদ ৳${requiredFirstMonthAmount.toLocaleString('bn-BD')} টাকা নেই! (আপনার বর্তমান মেইন ব্যালেন্স: ৳${userCurrentMainBalance.toLocaleString('bn-BD')})। প্রথম মাসের ইনভেস্টমেন্ট মেইন ব্যালেন্স থেকে পরিশোধ করে আবেদন করতে হবে।`);
+        setLoading(false);
+        return;
+      }
+
       const appRef = doc(db, 'samity_applications', user.uid);
       const nowIso = new Date().toISOString();
       
       const newMainBalance = userCurrentMainBalance - requiredFirstMonthAmount;
-      const isAutoApprove = appConfig?.autoApproveSomiti === true || appConfig?.autoApproveSamity === true;
-      const targetSamityStatus = isAutoApprove ? 'approved' : 'pending';
+      const targetSamityStatus = 'pending';
 
-      const updateData: Partial<User> = {
+      const updateData: Partial<User> & Record<string, any> = {
         balance: newMainBalance,
         mainBalance: newMainBalance,
         country: country,
@@ -210,18 +239,13 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
         monthlySavingsTarget: savingsTarget,
         memberCategory: selectedCategory,
         samityStatus: targetSamityStatus,
-        samityApproved: isAutoApprove ? true : false,
-        isSamityMember: isAutoApprove ? true : (user.isSamityMember ?? false),
-        approved: isAutoApprove ? true : (user.approved ?? false),
+        samityApproved: false,
+        isSamityMember: false,
         samityAppliedAt: nowIso,
         samityApplicationInstallmentAmount: requiredFirstMonthAmount,
+        samityFirstInstallmentCredited: false,
         hasSetProfile: true
       };
-
-      if (isAutoApprove) {
-        updateData.savings = (Number(user.savings) || 0) + requiredFirstMonthAmount;
-        updateData.dpsBalance = (Number(user.dpsBalance) || 0) + requiredFirstMonthAmount;
-      }
 
       const appData = {
         id: user.uid,
@@ -247,7 +271,7 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
         installmentAmount: requiredFirstMonthAmount,
         status: targetSamityStatus,
         samityStatus: targetSamityStatus,
-        approved: isAutoApprove,
+        approved: false,
         samityAppliedAt: nowIso,
         appliedAt: nowIso,
         createdAt: nowIso
@@ -261,13 +285,13 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
         userPhone: user.phone,
         memberId: user.memberId || '',
         type: 'deposit',
-        typeLabel: isAutoApprove ? 'সমবায় সমিতি ১ম মাসের সঞ্চয় কিস্তি' : 'সমবায় সমিতি ১ম মাসের কিস্তি আমানত (রিভিউ পেন্ডিং)',
+        typeLabel: 'BNB কোম্পানি ইনভেস্টর ১ম মাসের ইনভেস্টমেন্ট (রিভিউ পেন্ডিং)',
         category: 'samity_deposit',
         amount: requiredFirstMonthAmount,
-        status: isAutoApprove ? 'success' : 'pending',
-        isApproved: isAutoApprove,
-        paymentMethod: 'মেইন ওয়ালেট কর্তন',
-        description: `সমবায় সমিতি সদস্যপদ আবেদনের ১ম মাসের কিস্তি ৳${requiredFirstMonthAmount.toLocaleString('bn-BD')} মেইন ওয়ালেট থেকে কেটে হোল্ডে রাখা হয়েছে। এডমিন অনুমোদন দিলে সঞ্চয়ে যুক্ত হবে, বাতিল হলে ওয়ালেটে রিফান্ড হবে।`,
+        status: 'pending',
+        isApproved: false,
+        paymentMethod: 'মেইন ব্যালেন্স কর্তন',
+        description: `BNB কোম্পানি ইনভেস্টর সদস্যপদ আবেদনের ১ম মাসের ইনভেস্টমেন্ট ৳${requiredFirstMonthAmount.toLocaleString('bn-BD')} মেইন ব্যালেন্স থেকে কেটে জমা রাখা হয়েছে। এডমিন প্যানেল অনুমোদন দিলে ইনভেস্টমেন্ট ব্যালেন্সে যুক্ত হবে, বাতিল হলে মেইন ব্যালেন্সে রিফান্ড হবে।`,
         createdAt: nowIso,
         date: new Date().toLocaleDateString('en-GB'),
         time: new Date().toLocaleTimeString(),
@@ -280,29 +304,17 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
         setDoc(txDocRef, txData)
       ]);
 
-      if (isAutoApprove) {
-        // Direct auto-approved user notification
-        addDoc(collection(db, 'user_notifications'), {
-          userId: user.uid,
-          title: '🎉 সমবায় মেম্বারশিপ অনুমোদিত!',
-          message: `অভিনন্দন ${user.name}! আপনার সমিতি মেম্বারশিপ আবেদনটি স্বয়ংক্রিয়ভাবে (Auto-Approved) অনুমোদিত হয়েছে।`,
-          type: 'samity_approved',
-          read: false,
-          createdAt: nowIso
-        }).catch(() => {});
-      } else {
-        // Async background notification for admin review
-        addDoc(collection(db, 'admin_notifications'), {
-          type: 'samity_membership_application',
-          title: '🏢 নতুন সমবায় সদস্যপদ আবেদন!',
-          message: `${user.name} (${user.memberId || user.phone}) সমিতির সদস্যপদের জন্য আবেদন সাবমিট করেছেন। (মাসিক লক্ষ্য: ৳${savingsTarget.toLocaleString('bn-BD')} BDT)`,
-          userId: user.uid,
-          userName: user.name,
-          memberId: user.memberId || '',
-          read: false,
-          createdAt: nowIso
-        }).catch(e => console.warn("Admin notification warning:", e));
-      }
+      // Async background notification for admin review
+      addDoc(collection(db, 'admin_notifications'), {
+        type: 'samity_membership_application',
+        title: '🏢 নতুন BNB কোম্পানি ইনভেস্টর আবেদন!',
+        message: `${user.name} (${user.memberId || user.phone}) BNB কোম্পানি ইনভেস্টর সদস্যপদের জন্য আবেদন করেছেন। (মাসিক ও ১ম মাসের ইনভেস্টমেন্ট: ৳${savingsTarget.toLocaleString('bn-BD')} BDT)`,
+        userId: user.uid,
+        userName: user.name,
+        memberId: user.memberId || '',
+        read: false,
+        createdAt: nowIso
+      }).catch(e => console.warn("Admin notification warning:", e));
 
       setSuccess(true);
       setTimeout(() => {
@@ -597,37 +609,115 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
                 />
               </div>
 
-              {/* Monthly Savings Target Choice */}
-              <div>
-                <label className="text-slate-600 font-bold block mb-1">নির্ধারিত মাসিক সঞ্চয় (Monthly Savings Option) <span className="text-rose-500">*</span></label>
+              {/* Monthly Savings / Investment Target Choice */}
+              <div className="sm:col-span-2 space-y-2.5">
+                <label className="text-slate-700 font-extrabold block mb-1">
+                  প্রতি মাসে কত টাকা ডিপোজিট / ইনভেস্ট করবেন নির্বাচন করুন (সর্বনিম্ন ইনভেস্ট ৳৫০০ টাকা — ১ম মাসের ইনভেস্টমেন্ট মেইন ব্যালেন্সে থাকতে হবে) <span className="text-rose-500">*</span>
+                </label>
+
+                {/* Quick Select Preset Buttons */}
+                <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
+                  {[
+                    { value: '500', label: '৳৫০০ (সর্বনিম্ন)' },
+                    { value: '1000', label: '৳১,০০০' },
+                    { value: '2000', label: '৳২,০০০' },
+                    { value: '3000', label: '৳৩,০০০' },
+                    { value: '5000', label: '৳৫,০০০' },
+                    { value: '10000', label: '৳১০,০০০' },
+                    { value: '20000', label: '৳২০,০০০' },
+                    { value: '50000', label: '৳৫০,০০০' },
+                    { value: '100000', label: '৳১,০০,০০০ (১ লক্ষ)' },
+                    { value: 'custom', label: '⚙️ ইচ্ছেমতো পরিমাণ' }
+                  ].map((item) => {
+                    const isSelected = monthlySavingsOption === item.value;
+                    return (
+                      <button
+                        key={item.value}
+                        type="button"
+                        onClick={() => setMonthlySavingsOption(item.value)}
+                        className={`py-2 px-2 rounded-xl text-[11px] font-extrabold border transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-emerald-700 text-white border-emerald-800 shadow-sm ring-2 ring-emerald-300'
+                            : 'bg-slate-50 hover:bg-emerald-50 text-slate-700 border-slate-200'
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
                 <select
                   required
                   value={monthlySavingsOption}
                   onChange={(e) => setMonthlySavingsOption(e.target.value)}
                   className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 transition-all font-sans"
                 >
-                  <option value="" disabled>-- মাসিক সঞ্চয় স্কিম নির্বাচন করুন --</option>
-                  <option value="500">500 BDT (Monthly)</option>
-                  <option value="1000">1000 BDT (Monthly)</option>
-                  <option value="2000">2000 BDT (Monthly)</option>
-                  <option value="3000">3000 BDT (Monthly)</option>
-                  <option value="5000">5000 BDT (Monthly)</option>
-                  <option value="custom">Custom Amount (ম্যানুয়ালি পরিমাণ লিখুন)</option>
+                  <option value="" disabled>-- মাসিক ডিপোজিট / ইনভেস্টমেন্ট নির্বাচন করুন (সর্বনিম্ন ৳৫০০ টাকা) --</option>
+                  <option value="500">🔹 ৳৫০০ / মাস — সর্বনিম্ন ইনভেস্ট (১ম মাসের ইনভেস্টমেন্ট ৳৫০০ মেইন ব্যালেন্সে আবশ্যক)</option>
+                  <option value="1000">⭐ ৳১,০০০ / মাস (১ম মাসের ইনভেস্টমেন্ট ৳১,০০০ মেইন ব্যালেন্সে আবশ্যক)</option>
+                  <option value="2000">💎 ৳২,০০০ / মাস (১ম মাসের ইনভেস্টমেন্ট ৳২,০০০ মেইন ব্যালেন্সে আবশ্যক)</option>
+                  <option value="3000">👑 ৳৩,০০০ / মাস (১ম মাসের ইনভেস্টমেন্ট ৳৩,০০০ মেইন ব্যালেন্সে আবশ্যক)</option>
+                  <option value="5000">👑 ৳৫,০০০ / মাস (১ম মাসের ইনভেস্টমেন্ট ৳৫,০০০ মেইন ব্যালেন্সে আবশ্যক)</option>
+                  <option value="10000">🏆 ৳১০,০০০ / মাস (১ম মাসের ইনভেস্টমেন্ট ৳১০,০০০ মেইন ব্যালেন্সে আবশ্যক)</option>
+                  <option value="20000">🏆 ৳২০,০০০ / মাস (১ম মাসের ইনভেস্টমেন্ট ৳২০,০০০ মেইন ব্যালেন্সে আবশ্যক)</option>
+                  <option value="50000">🏆 ৳৫০,০০০ / মাস (১ম মাসের ইনভেস্টমেন্ট ৳৫০,০০০ মেইন ব্যালেন্সে আবশ্যক)</option>
+                  <option value="100000">👑 ৳১,০০,০০০ (১ লক্ষ টাকা) / মাস (১ম মাসের ইনভেস্টমেন্ট ৳১,০০,০০০ মেইন ব্যালেন্সে আবশ্যক)</option>
+                  <option value="custom">⚙️ কাস্টম পরিমাণ (সর্বনিম্ন ৳৫০০ থেকে যেকোনো পরিমাণ লিখুন)</option>
                 </select>
 
                 {monthlySavingsOption === 'custom' && (
-                  <div className="mt-2.5">
-                    <label className="text-slate-600 font-semibold text-[11px] block mb-1">আপনার কাঙ্ক্ষিত মাসিক সঞ্চয় পরিমাণ (BDT):</label>
+                  <div className="mt-2">
+                    <label className="text-slate-700 font-bold text-[11px] block mb-1">
+                      আপনি প্রতি মাসে কত টাকা ডিপোজিট / ইনভেস্ট করবেন তা লিখুন (সর্বনিম্ন ৳৫০০ টাকা, যেমন: 500, 1000, 2000, 5000, 100000):
+                    </label>
                     <input
-                      type="number"
-                      min="100"
-                      placeholder="e.g. 500, 1000, 2000, 3000, 5000"
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="টাকার পরিমাণ লিখুন (সর্বনিম্ন 500 টাকা)"
                       value={customSavingsAmount}
                       onChange={(e) => setCustomSavingsAmount(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-emerald-300 rounded-xl text-xs font-bold font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500 text-slate-800"
+                      className="w-full px-3 py-2.5 bg-white border border-emerald-400 rounded-xl text-xs font-extrabold font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-900"
                     />
                   </div>
                 )}
+
+                {/* Live Main Balance & 1st Month Investment Verification Box */}
+                <div className={`p-3.5 rounded-2xl border text-xs space-y-1.5 ${
+                  (monthlySavingsOption === 'custom' && selectedMonthlyAmount > 0 && selectedMonthlyAmount < 500) || hasInsufficientBalance
+                    ? 'bg-rose-50 border-rose-200 text-rose-900'
+                    : selectedMonthlyAmount >= 500
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                    : 'bg-slate-50 border-slate-200 text-slate-700'
+                }`}>
+                  <div className="flex items-center justify-between font-bold">
+                    <span>আপনার বর্তমান মেইন ব্যালেন্স:</span>
+                    <span className="font-mono text-sm font-black">৳{currentMainBalance.toLocaleString('bn-BD')}</span>
+                  </div>
+                  {selectedMonthlyAmount > 0 && (
+                    <div className="flex items-center justify-between font-bold border-t border-current/10 pt-1.5">
+                      <span>নির্বাচিত ১ম মাসের ইনভেস্টমেন্ট:</span>
+                      <span className="font-mono text-sm font-black">৳{selectedMonthlyAmount.toLocaleString('bn-BD')}</span>
+                    </div>
+                  )}
+                  {monthlySavingsOption === 'custom' && selectedMonthlyAmount > 0 && selectedMonthlyAmount < 500 ? (
+                    <p className="text-[11px] font-bold text-rose-700 pt-1 leading-relaxed">
+                      ⚠️ BNB কোম্পানি ইনভেস্টর সেকশনে সর্বনিম্ন ইনভেস্টমেন্ট ৳৫০০ টাকা! অনুগ্রহ করে কমপক্ষে ৫০০ টাকা বা তার বেশি পরিমাণ লিখুন।
+                    </p>
+                  ) : hasInsufficientBalance ? (
+                    <p className="text-[11px] font-bold text-rose-700 pt-1 leading-relaxed">
+                      ⚠️ আপনার মেইন ব্যালেন্সে পর্যাপ্ত টাকা নেই! আপনি প্রতি মাসে ৳{selectedMonthlyAmount.toLocaleString('bn-BD')} সিলেক্ট করেছেন, তাই আবেদন করার সময় ১ম মাসের ইনভেস্টমেন্ট দেওয়ার জন্য আপনার মেইন ব্যালেন্সে কমপক্ষে ৳{selectedMonthlyAmount.toLocaleString('bn-BD')} থাকতে হবে (আরও প্রয়োজন: ৳{(selectedMonthlyAmount - currentMainBalance).toLocaleString('bn-BD')})।
+                    </p>
+                  ) : selectedMonthlyAmount >= 500 ? (
+                    <p className="text-[11px] font-semibold text-emerald-800 pt-1 leading-relaxed">
+                      ✅ আপনার মেইন ব্যালেন্সে পর্যাপ্ত টাকা রয়েছে। আবেদন সাবমিট করলে ১ম মাসের ইনভেস্টমেন্ট বাবদ ৳{selectedMonthlyAmount.toLocaleString('bn-BD')} আপনার মেইন ব্যালেন্স থেকে জমা নেওয়া হবে এবং এডমিন অনুমোদনের জন্য পাঠানো হবে।
+                    </p>
+                  ) : (
+                    <p className="text-[10.5px] text-slate-600 pt-0.5 leading-relaxed">
+                      📌 নিয়ম: সর্বনিম্ন ইনভেস্টমেন্ট ৳৫০০ টাকা। আপনি ফরমে যত টাকা মাসিক ইনভেস্টমেন্ট সিলেক্ট করবেন (৳৫০০ / ৳১,০০০ / ৳২,০০০ / ৳৫,০০০ / ৳১,০০,০০০ ইত্যাদি), আবেদন করার সময় আপনার মেইন ব্যালেন্সে সেই পরিমাণ টাকা থাকতে হবে এবং ১ম মাসের ইনভেস্টমেন্ট দিয়ে এখানে প্রবেশ করতে হবে।
+                    </p>
+                  )}
+                </div>
               </div>
             </div>
           </div>

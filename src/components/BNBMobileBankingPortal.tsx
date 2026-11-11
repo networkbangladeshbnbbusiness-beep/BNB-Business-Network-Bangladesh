@@ -1,5 +1,5 @@
 import { JenifyPaymentGateway } from './JenifyPaymentGateway';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, PlusCircle, Globe, Banknote, Send, ArrowRight, Home, FileText, ChevronLeft, CreditCard, CheckCircle2, AlertCircle, Copy, Search, HelpCircle, Eye, EyeOff, ChevronDown, Lightbulb, Flame, Droplet, Wifi, Tv, Smartphone, UploadCloud, Trash2, Image, Camera, ChevronRight, RotateCcw, Briefcase, Bookmark, Info, ShieldCheck, Lock } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { User, Transaction, AppConfig, SavedBNBCard, normalizePaidMonthsArray, getEffectiveBalance, generateBNBTrxId, formatShortTrxId } from '../types';
@@ -14,6 +14,7 @@ import UnifiedBackButton from './UnifiedBackButton';
 // JenifyPaymentGateway imported or inlined
 import { apiUrl, getReturnOrigin } from '../config/api';
 import { verifyUserPin, convertBengaliToEnglishDigits } from '../lib/memberUtils';
+import { processSendMoneyServer } from '../lib/walletLedger';
 
 interface BNBMobileBankingPortalProps {
   user: User;
@@ -81,6 +82,7 @@ export const BNBMobileBankingPortal: React.FC<BNBMobileBankingPortalProps> = ({
     }
   };
   const [loading, setLoading] = useState(false);
+  const sendLockRef = useRef(false);
   const [txList, setTxList] = useState<Transaction[]>([]);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -1440,182 +1442,60 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
       return;
     }
 
-    setLoading(true);
-    try {
-      const trimmedReceiver = ambSendReceiver.trim();
-      let receiverDoc = null;
-      let isVirtualSomitiAcc = false;
+    const executeActualBNBTransfer = async () => {
+      if (sendLockRef.current) return;
+      sendLockRef.current = true;
+      setLoading(true);
+      try {
+        const trimmedReceiver = ambSendReceiver.trim();
+        const generatedTxId = generateBNBTrxId('BN');
+        const requestId = `REQ_BNB_${user.uid}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-      const isVirtualEndingInZero = trimmedReceiver.endsWith('0') && trimmedReceiver.length >= 10;
-      const cleanReceiver = isVirtualEndingInZero ? trimmedReceiver.slice(0, -1) : trimmedReceiver;
-
-// Fast query memberId, phone, or virtual phone/memberId in parallel
-      const q1 = query(collection(db, 'users'), where('memberId', '==', trimmedReceiver));
-      const q2 = query(collection(db, 'users'), where('phone', '==', trimmedReceiver));
-      const q3 = isVirtualEndingInZero ? query(collection(db, 'users'), where('memberId', '==', cleanReceiver)) : null;
-      const q4 = isVirtualEndingInZero ? query(collection(db, 'users'), where('phone', '==', cleanReceiver)) : null;
-      const q5 = (isVirtualEndingInZero && cleanReceiver.startsWith('0')) ? query(collection(db, 'users'), where('phone', '==', cleanReceiver.substring(1))) : null;
-      const q6 = (isVirtualEndingInZero && cleanReceiver.startsWith('0')) ? query(collection(db, 'users'), where('phone', '==', '+88' + cleanReceiver)) : null;
-
-      const [snap1, snap2, snap3, snap4, snap5, snap6] = await Promise.all([
-        getDocs(q1).catch(() => ({ empty: true, docs: [] } as any)),
-        getDocs(q2).catch(() => ({ empty: true, docs: [] } as any)),
-        q3 ? getDocs(q3).catch(() => ({ empty: true, docs: [] } as any)) : Promise.resolve({ empty: true, docs: [] } as any),
-        q4 ? getDocs(q4).catch(() => ({ empty: true, docs: [] } as any)) : Promise.resolve({ empty: true, docs: [] } as any),
-        q5 ? getDocs(q5).catch(() => ({ empty: true, docs: [] } as any)) : Promise.resolve({ empty: true, docs: [] } as any),
-        q6 ? getDocs(q6).catch(() => ({ empty: true, docs: [] } as any)) : Promise.resolve({ empty: true, docs: [] } as any)
-      ]);
-
-      if (!snap1.empty && snap1.docs.length > 0) {
-        receiverDoc = snap1.docs[0];
-        if (trimmedReceiver.endsWith('0')) isVirtualSomitiAcc = true;
-      } else if (!snap2.empty && snap2.docs.length > 0) {
-        receiverDoc = snap2.docs[0];
-        if (trimmedReceiver.endsWith('0')) isVirtualSomitiAcc = true;
-      } else if (snap3 && !snap3.empty && snap3.docs.length > 0) {
-        receiverDoc = snap3.docs[0];
-        isVirtualSomitiAcc = true;
-      } else if (snap4 && !snap4.empty && snap4.docs.length > 0) {
-        receiverDoc = snap4.docs[0];
-        isVirtualSomitiAcc = true;
-      } else if (snap5 && !snap5.empty && snap5.docs.length > 0) {
-        receiverDoc = snap5.docs[0];
-        isVirtualSomitiAcc = true;
-      } else if (snap6 && !snap6.empty && snap6.docs.length > 0) {
-        receiverDoc = snap6.docs[0];
-        isVirtualSomitiAcc = true;
-      }
-
-      if (trimmedReceiver.endsWith('0') || isVirtualEndingInZero) {
-        isVirtualSomitiAcc = true;
-      }
-
-      if (!receiverDoc) {
-        setErrorMsg('প্রাপকের অ্যাকাউন্ট পাওয়া যায়নি। সঠিক মেম্বার আইডি বা মোবাইল নম্বর দিন।');
-        setLoading(false);
-        return;
-      }
-
-      const receiverUid = receiverDoc.id;
-      const receiverData = receiverDoc.data();
-
-      if (receiverUid === user.uid) {
-        setErrorMsg('আপনি নিজের অ্যাকাউন্টে ফান্ড ট্রান্সফার করতে পারবেন না।');
-        setLoading(false);
-        return;
-      }
-
-      const senderRef = doc(db, 'users', user.uid);
-      const receiverRef = doc(db, 'users', receiverUid);
-
-      let finalSenderBal = 0;
-      let finalReceiverBal = 0;
-
-      await runTransaction(db, async (transaction) => {
-        const senderSnap = await transaction.get(senderRef);
-        const receiverSnap = await transaction.get(receiverRef);
-
-        if (!senderSnap.exists()) {
-          throw new Error('আপনার অ্যাকাউন্ট পাওয়া যায়নি।');
-        }
-        if (!receiverSnap.exists()) {
-          throw new Error('গ্রহীতা অ্যাকাউন্ট পাওয়া যায়নি।');
-        }
-
-        const sData = senderSnap.data();
-        const rData = receiverSnap.data();
-
-        const currentSenderBal = getEffectiveBalance(sData);
-        if (currentSenderBal < amountNum) {
-          throw new Error(`পর্যাপ্ত ওয়ালেট ব্যালেন্স নেই! আপনার বর্তমান ওয়ালেট ব্যালেন্স ৳ ${currentSenderBal.toLocaleString('en-US')} BDT।`);
-        }
-
-        finalSenderBal = currentSenderBal - amountNum;
-        if (isVirtualSomitiAcc) {
-          finalReceiverBal = (rData.savings || 0) + amountNum;
-          transaction.update(receiverRef, { savings: finalReceiverBal, dpsBalance: finalReceiverBal });
-        } else {
-          finalReceiverBal = getEffectiveBalance(rData) + amountNum;
-          transaction.update(receiverRef, { balance: finalReceiverBal, mainBalance: finalReceiverBal });
-        }
-
-        transaction.update(senderRef, { balance: finalSenderBal, mainBalance: finalSenderBal });
-
-        const txSenderRef = doc(collection(db, 'transactions'));
-        const txReceiverRef = doc(collection(db, 'transactions'));
-        const notifReceiverRef = doc(collection(db, 'user_notifications'));
-
-        transaction.set(txSenderRef, {
+        const res = await processSendMoneyServer({
           userId: user.uid,
-          userName: user.name || '',
-          userPhone: user.phone || '',
-          memberId: user.memberId || '',
+          channel: 'bnb_to_bnb',
           amount: amountNum,
-          postBalance: finalSenderBal,
-          type: isVirtualSomitiAcc ? 'coop_savings_deposit' : 'transfer',
-          typeLabel: isVirtualSomitiAcc ? 'সমিতি ওয়ালেটে অটো ফান্ড জমা' : 'ফান্ড ট্রান্সফার',
-          status: 'success',
-          paymentMethod: 'BNB Wallet',
-          phone: rData.phone,
-          createdAt: new Date().toISOString(),
-          description: `মেম্বার ${rData.name || ''} (${rData.memberId || ''}) কে ফান্ড পাঠানো হয়েছে`
+          clientCharge: 0,
+          requestId,
+          transactionId: generatedTxId,
+          method: 'BNB Wallet',
+          receiverIdentifier: trimmedReceiver
         });
 
-        transaction.set(txReceiverRef, {
-          userId: receiverUid,
-          userName: rData.name || '',
-          userPhone: rData.phone || '',
-          memberId: rData.memberId || '',
+        if (syncLiveProfile) syncLiveProfile();
+
+        const isVirtualSomitiAcc = Boolean(res.isVirtualSomitiAcc);
+        const rName = res.receiverName || 'BNB MEMBER';
+        const rPhone = res.receiverPhone || '';
+        const rMemberId = res.receiverMemberId || '';
+
+        setSuccessMsg(isVirtualSomitiAcc ? 'অভিনন্দন! সমবায় সমিতি একাউন্টে জমা সফল হয়েছে।' : 'অভিনন্দন! ফান্ড স্থানান্তর সফলভাবে সম্পন্ন হয়েছে।');
+        setReceiptModalData({
+          typeLabel: isVirtualSomitiAcc ? 'BNB সমিতি ওয়ালেট জমা (Virtual Acc)' : 'BNB TO BNB সেন্ড মানি',
+          transactionId: res.transactionId || generatedTxId,
           amount: amountNum,
-          postBalance: finalReceiverBal,
-          type: isVirtualSomitiAcc ? 'coop_savings_deposit' : 'add_money',
-          typeLabel: isVirtualSomitiAcc ? 'সমিতি একাউন্টে সঞ্চয় জমা' : 'ফান্ড গ্রহণ',
+          fee: 0,
+          totalAmount: amountNum,
           status: 'success',
-          paymentMethod: 'BNB Wallet',
-          phone: user.phone,
-          createdAt: new Date().toISOString(),
-          description: `মেম্বার ${user.name} (${user.memberId}) থেকে ফান্ড গ্রহণ`
+          beneficiaryName: rName,
+          beneficiaryAccount: isVirtualSomitiAcc ? `${rPhone}0` : (rMemberId || rPhone || trimmedReceiver),
+          senderPhone: user.phone,
+          transactionDate: new Date().toLocaleString('bn-BD', { day: 'numeric', month: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: true })
         });
+        setIsReceiptOpen(true);
+        setBNBSendAmount('');
+        setBNBSendReceiver('');
+        setBNBSendPin('');
+      } catch (err: any) {
+        console.error("Error in direct transfer: ", err);
+        setErrorMsg(err?.message || 'লেনদেন সম্পন্ন হয়নি / অবস্থা অনিশ্চিত হলে লেনদেন পাতা দেখে নিন, তারপর আবার চেষ্টা করুন।');
+      } finally {
+        sendLockRef.current = false;
+        setLoading(false);
+      }
+    };
 
-        transaction.set(notifReceiverRef, {
-          userId: receiverUid,
-          title: isVirtualSomitiAcc ? '📥 সমিতি একাউন্টে সঞ্চয় জমা' : 'ফান্ড জমা হয়েছে',
-          message: isVirtualSomitiAcc 
-            ? `মেম্বার ${user.name} (${user.memberId}) থেকে ৳${amountNum.toLocaleString('en-US')} আপনার সমিতি একাউন্টে (${trimmedReceiver}) জমা হয়েছে।`
-            : `মেম্বার ${user.name} (${user.memberId}) থেকে ৳${amountNum.toLocaleString('en-US')} আপনার ওয়ালেটে জমা হয়েছে।`,
-          read: false,
-          createdAt: new Date().toISOString()
-        });
-      });
-
-// Update local memory and UI state after transaction succeeds 100%
-// user.balance = finalSenderBal;
-      if (syncLiveProfile) syncLiveProfile();
-
-      const generatedTxId = generateBNBTrxId('BN');
-      setSuccessMsg(isVirtualSomitiAcc ? 'অভিনন্দন! সমবায় সমিতি একাউন্টে জমা সফল হয়েছে।' : 'অভিনন্দন! ফান্ড স্থানান্তর সফলভাবে সম্পন্ন হয়েছে।');
-      setReceiptModalData({
-        typeLabel: isVirtualSomitiAcc ? 'BNB সমিতি ওয়ালেট জমা (Virtual Acc)' : 'BNB TO BNB সেন্ড মানি',
-        transactionId: generatedTxId,
-        amount: amountNum,
-        fee: 0,
-        totalAmount: amountNum,
-        status: 'success',
-        beneficiaryName: receiverData.name || 'BNB MEMBER',
-        beneficiaryAccount: isVirtualSomitiAcc ? `${receiverData.phone}0` : (receiverData.memberId || receiverData.phone),
-        senderPhone: user.phone,
-        transactionDate: new Date().toLocaleString('bn-BD', { day: 'numeric', month: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: true })
-      });
-      setIsReceiptOpen(true);
-      setBNBSendAmount('');
-      setBNBSendReceiver('');
-      setBNBSendPin('');
-      setLoading(false);
-    } catch (err: any) {
-      console.error("Error in direct transfer: ", err);
-      setErrorMsg('স্থানান্তর সম্পন্ন করতে ব্যর্থ হয়েছে: ' + err.message);
-      setLoading(false);
-    }
+    await executeActualBNBTransfer();
   };
 
   const handleBNBCardAddSubmit = async (e: React.FormEvent) => {
@@ -2024,16 +1904,16 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
     }
 
     const executeActualTransfer = async () => {
-      const userRef = doc(db, 'users', user.uid);
-      let writesToRun: Promise<any>[] = [];
-
+      if (sendLockRef.current) return;
+      sendLockRef.current = true;
+      setLoading(true);
+      try {
     if (sendMoneyChannel === 'bnb') {
       if (!sendTargetId) {
         setErrorMsg('গ্রহীতা মেম্বার আইডি বা মোবাইল নম্বর প্রদান করুন।');
         return;
       }
 
-      setLoading(true);
       try {
         const trimmedTarget = sendTargetId.trim();
         const basePhone = (trimmedTarget.length === 12 && trimmedTarget.endsWith('0'))
@@ -2075,6 +1955,7 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
 
         let finalSenderBal = 0;
         let finalReceiverBal = 0;
+        const generatedTxId = generateBNBTrxId('BN');
 
         const selMonthObj = SAMITY_MONTH_LIST.find(m => m.id === sendSelectedMonth) || SAMITY_MONTH_LIST[0];
 
@@ -2098,7 +1979,7 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
           transaction.update(senderRef, { balance: finalSenderBal, mainBalance: finalSenderBal });
 
           if (isSamityAutoAcc) {
-// Deposit directly into receiver's Samity Savings Fund
+            // Deposit directly into receiver's Samity Savings Fund
             const finalReceiverSavings = (Number(rData.savings) || 0) + amountNum;
             const currentPaidMonths = rData.samityPaidMonths || [];
             const targetRate = Number(rData.monthlySavingsTarget) || 1000;
@@ -2129,9 +2010,14 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
               typeLabel: `সমিতি অটো সঞ্চয় স্থানান্তের (${selMonthObj.name})`,
               status: 'success',
               paymentMethod: 'BNB 12-Digit Auto Funding',
+              trxId: generatedTxId,
+              transactionId: generatedTxId,
+              receiverUid: receiverUid,
+              receiverPhone: rData.phone || sendTargetId,
+              receiverId: rData.memberId || '',
               phone: rData.phone || sendTargetId,
               createdAt: new Date().toISOString(),
-              description: `মেম্বার ${rData.name || ''} (${rData.memberId || ''})-এর 12-সংখ্যার অটো অ্যাকাউন্টে ${selMonthObj.name} মাসের সমিতি সঞ্চয় ৳${amountNum.toLocaleString('en-US')} জমা সফল`
+              description: `মেম্বার ${rData.name || ''} (${rData.memberId || ''})-এর 12-সংখ্যার অটো অ্যাকাউন্টে ${selMonthObj.name} মাসের সমিতি সঞ্চয় ৳${amountNum.toLocaleString('en-US')} জমা সফল। TrxID: ${generatedTxId}`
             });
 
             transaction.set(txReceiverRef, {
@@ -2145,15 +2031,20 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
               typeLabel: `সমিতি অটো সঞ্চয় জমা (${selMonthObj.name})`,
               status: 'approved',
               paymentMethod: 'BNB 12-Digit Auto Funding',
+              trxId: generatedTxId,
+              transactionId: generatedTxId,
+              senderUid: user.uid,
+              senderPhone: user.phone || '',
+              senderId: user.memberId || '',
               phone: user.phone,
               createdAt: new Date().toISOString(),
-              description: `মেম্বার ${user.name} (${user.phone}) কর্তৃক 12-সংখ্যার অটো একাউন্টের মাধ্যমে ${selMonthObj.name} মাসের সমিতি সঞ্চয় ৳${amountNum.toLocaleString('en-US')} জমা প্রাপ্তি`
+              description: `মেম্বার ${user.name} (${user.phone}) কর্তৃক 12-সংখ্যার অটো একাউন্টের মাধ্যমে ${selMonthObj.name} মাসের সমিতি সঞ্চয় ৳${amountNum.toLocaleString('en-US')} জমা প্রাপ্তি। TrxID: ${generatedTxId}`
             });
 
             transaction.set(notifReceiverRef, {
               userId: receiverUid,
               title: `✅ ${selMonthObj.name} মাসের সমিতি সঞ্চয় জমা প্রাপ্তি`,
-              body: `আপনার 12-সংখ্যার অটো নম্বর (${trimmedTarget}) এ ${user.name} (${user.phone}) কর্তৃক ${selMonthObj.name} মাসের সঞ্চয় ৳${amountNum.toLocaleString('en-US')} জমা হয়েছে।`,
+              body: `আপনার 12-সংখ্যার অটো নম্বর (${trimmedTarget}) এ ${user.name} (${user.phone}) কর্তৃক ${selMonthObj.name} মাসের সঞ্চয় ৳${amountNum.toLocaleString('en-US')} জমা হয়েছে। TrxID: ${generatedTxId}`,
               read: false,
               isPersonal: true,
               isTransactionHistory: true,
@@ -2162,7 +2053,7 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
             });
 
           } else {
-// Standard wallet send money
+            // Standard wallet send money
             finalReceiverBal = getEffectiveBalance(rData) + amountNum;
             transaction.update(receiverRef, { balance: finalReceiverBal, mainBalance: finalReceiverBal });
 
@@ -2183,9 +2074,14 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
               typeLabel: 'BNB সেন্ড মানি',
               status: 'success',
               paymentMethod: 'BNB Transfer',
+              trxId: generatedTxId,
+              transactionId: generatedTxId,
+              receiverUid: receiverUid,
+              receiverPhone: rData.phone || sendTargetId,
+              receiverId: rData.memberId || '',
               phone: rData.phone || sendTargetId,
               createdAt: new Date().toISOString(),
-              description: `মেম্বার ${rData.name || ''} (${rData.memberId || ''}) কে ৳${amountNum.toLocaleString('en-US')} সেন্ড মানি সফল`
+              description: `মেম্বার ${rData.name || ''} (${rData.memberId || ''}) কে ৳${amountNum.toLocaleString('en-US')} সেন্ড মানি সফল। TrxID: ${generatedTxId}`
             });
 
             transaction.set(txReceiverRef, {
@@ -2199,15 +2095,20 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
               typeLabel: 'BNB সেন্ড মানি লাভ',
               status: 'success',
               paymentMethod: 'BNB Transfer',
+              trxId: generatedTxId,
+              transactionId: generatedTxId,
+              senderUid: user.uid,
+              senderPhone: user.phone || '',
+              senderId: user.memberId || '',
               phone: user.phone,
               createdAt: new Date().toISOString(),
-              description: `মেম্বার ${user.name} (${user.memberId}) থেকে ৳${amountNum.toLocaleString('en-US')} সেন্ড মানি প্রাপ্তি`
+              description: `মেম্বার ${user.name} (${user.memberId}) থেকে ৳${amountNum.toLocaleString('en-US')} সেন্ড মানি প্রাপ্তি। TrxID: ${generatedTxId}`
             });
 
             transaction.set(notifReceiverRef, {
               userId: receiverUid,
               title: '💸 টাকা গ্রহণ সফল (Money Received)',
-              body: `You have received Tk ${amountNum.toFixed(2)} from ${user.phone || ''} (${user.name}). Balance Tk ${finalReceiverBal.toFixed(2)}.`,
+              body: `You have received Tk ${amountNum.toFixed(2)} from ${user.phone || ''} (${user.name}). Balance Tk ${finalReceiverBal.toFixed(2)}. Ref TrxID: ${generatedTxId}`,
               read: false,
               createdAt: new Date().toISOString()
             });
@@ -2217,7 +2118,6 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
         user.balance = finalSenderBal;
         if (syncLiveProfile) syncLiveProfile();
 
-        const generatedTxId = generateBNBTrxId('BN');
         setSuccessMsg('আপনার সেন্ড মানি লেনদেন সফলভাবে সম্পন্ন হয়েছে!');
         setReceiptModalData({
           typeLabel: 'BNB সেন্ড মানি',
@@ -2274,48 +2174,46 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
       else { opType = 'সেন্ড মানি'; }
 
       const paymentMethodString = `${opName} (${opType === 'ক্যাশ আউট' ? 'CashOut' : 'SendMoney'})`;
-      const descString = `${opName === 'BKASH' ? 'বিকাশ' : opName === 'NAGAD' ? 'নগদ' : opName === 'ROCKET' ? 'রকেট' : 'উপায়'} নম্বরে (${sendTargetNumber}) ৳${amountNum.toLocaleString('en-US')} ${opType} স্থানান্তর আবেদন`;
+      const generatedTxId = generateBNBTrxId('BN');
+      const requestId = `REQ_MB_${user.uid}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-      const finalBal = (user.balance || 0) - totalRequired;
-      user.balance = finalBal; // Optimistic balance update ⚡
-      user.mainBalance = finalBal;
+      const serverRes = await processSendMoneyServer({
+        userId: user.uid,
+        channel: 'mobile_bank',
+        amount: amountNum,
+        clientCharge: chargeTotal,
+        requestId,
+        transactionId: generatedTxId,
+        method: paymentMethodString,
+        selectedMobileOp,
+        targetPhone: sendTargetNumber
+      });
 
-      writesToRun.push(
-        updateDoc(userRef, { balance: finalBal, mainBalance: finalBal }),
-        addDoc(collection(db, 'transactions'), {
-          userId: user.uid,
-          userName: user.name || '',
-          userPhone: user.phone || '',
-          memberId: user.memberId || '',
-          amount: amountNum,
-          charge: chargeTotal,
-          totalDeducted: totalRequired,
-          postBalance: finalBal,
-          type: 'withdraw',
-          typeLabel: 'উইথড্র / ক্যাশআউট',
-          status: 'pending',
-          paymentMethod: paymentMethodString,
-          phone: sendTargetNumber,
-          senderPhone: sendTargetNumber,
-          accountNumber: sendTargetNumber,
-          accountTitle: user.name || '',
-          accountName: user.name || '',
-          createdAt: new Date().toISOString(),
-          description: `${opName === 'BKASH' ? 'বিকাশ' : opName === 'NAGAD' ? 'নগদ' : opName === 'ROCKET' ? 'রকেট' : 'উপায়'} (${sendTargetNumber}) নম্বরে ৳${amountNum.toLocaleString('en-US')} ${opType} স্থানান্তর আবেদন`
-        }),
-        addDoc(collection(db, 'admin_notifications'), {
-          title: '💸 নতুন মোবাইল ক্যাশআউট / উইথড্র আবেদন',
-          message: `${user.name || 'সদস্য'} (${user.memberId || 'N/A'}) ${paymentMethodString} মাধ্যমে ৳${amountNum.toLocaleString('en-US')} টাকা ক্যাশআউট আবেদন করেছেন (নম্বর: ${sendTargetNumber})।`,
-          userId: user.uid,
-          userName: user.name || '',
-          memberId: user.memberId || '',
-          userPhone: user.phone || '',
-          amount: amountNum,
-          type: 'withdraw',
-          read: false,
-          createdAt: new Date().toISOString()
-        }).catch(e => console.warn('Admin notif error:', e))
-      );
+      if (syncLiveProfile) syncLiveProfile();
+
+      setSuccessMsg('আপনার লেনদেন আবেদনটি সফলভাবে সাবমিট হয়েছে!');
+      setReceiptModalData({
+        typeLabel: 'এমএফএস ক্যাশ আউট / সেন্ড মানি',
+        transactionId: serverRes.transactionId || generatedTxId,
+        amount: amountNum,
+        fee: serverRes.charge,
+        totalAmount: serverRes.totalRequired,
+        status: 'pending',
+        beneficiaryName: sendAccTitle || sendTargetId || sendTargetNumber || 'BENEFICIARY ACCOUNT',
+        beneficiaryAccount: sendTargetNumber || sendAccNo || sendTargetId || 'N/A',
+        senderPhone: sendTargetNumber || sendAccNo || user.phone,
+        transactionDate: new Date().toLocaleString('bn-BD', { day: 'numeric', month: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: true })
+      });
+      setIsReceiptOpen(true);
+      setSendAmount('');
+      setSendTargetId('');
+      setSendTargetNumber('');
+      setSendAccNo('');
+      setSendAccTitle('');
+      setSendBranch('');
+      setSendRouting('');
+      setSendWhatsapp('');
+      setSecurityPin('');
     } else if (sendMoneyChannel === 'bank_wallet') {
       if (!selectedBankOp) {
         setErrorMsg('দয়া করে ব্যাংক সিলেক্ট করুন।');
@@ -2338,125 +2236,34 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
         return;
       }
 
-      const finalBal = (user.balance || 0) - totalRequired;
-      user.balance = finalBal; // Optimistic balance update ⚡
-      user.mainBalance = finalBal;
+      const generatedTxId = generateBNBTrxId('BN');
+      const requestId = `REQ_BW_${user.uid}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-      writesToRun.push(
-        updateDoc(userRef, { balance: finalBal, mainBalance: finalBal }),
-        addDoc(collection(db, 'transactions'), {
-          userId: user.uid,
-          userName: user.name || '',
-          userPhone: user.phone || '',
-          memberId: user.memberId || '',
-          amount: amountNum,
-          charge: chargeTotal,
-          totalDeducted: totalRequired,
-          postBalance: finalBal,
-          type: 'withdraw',
-          typeLabel: 'উইথড্র / ক্যাশআউট',
-          status: 'pending',
-          paymentMethod: `Bank Transfer - ${selectedBankNameFull}`,
-          bankName: selectedBankNameFull,
-          accountTitle: sendAccTitle,
-          accountName: sendAccTitle,
-          accountHolder: sendAccTitle,
-          accountNumber: sendAccNo,
-          branch: sendBranch || '',
-          branchName: sendBranch || '',
-          routingNumber: sendRouting || '',
-          routingNo: sendRouting || '',
-          phone: sendAccNo,
-          senderPhone: sendAccNo,
-          createdAt: new Date().toISOString(),
-          description: `Bank Transfer - ${selectedBankNameFull} | অ্যাকাউন্টের নাম: ${sendAccTitle} | অ্যাকাউন্ট নম্বর: ${sendAccNo}${sendBranch ? ` | শাখা: ${sendBranch}` : ''}${sendRouting ? ` | Routing Number: ${sendRouting}` : ''}`
-        }),
-        addDoc(collection(db, 'admin_notifications'), {
-          title: '🏛️ নতুন ব্যাংক ট্রান্সফার / উইথড্র আবেদন',
-          message: `${user.name || 'সদস্য'} (${user.memberId || 'N/A'}) ${selectedBankNameFull} অ্যাকাউন্টে ৳${amountNum.toLocaleString('en-US')} টাকা উইথড্র আবেদন করেছেন (হিসাব: ${sendAccNo})।`,
-          userId: user.uid,
-          userName: user.name || '',
-          memberId: user.memberId || '',
-          userPhone: user.phone || '',
-          amount: amountNum,
-          type: 'withdraw',
-          read: false,
-          createdAt: new Date().toISOString()
-        }).catch(e => console.warn('Admin notif error:', e)),
-      );
-    } else if (sendMoneyChannel === 'abroad') {
-      if (!selectedBankOp) {
-        setErrorMsg('দয়া করে বিদেশি ব্যাংক সিলেক্ট করুন।');
-        return;
-      }
-      const allBanks = appConfig?.paymentBanks || [];
-      const selectedBankObj = allBanks.find(b => b.id === selectedBankOp);
-      let selectedBankNameFull = selectedBankObj ? selectedBankObj.name : (sendBankName || 'Foreign Bank Transfer');
-
-      if (!sendAccNo || !sendAccTitle) {
-        setErrorMsg('গ্রহীতার একাউন্ট নম্বর/আইবান এবং নাম আবশ্যক।');
-        return;
-      }
-
-      const finalBal = (user.balance || 0) - totalRequired;
-      user.balance = finalBal; // Optimistic balance update ⚡
-      user.mainBalance = finalBal;
-
-      writesToRun.push(
-        updateDoc(userRef, { balance: finalBal, mainBalance: finalBal }),
-        addDoc(collection(db, 'transactions'), {
-          userId: user.uid,
-          userName: user.name || '',
-          userPhone: user.phone || '',
-          memberId: user.memberId || '',
-          amount: amountNum,
-          charge: chargeTotal,
-          totalDeducted: totalRequired,
-          postBalance: finalBal,
-          type: 'remittance',
-          typeLabel: 'রেমিট্যান্স / বিদেশি ব্যাংক স্থানান্তর',
-          status: 'pending',
-          paymentMethod: `Foreign Bank Transfer - ${selectedBankNameFull}`,
-          bankName: selectedBankNameFull,
-          accountTitle: sendAccTitle,
-          accountName: sendAccTitle,
-          accountHolder: sendAccTitle,
-          accountNumber: sendAccNo,
-          branch: sendBranch || '',
-          branchName: sendBranch || '',
-          routingNumber: sendRouting || '',
-          routingNo: sendRouting || '',
-          phone: sendAccNo,
-          senderPhone: sendAccNo,
-          createdAt: new Date().toISOString(),
-          description: `Foreign Bank Transfer - ${selectedBankNameFull} | অ্যাকাউন্টের নাম: ${sendAccTitle} | অ্যাকাউন্ট নম্বর: ${sendAccNo}${sendBranch ? ` | শাখা: ${sendBranch}` : ''}${sendRouting ? ` | Routing Number: ${sendRouting}` : ''}`
-        })
-      );
-    }
-
-    writesToRun.push(
-      addDoc(collection(db, 'user_notifications'), {
+      const serverRes = await processSendMoneyServer({
         userId: user.uid,
-        title: 'ফান্ড স্থানান্তর আবেদন সাবমিট হয়েছে',
-        message: `আপনার ৳${amountNum.toLocaleString('en-US')} এর সেন্ড মানি আবেদনটি সফলভাবে সাবমিট হয়েছে (চার্জসহ মোট ৳${totalRequired.toLocaleString('en-US')} ওয়ালেট হতে কেটে নেওয়া হয়েছে)। এডমিন অনুমোদন করলে সম্পন্ন হবে।`,
-        read: false,
-        createdAt: new Date().toISOString()
-      })
-    );
+        channel: 'bank_wallet',
+        amount: amountNum,
+        clientCharge: chargeTotal,
+        requestId,
+        transactionId: generatedTxId,
+        method: `Bank Transfer - ${selectedBankNameFull}`,
+        selectedBankOp,
+        bankName: selectedBankNameFull,
+        accountTitle: sendAccTitle,
+        accountNumber: sendAccNo,
+        branch: sendBranch || '',
+        routingNumber: sendRouting || ''
+      });
 
-    const generatedTxId = generateBNBTrxId('BN');
-
-    setLoading(true);
-    try {
-      await Promise.all(writesToRun);
+      if (syncLiveProfile) syncLiveProfile();
 
       setSuccessMsg('আপনার লেনদেন আবেদনটি সফলভাবে সাবমিট হয়েছে!');
       setReceiptModalData({
-        typeLabel: sendMoneyChannel === 'mobile_bank' ? 'এমএফএস ক্যাশ আউট / সেন্ড মানি' : sendMoneyChannel === 'bank_wallet' ? 'বাংলাদেশি ব্যাংক ওয়ালেট ট্রান্সফার' : 'বিদেশি ব্যাংক রেমিট্যান্স ট্রান্সফার',
-        transactionId: generatedTxId,
+        typeLabel: 'বাংলাদেশি ব্যাংক ওয়ালেট ট্রান্সফার',
+        transactionId: serverRes.transactionId || generatedTxId,
         amount: amountNum,
-        fee: chargeTotal,
-        totalAmount: totalRequired,
+        fee: serverRes.charge,
+        totalAmount: serverRes.totalRequired,
         status: 'pending',
         beneficiaryName: sendAccTitle || sendTargetId || sendTargetNumber || 'BENEFICIARY ACCOUNT',
         beneficiaryAccount: sendTargetNumber || sendAccNo || sendTargetId || 'N/A',
@@ -2473,14 +2280,72 @@ const bankingTypes = ['add_money', 'deposit', 'withdraw', 'bill_pay', 'money_exc
       setSendRouting('');
       setSendWhatsapp('');
       setSecurityPin('');
+    } else if (sendMoneyChannel === 'abroad') {
+      if (!selectedBankOp) {
+        setErrorMsg('দয়া করে বিদেশি ব্যাংক সিলেক্ট করুন।');
+        return;
+      }
+      const allBanks = appConfig?.paymentBanks || [];
+      const selectedBankObj = allBanks.find(b => b.id === selectedBankOp);
+      let selectedBankNameFull = selectedBankObj ? selectedBankObj.name : (sendBankName || 'Foreign Bank Transfer');
+
+      if (!sendAccNo || !sendAccTitle) {
+        setErrorMsg('গ্রহীতার একাউন্ট নম্বর/আইবান এবং নাম আবশ্যক।');
+        return;
+      }
+
+      const generatedTxId = generateBNBTrxId('BN');
+      const requestId = `REQ_AB_${user.uid}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+      const serverRes = await processSendMoneyServer({
+        userId: user.uid,
+        channel: 'abroad',
+        amount: amountNum,
+        clientCharge: chargeTotal,
+        requestId,
+        transactionId: generatedTxId,
+        method: `Foreign Bank Transfer - ${selectedBankNameFull}`,
+        selectedBankOp,
+        bankName: selectedBankNameFull,
+        accountTitle: sendAccTitle,
+        accountNumber: sendAccNo,
+        branch: sendBranch || '',
+        routingNumber: sendRouting || ''
+      });
 
       if (syncLiveProfile) syncLiveProfile();
-    } catch (err: any) {
-      console.error("Send money submit error:", err);
-      setErrorMsg('লেনদেন সাবমিট করতে সমস্যা হয়েছে: ' + (err?.message || 'অনুগ্রহ করে পুনরায় চেষ্টা করুন'));
-    } finally {
-      setLoading(false);
+
+      setSuccessMsg('আপনার লেনদেন আবেদনটি সফলভাবে সাবমিট হয়েছে!');
+      setReceiptModalData({
+        typeLabel: 'বিদেশি ব্যাংক রেমিট্যান্স ট্রান্সফার',
+        transactionId: serverRes.transactionId || generatedTxId,
+        amount: amountNum,
+        fee: serverRes.charge,
+        totalAmount: serverRes.totalRequired,
+        status: 'pending',
+        beneficiaryName: sendAccTitle || sendTargetId || sendTargetNumber || 'BENEFICIARY ACCOUNT',
+        beneficiaryAccount: sendTargetNumber || sendAccNo || sendTargetId || 'N/A',
+        senderPhone: sendTargetNumber || sendAccNo || user.phone,
+        transactionDate: new Date().toLocaleString('bn-BD', { day: 'numeric', month: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: true })
+      });
+      setIsReceiptOpen(true);
+      setSendAmount('');
+      setSendTargetId('');
+      setSendTargetNumber('');
+      setSendAccNo('');
+      setSendAccTitle('');
+      setSendBranch('');
+      setSendRouting('');
+      setSendWhatsapp('');
+      setSecurityPin('');
     }
+      } catch (err: any) {
+        console.error("Send money submit error:", err);
+        setErrorMsg(err?.message || 'লেনদেন সম্পন্ন হয়নি / অবস্থা অনিশ্চিত হলে লেনদেন পাতা দেখে নিন, তারপর আবার চেষ্টা করুন।');
+      } finally {
+        sendLockRef.current = false;
+        setLoading(false);
+      }
   };
 
   // Step A: Trigger End-to-End OTP Generation (Blueprint Architecture)

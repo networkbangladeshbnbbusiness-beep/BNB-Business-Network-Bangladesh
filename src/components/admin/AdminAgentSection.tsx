@@ -294,6 +294,284 @@ export function AdminAgentSection(props: any) {
     handleDeleteAgent
   } = props;
 
+  const [removingAgentId, setRemovingAgentId] = useState<string | null>(null);
+  const [localRemovedIds, setLocalRemovedIds] = useState<Record<string, boolean>>({});
+  const [localRemoveSuccessMsg, setLocalRemoveSuccessMsg] = useState<string>('');
+  const [localRemoveErrorMsg, setLocalRemoveErrorMsg] = useState<string>('');
+  const [liveDbAgents, setLiveDbAgents] = useState<any[]>([]);
+
+  useEffect(() => {
+    let agentsMap = new Map<string, any>();
+    let bapAgentsMap = new Map<string, any>();
+
+    const rebuildLiveAgents = () => {
+      const merged = new Map<string, any>();
+      bapAgentsMap.forEach((v, k) => merged.set(k, v));
+      agentsMap.forEach((v, k) => merged.set(k, { ...(merged.get(k) || {}), ...v }));
+      setLiveDbAgents(Array.from(merged.values()));
+    };
+
+    const unsubAgents = onSnapshot(
+      collection(db, 'agents'),
+      (snap) => {
+        agentsMap = new Map();
+        snap.docs.forEach((d) => {
+          const data = d.data();
+          if (data.status === 'rejected' || data.approvalStatus === 'rejected') return;
+          agentsMap.set(d.id, { id: d.id, ...data });
+        });
+        rebuildLiveAgents();
+      },
+      () => {}
+    );
+
+    const unsubBap = onSnapshot(
+      collection(db, 'bap_agents'),
+      (snap) => {
+        bapAgentsMap = new Map();
+        snap.docs.forEach((d) => {
+          const data = d.data();
+          if (data.status === 'rejected' || data.approvalStatus === 'rejected') return;
+          bapAgentsMap.set(d.id, { id: d.id, ...data });
+        });
+        rebuildLiveAgents();
+      },
+      () => {}
+    );
+
+    return () => {
+      unsubAgents();
+      unsubBap();
+    };
+  }, []);
+
+  const handleRemoveApprovedAgent = async (target: any) => {
+    if (!target) return;
+    const rawId = String(target.id || target.docId || '').trim();
+    const docId = String(target.docId || target.id || '').trim();
+    const targetUserId = String(target.userId || target.uid || '').trim();
+    const targetPhone = String(target.phone || target.mobile || '').trim();
+    const actionKey = rawId || docId || targetUserId || targetPhone;
+
+    if (!actionKey) return;
+    setRemovingAgentId(actionKey);
+    setLocalRemoveSuccessMsg('');
+    setLocalRemoveErrorMsg('');
+
+    try {
+      const removedKeysToMark: Record<string, boolean> = {};
+      if (rawId) removedKeysToMark[rawId] = true;
+      if (docId) removedKeysToMark[docId] = true;
+      if (targetUserId) removedKeysToMark[targetUserId] = true;
+      if (targetPhone) removedKeysToMark[targetPhone] = true;
+
+      let discoveredUserIds = new Set<string>();
+      if (targetUserId) discoveredUserIds.add(targetUserId);
+
+      // 1. Direct document deletes by known candidate IDs
+      const candidateAgentIds = Array.from(
+        new Set(
+          [
+            rawId,
+            docId,
+            targetUserId,
+            targetUserId ? `agent_${targetUserId}` : '',
+            rawId.replace(/^req_/, ''),
+          ].filter(Boolean)
+        )
+      );
+
+      for (const cid of candidateAgentIds) {
+        await deleteDoc(doc(db, 'agents', cid)).catch(() => {});
+        await deleteDoc(doc(db, 'bap_agents', cid)).catch(() => {});
+        await deleteDoc(doc(db, 'agent_requests', cid)).catch(() => {});
+        await deleteDoc(doc(db, 'agent_applications', cid)).catch(() => {});
+      }
+
+      // 2. Scan collections to remove any matching documents by id, userId, or phone
+      const collectionsToClean = ['agents', 'bap_agents', 'agent_requests', 'agent_applications'];
+      for (const colName of collectionsToClean) {
+        try {
+          const snap = await getDocs(collection(db, colName));
+          for (const d of snap.docs) {
+            const data = d.data() || {};
+            const dPhone = String(data.phone || data.mobile || '').trim();
+            const dUserId = String(data.userId || data.uid || '').trim();
+            const dId = String(data.id || d.id || '').trim();
+
+            const isIdMatch =
+              (rawId && (d.id === rawId || dId === rawId)) ||
+              (docId && (d.id === docId || dId === docId));
+            const isUserMatch =
+              Boolean(targetUserId) && (d.id === targetUserId || dUserId === targetUserId);
+            const isPhoneMatch =
+              Boolean(targetPhone) && Boolean(dPhone) && dPhone === targetPhone;
+
+            if (isIdMatch || isUserMatch || isPhoneMatch) {
+              if (dUserId) discoveredUserIds.add(dUserId);
+              removedKeysToMark[d.id] = true;
+              if (dId) removedKeysToMark[dId] = true;
+              await deleteDoc(doc(db, colName, d.id)).catch(() => {});
+            }
+          }
+        } catch {
+          // Ignore single collection error
+        }
+      }
+
+      // 3. Downgrade user role from 'agent' back to 'user' if applicable
+      for (const uidToReset of Array.from(discoveredUserIds)) {
+        if (uidToReset) {
+          await updateDoc(doc(db, 'users', uidToReset), {
+            role: 'user',
+          }).catch(() => {});
+        }
+      }
+
+      setLocalRemovedIds((prev) => ({ ...prev, ...removedKeysToMark }));
+      setLocalRemoveSuccessMsg(
+        `এজেন্ট (${target.userName || target.fullName || target.name || targetPhone || 'নির্বাচিত এজেন্ট'}) সফলভাবে রিমুভ করা হয়েছে এবং ম্যাপ থেকে সরানো হয়েছে!`
+      );
+    } catch (err: any) {
+      setLocalRemoveErrorMsg('এজেন্ট রিমুভ করতে সমস্যা হয়েছে: ' + (err?.message || 'অজানা ত্রুটি'));
+    } finally {
+      setRemovingAgentId(null);
+    }
+  };
+
+  const visibleAgentRequests = (adminAgentRequests || []).filter((req: any) => {
+    const rId = String(req.id || '').trim();
+    const rDocId = String(req.docId || '').trim();
+    const rUserId = String(req.userId || '').trim();
+    const rPhone = String(req.phone || req.mobile || '').trim();
+    if (rId && localRemovedIds[rId]) return false;
+    if (rDocId && localRemovedIds[rDocId]) return false;
+    if (rUserId && localRemovedIds[rUserId]) return false;
+    if (rPhone && localRemovedIds[rPhone]) return false;
+    return true;
+  });
+
+  const mergedAdminAgents = React.useMemo(() => {
+    const map = new Map<string, any>();
+    (adminAgents || []).forEach((a: any) => {
+      if (a && a.id) map.set(String(a.id), a);
+    });
+    liveDbAgents.forEach((a: any) => {
+      if (a && a.id) {
+        map.set(String(a.id), { ...(map.get(String(a.id)) || {}), ...a });
+      }
+    });
+    return Array.from(map.values()).filter((a: any) => {
+      const aId = String(a.id || '').trim();
+      const aUserId = String(a.userId || '').trim();
+      const aPhone = String(a.phone || a.mobile || '').trim();
+      if (aId && localRemovedIds[aId]) return false;
+      if (aUserId && localRemovedIds[aUserId]) return false;
+      if (aPhone && localRemovedIds[aPhone]) return false;
+      return true;
+    });
+  }, [adminAgents, liveDbAgents, localRemovedIds]);
+
+  const geocodeAgentAddress = async (
+    addressText: string
+  ): Promise<{ lat: number; lng: number; formattedAddress?: string } | null> => {
+    if (!addressText || !addressText.trim()) return null;
+    const directMatch = addressText.trim().match(/(-?\d+\.\d+)[\s,]+(-?\d+\.\d+)/);
+    if (directMatch) {
+      const lat = parseFloat(directMatch[1]);
+      const lng = parseFloat(directMatch[2]);
+      if (!isNaN(lat) && !isNaN(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+        return { lat, lng, formattedAddress: addressText.trim() };
+      }
+    }
+
+    const gmpKey =
+      import.meta.env.VITE_GOOGLE_MAPS_API_KEY ||
+      (typeof process !== 'undefined' &&
+        process.env &&
+        (process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY)) ||
+      '';
+
+    if (gmpKey) {
+      try {
+        const res = await fetch(
+          `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
+            addressText.trim()
+          )}&key=${encodeURIComponent(gmpKey)}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data.status === 'OK' && data.results && data.results.length > 0) {
+            const loc = data.results[0].geometry?.location;
+            if (loc && typeof loc.lat === 'number' && typeof loc.lng === 'number') {
+              return {
+                lat: loc.lat,
+                lng: loc.lng,
+                formattedAddress: data.results[0].formatted_address || addressText.trim(),
+              };
+            }
+          }
+        }
+      } catch {
+        // Fallback below if network error
+      }
+    }
+    return null;
+  };
+
+  const handleApproveWithGeocoding = async (req: any) => {
+    const fullAddress =
+      req.writtenLocation ||
+      req.address ||
+      req.shopMapLink ||
+      [req.postOffice, req.thana || req.area, req.district || req.city, req.country || 'Bangladesh']
+        .filter(Boolean)
+        .join(', ');
+
+    const geocoded = await geocodeAgentAddress(fullAddress);
+    if (geocoded) {
+      req.lat = geocoded.lat;
+      req.lng = geocoded.lng;
+      req.realLat = geocoded.lat;
+      req.realLng = geocoded.lng;
+      req.address = geocoded.formattedAddress || fullAddress;
+    }
+
+    await handleUpdateAgentRequestStatus(req.id, 'approved');
+
+    const finalLat = geocoded?.lat ?? (req.lat ? Number(req.lat) : 23.685);
+    const finalLng = geocoded?.lng ?? (req.lng ? Number(req.lng) : 90.356);
+    const resolvedAddress = geocoded?.formattedAddress || fullAddress;
+    const targetAgentId = req.userId || req.id;
+
+    try {
+      const colName = req._collection || 'agent_requests';
+      await updateDoc(doc(db, colName, req.docId || req.id), {
+        status: 'approved',
+        approvalStatus: 'approved',
+        lat: finalLat,
+        lng: finalLng,
+        realLat: finalLat,
+        realLng: finalLng,
+        address: resolvedAddress,
+      }).catch(() => {});
+
+      const permanentUpdate = {
+        lat: finalLat,
+        lng: finalLng,
+        realLat: finalLat,
+        realLng: finalLng,
+        address: resolvedAddress,
+        approvalStatus: 'approved',
+        liveLocationEnabled: false,
+      };
+      await setDoc(doc(db, 'agents', targetAgentId), permanentUpdate, { merge: true }).catch(() => {});
+      await setDoc(doc(db, 'bap_agents', targetAgentId), permanentUpdate, { merge: true }).catch(() => {});
+    } catch {
+      // Handled by parent status update
+    }
+  };
+
   return (
     <>
         {adminTab === 'agent_admin' && (
@@ -301,7 +579,7 @@ export function AdminAgentSection(props: any) {
             <div className="bg-slate-50 border border-slate-200/80 p-6 rounded-3xl">
               <div className="border-b border-slate-200/80 pb-4 mb-5">
                 <h2 className="text-base sm:text-lg font-black text-emerald-450 flex items-center gap-2">
-                  💼 BNB কো-অপারেティブ ক্যারিয়ার ও এজেন্ট রিক্রুটিং সেল
+                  💼 BNB কো-অপারেটিভ ক্যারিয়ার ও এজেন্ট রিক্রুটিং সেল
                 </h2>
                 <p className="text-xs text-slate-450 mt-1 font-semibold leading-relaxed">
                   এখানে সারা বাংলাদেশ ও বিশ্বজুড়ে সমবায় সদস্যদের সাবমিট করা BNB এজেন্ট পার্টনারশিপ আবেদনগুলো অনুমোদন করতে পারবেন এবং সরাসরি নতুন এজেন্টদের পজিশন সেট ও ডিলিট করতে পারবেন।
@@ -309,15 +587,15 @@ export function AdminAgentSection(props: any) {
               </div>
 
               {/* Success and Error messages */}
-              {agentRequestSuccessMsg && (
+              {(agentRequestSuccessMsg || localRemoveSuccessMsg) && (
                 <div className="bg-emerald-950/40 border border-emerald-500/30 p-4 rounded-xl text-xs text-emerald-400 font-bold mb-4">
-                  ✓ {agentRequestSuccessMsg}
+                  ✓ {localRemoveSuccessMsg || agentRequestSuccessMsg}
                 </div>
               )}
 
-              {agentRequestErrorMsg && (
+              {(agentRequestErrorMsg || localRemoveErrorMsg) && (
                 <div className="bg-rose-950/40 border border-rose-500/30 p-4 rounded-xl text-xs text-rose-450 font-bold mb-4">
-                  ⚠️ {agentRequestErrorMsg}
+                  ⚠️ {localRemoveErrorMsg || agentRequestErrorMsg}
                 </div>
               )}
 
@@ -372,7 +650,7 @@ export function AdminAgentSection(props: any) {
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  ⏳ আবেদনপত্র সমূহ ({adminAgentRequests.length})
+                  ⏳ আবেদনপত্র সমূহ ({visibleAgentRequests.length})
                 </button>
                 <button
                   type="button"
@@ -383,7 +661,7 @@ export function AdminAgentSection(props: any) {
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  ➕ এজেন্ট যুক্ত ও পজিশন সেটআপ ({adminAgents.length})
+                  ➕ এজেন্ট যুক্ত ও পজিশন সেটআপ ({mergedAdminAgents.length})
                 </button>
               </div>
 
@@ -397,18 +675,23 @@ export function AdminAgentSection(props: any) {
                       <span className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
                       <span className="text-xs text-slate-500 font-bold">আবেদনপত্র তালিকা রিফ্রেশ হচ্ছে...</span>
                     </div>
-                  ) : adminAgentRequests.length > 0 ? (
+                  ) : visibleAgentRequests.length > 0 ? (
                     <div className="space-y-2">
-                      {adminAgentRequests.map((req, idx) => {
+                      {visibleAgentRequests.map((req: any, idx: number) => {
                         const isPending = req.status === 'pending';
                         const isApproved = req.status === 'approved';
                         const isRejected = req.status === 'rejected';
 
                         const reqKey = req.id || (req as any).docId || `agent_${req.phone}_${req.appliedAtStr}`;
                         const isExpanded = expandedReqIds[reqKey] || false;
+                        const isRemovingThis =
+                          removingAgentId === req.id ||
+                          removingAgentId === req.docId ||
+                          removingAgentId === req.userId ||
+                          removingAgentId === req.phone;
 
                         // Match applicant from users list to determine category
-                        const targetUser = users.find(u => u.uid === req.userId || u.phone === req.phone || (req.mobile && u.phone === req.mobile));
+                        const targetUser = users.find((u: any) => u.uid === req.userId || u.phone === req.phone || (req.mobile && u.phone === req.mobile));
                         const isSamityApplicant = Boolean(
                           (targetUser && (targetUser.samityStatus === 'approved' || targetUser.samitySchemeActive || (targetUser.savings && targetUser.savings > 0) || (targetUser.shares && targetUser.shares > 0))) ||
                           req.applicantType === 'samity' || req.isSamityUser || req.userCategory === 'samity' || req.isSamityMember
@@ -528,11 +811,11 @@ export function AdminAgentSection(props: any) {
                                 </div>
 
                                 {isPending && (
-                                  <div className="flex justify-end gap-2 pt-1">
+                                  <div className="flex flex-wrap justify-end gap-2 pt-1">
                                     <button
                                       type="button"
-                                      disabled={agentActionId === req.id}
-                                      onClick={() => handleUpdateAgentRequestStatus(req.id, 'approved')}
+                                      disabled={agentActionId === req.id || isRemovingThis}
+                                      onClick={() => handleApproveWithGeocoding(req)}
                                       className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition cursor-pointer flex items-center justify-center gap-1.5 shadow-xs"
                                     >
                                       {agentActionId === req.id ? (
@@ -543,11 +826,40 @@ export function AdminAgentSection(props: any) {
                                     </button>
                                     <button
                                       type="button"
-                                      disabled={agentActionId === req.id}
+                                      disabled={agentActionId === req.id || isRemovingThis}
                                       onClick={() => handleUpdateAgentRequestStatus(req.id, 'rejected')}
                                       className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 rounded-xl text-xs font-bold transition cursor-pointer"
                                     >
                                       বাতিল করুন
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={isRemovingThis}
+                                      onClick={() => handleRemoveApprovedAgent(req)}
+                                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                      <span>মুছে ফেলুন</span>
+                                    </button>
+                                  </div>
+                                )}
+
+                                {!isPending && (
+                                  <div className="flex flex-wrap justify-end gap-2 pt-1">
+                                    <button
+                                      type="button"
+                                      disabled={isRemovingThis}
+                                      onClick={() => handleRemoveApprovedAgent(req)}
+                                      className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition cursor-pointer flex items-center justify-center gap-1.5 shadow-xs"
+                                    >
+                                      {isRemovingThis ? (
+                                        <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                      ) : (
+                                        <>
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                          <span>{isApproved ? 'এজেন্ট রিমুভ করুন (ম্যাপ থেকে মুছুন)' : 'আবেদনটি মুছে ফেলুন'}</span>
+                                        </>
+                                      )}
                                     </button>
                                   </div>
                                 )}
@@ -564,15 +876,15 @@ export function AdminAgentSection(props: any) {
                                   <div className="flex items-center gap-1.5">
                                     <button
                                       type="button"
-                                      disabled={agentActionId === req.id}
-                                      onClick={() => handleUpdateAgentRequestStatus(req.id, 'approved')}
+                                      disabled={agentActionId === req.id || isRemovingThis}
+                                      onClick={() => handleApproveWithGeocoding(req)}
                                       className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold rounded-lg transition cursor-pointer shadow-2xs"
                                     >
                                       ✓ অনুমোদন
                                     </button>
                                     <button
                                       type="button"
-                                      disabled={agentActionId === req.id}
+                                      disabled={agentActionId === req.id || isRemovingThis}
                                       onClick={() => handleUpdateAgentRequestStatus(req.id, 'rejected')}
                                       className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 text-[11px] font-bold rounded-lg transition cursor-pointer"
                                     >
@@ -580,9 +892,26 @@ export function AdminAgentSection(props: any) {
                                     </button>
                                   </div>
                                 ) : (
-                                  <span className="text-[10px] font-bold text-slate-400">
-                                    {isApproved ? 'অনুমোদিত' : 'বাতিলকৃত'}
-                                  </span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[10px] font-bold text-slate-400">
+                                      {isApproved ? 'অনুমোদিত' : 'বাতিলকৃত'}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      disabled={isRemovingThis}
+                                      onClick={() => handleRemoveApprovedAgent(req)}
+                                      className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-[10.5px] font-bold rounded-lg transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                                    >
+                                      {isRemovingThis ? (
+                                        <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                      ) : (
+                                        <>
+                                          <Trash2 className="w-3 h-3" />
+                                          <span>{isApproved ? 'এজেন্ট রিমুভ করুন' : 'মুছুন'}</span>
+                                        </>
+                                      )}
+                                    </button>
+                                  </div>
                                 )}
                               </div>
                             )}
@@ -804,12 +1133,12 @@ export function AdminAgentSection(props: any) {
                   {/* Part B: Enrolled live agents list and deleting capability */}
                   <div className="space-y-4">
                     <h3 className="text-xs font-black text-slate-450 uppercase tracking-widest border-b border-slate-100 pb-2">
-                      📋 বর্তমান সচল ডাটাবেস লাইভ এজেন্টসমূহ ({adminAgents.length} জন)
+                      📋 বর্তমান সচল ডাটাবেস লাইভ এজেন্টসমূহ ({mergedAdminAgents.length} জন)
                     </h3>
 
-                    {loadingAdminAgents ? (
+                    {loadingAdminAgents && mergedAdminAgents.length === 0 ? (
                       <div className="py-8 text-center text-xs text-slate-500 font-bold">এজেন্ট ক্যাটালগ রিলোড হচ্ছে...</div>
-                    ) : adminAgents.length > 0 ? (
+                    ) : mergedAdminAgents.length > 0 ? (
                       <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white">
                         <table className="w-full text-left border-collapse text-xs">
                           <thead>
@@ -822,100 +1151,101 @@ export function AdminAgentSection(props: any) {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-slate-700">
-                            {adminAgents.map((agent, idx) => (
-                              <tr key={`${agent.id}-${idx}`} className="hover:bg-slate-50 transition">
-                                <td className="p-3 font-semibold text-slate-800">
-                                  <div className="flex items-center gap-2">
-                                    <img src={agent.img || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80'} className="w-7 h-7 rounded-full object-cover border border-slate-200/80" referrerPolicy="no-referrer" />
-                                    <div>
-                                      <p className="font-extrabold text-xs text-slate-950">{agent.name}</p>
-                                      <span className="text-[9px] text-[#0D9488] font-bold">{agent.role}</span>
+                            {mergedAdminAgents.map((agent: any, idx: number) => {
+                              const isRemovingThisAgent =
+                                removingAgentId === agent.id ||
+                                removingAgentId === agent.userId ||
+                                removingAgentId === agent.phone;
+
+                              return (
+                                <tr key={`${agent.id}-${idx}`} className="hover:bg-slate-50 transition">
+                                  <td className="p-3 font-semibold text-slate-800">
+                                    <div className="flex items-center gap-2">
+                                      <img src={agent.img || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80'} className="w-7 h-7 rounded-full object-cover border border-slate-200/80" referrerPolicy="no-referrer" />
+                                      <div>
+                                        <p className="font-extrabold text-xs text-slate-950">{agent.name || agent.userName}</p>
+                                        <span className="text-[9px] text-[#0D9488] font-bold">{agent.role || 'এজেন্ট'}</span>
+                                      </div>
                                     </div>
-                                  </div>
-                                </td>
-                                <td className="p-3 text-slate-600">
-                                  <div className="flex flex-col gap-0.5">
-                                    <div className="flex items-center gap-1">
-                                      <span>{agent.flag}</span>
-                                      <span className="font-bold text-slate-800">{agent.city}</span>
+                                  </td>
+                                  <td className="p-3 text-slate-600">
+                                    <div className="flex flex-col gap-0.5">
+                                      <div className="flex items-center gap-1">
+                                        <span>{agent.flag || '🇧🇩'}</span>
+                                        <span className="font-bold text-slate-800">{agent.city || agent.district || 'Bangladesh'}</span>
+                                      </div>
+                                      {(agent.district || agent.thana || agent.postOffice || agent.address) && (
+                                        <p className="text-[10px] text-slate-500 font-medium">
+                                          📍 {agent.address || [agent.postOffice, agent.thana, agent.district].filter(Boolean).join(', ')}
+                                        </p>
+                                      )}
                                     </div>
-                                    {(agent.district || agent.thana || agent.postOffice) && (
-                                      <p className="text-[10px] text-slate-500 font-medium">
-                                        📍 {[agent.postOffice, agent.thana, agent.district].filter(Boolean).join(', ')}
-                                      </p>
-                                    )}
-                                  </div>
-                                </td>
-                                <td className="p-3 font-mono font-bold text-slate-800">{agent.phone}</td>
-                                <td className="p-3 text-center">
-                                  <div className="flex flex-col items-center gap-1">
-                                    <div className="flex items-center gap-1">
-                                      {agent.isOnline ? (
-                                        <span className="inline-flex items-center gap-1 text-[9px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full animate-pulse">
-                                          <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping" />
-                                          🟢 অ্যাপে সক্রিয় (লাইভ)
-                                        </span>
+                                  </td>
+                                  <td className="p-3 font-mono font-bold text-slate-800">{agent.phone}</td>
+                                  <td className="p-3 text-center">
+                                    <div className="flex flex-col items-center gap-1">
+                                      <div className="flex items-center gap-1">
+                                        {agent.isOnline ? (
+                                          <span className="inline-flex items-center gap-1 text-[9px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full animate-pulse">
+                                            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping" />
+                                            🟢 অ্যাপে সক্রিয় (লাইভ)
+                                          </span>
+                                        ) : (
+                                          <span className="inline-flex items-center gap-1 text-[9px] font-bold text-slate-400 bg-slate-50 border border-slate-150 px-2 py-0.5 rounded-full">
+                                            ⚪ অফলাইন
+                                          </span>
+                                        )}
+                                      </div>
+                                      {(agent.realLat || agent.lat) && (agent.realLng || agent.lng) ? (
+                                        <div className="flex flex-col items-center gap-0.5">
+                                          <span className="text-[10px] font-mono font-black text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
+                                            {Number(agent.realLat ?? agent.lat).toFixed(6)}, {Number(agent.realLng ?? agent.lng).toFixed(6)}
+                                          </span>
+                                          <a 
+                                            href={`https://www.google.com/maps/search/?api=1&query=${agent.realLat ?? agent.lat},${agent.realLng ?? agent.lng}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-[9px] text-[#0D9488] hover:underline font-extrabold"
+                                          >
+                                            গুগল ম্যাপে দেখুন ↗
+                                          </a>
+                                        </div>
                                       ) : (
-                                        <span className="inline-flex items-center gap-1 text-[9px] font-bold text-slate-400 bg-slate-50 border border-slate-150 px-2 py-0.5 rounded-full">
-                                          ⚪ অফলাইন
+                                        <span className="text-[10px] text-slate-450 font-bold font-mono">
+                                          bdX:{agent.bdX} | bdY:{agent.bdY}
                                         </span>
                                       )}
                                     </div>
-                                    {agent.lat && agent.lng ? (
-                                      <div className="flex flex-col items-center gap-0.5">
-                                        <span className="text-[10px] font-mono font-black text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
-                                          {Number(agent.lat).toFixed(6)}, {Number(agent.lng).toFixed(6)}
-                                        </span>
-                                        <a 
-                                          href={`https://www.google.com/maps/search/?api=1&query=${agent.lat},${agent.lng}`}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="text-[9px] text-[#0D9488] hover:underline font-extrabold"
-                                        >
-                                          গুগল ম্যাপে দেখুন ↗
-                                        </a>
-                                      </div>
-                                    ) : (
-                                      <span className="text-[10px] text-slate-450 font-bold font-mono">
-                                        bdX:{agent.bdX} | bdY:{agent.bdY}
-                                      </span>
-                                    )}
-                                  </div>
-                                </td>
-                                <td className="p-3 text-right">
-                                  <div className="flex items-center justify-end gap-1.5">
-                                    {agent.lat && agent.lng && (
+                                  </td>
+                                  <td className="p-3 text-right">
+                                    <div className="flex items-center justify-end gap-1.5">
                                       <button
                                         type="button"
-                                        onClick={() => {
-                                          setTrackingAgent(agent);
-                                          setShowTrackingModal(true);
-                                        }}
-                                        className="p-1.5 text-emerald-600 hover:text-white hover:bg-emerald-600 rounded-lg border border-emerald-150 hover:border-emerald-600 transition flex items-center gap-1 text-[10px] font-black cursor-pointer"
-                                        title="লাইভ ট্র্যাক করুন"
+                                        disabled={isRemovingThisAgent}
+                                        onClick={() => handleRemoveApprovedAgent(agent)}
+                                        className="px-2.5 py-1.5 text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 rounded-lg text-[10.5px] font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                                        title="এজেন্ট রিমুভ করুন"
                                       >
-                                        <MapIcon className="w-3 h-3" />
-                                        <span>লাইভ ট্র্যাক</span>
+                                        {isRemovingThisAgent ? (
+                                          <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                        ) : (
+                                          <>
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                            <span>রিমুভ করুন</span>
+                                          </>
+                                        )}
                                       </button>
-                                    )}
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDeleteAgent(agent.id)}
-                                      className="p-1.5 text-rose-500 hover:text-white hover:bg-rose-500 rounded-lg border border-rose-100 hover:border-rose-500 transition cursor-pointer"
-                                      title="মুছে ফেলুন"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            ))}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
                     ) : (
                       <div className="py-12 border border-dashed border-slate-200/80 rounded-3xl text-center text-slate-500 text-xs font-extrabold">
-                        কোনো কাস্টম লাইভ এজেন্ট এখনো ডাটাবেসে নিবন্ধিত নেই। ডিফল্ট মডিউল এজেন্টগুলো ম্যাপে সচল থাকবে।
+                        কোনো কাস্টম লাইভ এজেন্ট এখনো ডাটাবেসে নিবন্ধিত নেই।
                       </div>
                     )}
                   </div>
