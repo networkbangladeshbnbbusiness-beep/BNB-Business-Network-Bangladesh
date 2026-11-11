@@ -5,7 +5,7 @@ import { isUserQuarterlyPaid } from '../lib/samitySavingsEngine';
 import { sortTransactionsNewestFirst } from '../lib/transactionUtils';
 import UserTransactionsStatement, { getTxTimestamp, formatTxDate, getNormalizedStatus } from './UserTransactionsStatement';
 import { BNBPaymentReceiptModal } from './BNBPaymentReceiptModal';
-import { NotificationInboxModal, isGeneralTransactionNotif } from './NotificationInboxModal';
+import { NotificationInboxModal, isGeneralTransactionNotif, isOtpNotification } from './NotificationInboxModal';
 import { BNBVirtualAssistant } from './BNBVirtualAssistant';
 import TransactionExchangeIcon from './TransactionExchangeIcon';
 import { filterTransactionsLast60Days, cleanupExpiredTransactions } from '../lib/transactionCleanup';
@@ -1567,8 +1567,9 @@ const getTxt = (key: string, fallback: string) => {
       const filteredGlobal = globalList.filter(n => !deletedGlobalIds.includes(n.id) && !deletedGlobalIds.includes(n.docId));
       const merged = [...personalList, ...memberList, ...filteredGlobal];
       
-      // Preserve all admin messages, direct credit/debit alerts & broadcasts
+      // Preserve all admin messages, direct credit/debit alerts & broadcasts (never include OTP records)
       const isPersonalMessage = (n: UserNotification) => {
+        if (isOtpNotification(n)) return false;
         if (n.isTransactionHistory === true && !n.title && !n.body) return false;
         return true;
       };

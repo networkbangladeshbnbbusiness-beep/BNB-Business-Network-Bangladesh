@@ -28,9 +28,42 @@ interface NotificationInboxModalProps {
   onClearAllNotifications?: () => void;
 }
 
-// Helper to identify standard peer-to-peer financial transactions that belong in bottom navigation transaction history
+// Helper to identify OTP / authentication verification notifications (delivered via email, never shown in Admin Notification Inbox)
+export const isOtpNotification = (n: UserNotification): boolean => {
+  if (!n) return false;
+  const id = String(n.id || n.docId || '').toLowerCase().trim();
+  const type = String(n.type || '').toLowerCase().trim();
+  const category = String(n.category || '').toLowerCase().trim();
+  const channel = String((n as any).channel || '').toLowerCase().trim();
+  const title = String(n.title || '').toLowerCase().trim();
+  const body = String(n.body || n.message || '').toLowerCase().trim();
+
+  if (
+    Boolean((n as any).otp) ||
+    id.startsWith('otp-') ||
+    type === 'otp' ||
+    type === 'email_otp' ||
+    type === 'phone_otp' ||
+    category === 'otp' ||
+    category === 'email_otp' ||
+    category === 'phone_otp' ||
+    channel === 'email' ||
+    channel === 'phone' ||
+    title.includes('ওটিপি') ||
+    title.includes('otp') ||
+    body.includes('ওটিপি কোড') ||
+    body.includes('otp code')
+  ) {
+    return true;
+  }
+  return false;
+};
+
+// Helper to identify standard peer-to-peer financial transactions or OTP items that do not belong in the Admin Notification Inbox
 export const isGeneralTransactionNotif = (n: UserNotification): boolean => {
   if (!n) return false;
+  if (isOtpNotification(n)) return true;
+
   const type = String(n.type || '').toLowerCase().trim();
   const category = String(n.category || '').toLowerCase().trim();
   const title = String(n.title || '').toLowerCase().trim();
@@ -45,7 +78,7 @@ export const isGeneralTransactionNotif = (n: UserNotification): boolean => {
   const txTypes = [
     'send_money', 'transfer', 'money_sent', 'money_received', 'received_transfer',
     'recharge', 'telecom', 'bill_pay', 'add_money_request', 'withdraw', 'cash_out',
-    'auto_recharge', 'samity_deposit', 'coop_savings_deposit'
+    'auto_recharge', 'samity_deposit', 'coop_savings_deposit', 'transaction'
   ];
   if (txTypes.includes(type) || txTypes.includes(category)) {
     if (title.includes('এডমিন') || title.includes('বোনাস') || title.includes('জরিমানা') || title.includes('কর্তন')) {
@@ -57,7 +90,8 @@ export const isGeneralTransactionNotif = (n: UserNotification): boolean => {
   // Common payment / send money title phrases
   const txTitleKeywords = [
     'টাকা পাঠানো সফল', 'money sent', 'টাকা গ্রহণ সফল', 'money received',
-    'ক্যাশ আউট সফল', 'রিচার্জ সফল', 'বিল পে সফল', 'সেন্ড মানি'
+    'ক্যাশ আউট সফল', 'রিচার্জ সফল', 'বিল পে সফল', 'সেন্ড মানি',
+    'ফান্ড স্থানান্তর আবেদন', 'ফান্ড জমা হয়েছে', 'সমিতি একাউন্টে সঞ্চয় জমা'
   ];
 
   if (txTitleKeywords.some(kw => title.includes(kw))) {
@@ -277,7 +311,7 @@ export const NotificationInboxModal: React.FC<NotificationInboxModalProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="নোটিফিকেশনে খুঁজুন (যেমন: ওটিপি, বোনাস, কর্তন, ৫০ টাকা)..."
+              placeholder="নোটিফিকেশনে খুঁজুন (যেমন: বোনাস, কর্তন, নোটিশ, ৫০ টাকা)..."
               className="w-full pl-9 pr-8 py-2.5 bg-white border border-slate-300 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-500/20 rounded-2xl text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none transition shadow-2xs font-sans font-medium"
             />
             {searchQuery && (

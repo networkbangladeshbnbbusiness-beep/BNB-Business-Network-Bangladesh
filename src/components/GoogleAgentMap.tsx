@@ -1,13 +1,15 @@
 // Source: Google Maps Platform Code Assist
-import React, { useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   APIProvider,
+  APILoadingStatus,
   Map,
   AdvancedMarker,
   InfoWindow,
   useMap,
+  useApiLoadingStatus,
 } from '@vis.gl/react-google-maps';
-import { MapPin, Navigation, Phone, Globe, Compass, Clock } from 'lucide-react';
+import { MapPin, Navigation, Phone, Globe, Clock, AlertTriangle } from 'lucide-react';
 
 export interface AgentLocationData {
   id: string;
@@ -61,18 +63,34 @@ function isBangladeshAgent(agent: AgentLocationData): boolean {
 function MapCameraController({
   center,
   zoom,
+  onMapReady,
+  onStatusError,
 }: {
   center: { lat: number; lng: number };
   zoom: number;
+  onMapReady: () => void;
+  onStatusError: (status: string) => void;
 }) {
   const map = useMap();
+  const loadingStatus = useApiLoadingStatus();
 
   useEffect(() => {
-    if (map && center) {
-      map.panTo(center);
-      map.setZoom(zoom);
+    if (loadingStatus === APILoadingStatus.AUTH_FAILURE) {
+      onStatusError('AUTH_FAILURE');
+    } else if (loadingStatus === APILoadingStatus.FAILED) {
+      onStatusError('FAILED');
     }
-  }, [map, center, zoom]);
+  }, [loadingStatus, onStatusError]);
+
+  useEffect(() => {
+    if (map) {
+      onMapReady();
+      if (center) {
+        map.panTo(center);
+        map.setZoom(zoom);
+      }
+    }
+  }, [map, center, zoom, onMapReady]);
 
   return null;
 }
@@ -93,6 +111,83 @@ export const GoogleAgentMap: React.FC<GoogleAgentMapProps> = ({
       process.env &&
       (process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY)) ||
     '';
+
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const [timedOut, setTimedOut] = useState(false);
+  const [authFailed, setAuthFailed] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loaderErrorMsg, setLoaderErrorMsg] = useState<string>('');
+
+  // Redact API key from any error message so the key is NEVER shown on screen or in logs
+  const sanitizeLoaderError = useCallback(
+    (err: unknown): string => {
+      const raw =
+        err instanceof Error
+          ? `${err.name ? `${err.name}: ` : ''}${err.message}`
+          : typeof err === 'string'
+            ? err
+            : err && typeof err === 'object' && 'message' in err
+              ? String((err as { message?: unknown }).message || '')
+              : '';
+      let cleaned = raw.trim();
+      if (!cleaned) return '';
+      if (apiKey) {
+        cleaned = cleaned.split(apiKey).join('[REDACTED]');
+      }
+      cleaned = cleaned.replace(/key=[^&\s"']+/gi, 'key=[REDACTED]');
+      return cleaned;
+    },
+    [apiKey]
+  );
+
+  const handleMapReady = useCallback(() => {
+    setMapLoaded(true);
+    setTimedOut(false);
+  }, []);
+
+  const handleStatusError = useCallback((status: string) => {
+    if (status === 'AUTH_FAILURE') {
+      setAuthFailed(true);
+      setLoaderErrorMsg((prev) => prev || 'APILoadingStatus: AUTH_FAILURE');
+    } else if (status === 'FAILED') {
+      setLoadFailed(true);
+      setLoaderErrorMsg((prev) => prev || 'APILoadingStatus: FAILED');
+    }
+  }, []);
+
+  // 3. Set window.gm_authFailure to detect Google Maps authentication failure
+  useEffect(() => {
+    if (!apiKey || typeof window === 'undefined') return;
+    const w = window as unknown as { gm_authFailure?: () => void };
+    const previousHandler = w.gm_authFailure;
+
+    w.gm_authFailure = () => {
+      setAuthFailed(true);
+      setLoaderErrorMsg(
+        (prev) => prev || 'Google Maps API authentication failed (gm_authFailure)'
+      );
+      if (typeof previousHandler === 'function') {
+        try {
+          previousHandler();
+        } catch {
+          // ignore secondary error
+        }
+      }
+    };
+
+    return () => {
+      w.gm_authFailure = previousHandler;
+    };
+  }, [apiKey]);
+
+  // 2. 10-second timeout if map does not finish loading
+  useEffect(() => {
+    if (!apiKey || mapLoaded || authFailed) return;
+    const timer = window.setTimeout(() => {
+      setTimedOut(true);
+    }, 10000);
+    return () => window.clearTimeout(timer);
+  }, [apiKey, mapLoaded, authFailed]);
 
   // Filter visible agents based on map tab:
   // - 'world': all approved agents worldwide
@@ -181,28 +276,47 @@ export const GoogleAgentMap: React.FC<GoogleAgentMapProps> = ({
       <div className="relative w-full h-[400px] sm:h-[450px] rounded-3xl overflow-hidden border border-emerald-900/20 shadow-md bg-white">
         {!apiKey ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-slate-50 text-slate-700 space-y-3">
-            <Compass className="w-10 h-10 text-emerald-600 animate-spin" />
-            <h3 className="text-sm font-black text-emerald-800">Google Maps Integration Active</h3>
-            <p className="text-xs text-slate-500 max-w-sm font-medium">
-              গুগল ম্যাপস লোড হচ্ছে...
-            </p>
+            <AlertTriangle className="w-10 h-10 text-amber-600" />
+            <h3 className="text-sm font-black text-rose-700">
+              ম্যাপ key পাওয়া যায়নি (প্রোডাকশন বিল্ডে key নেই)
+            </h3>
           </div>
         ) : (
-          <APIProvider apiKey={apiKey}>
-            <Map
-              mapId="DEMO_MAP_ID"
-              internalUsageAttributionIds={[
-                'gmp_mcp_codeassist_v1_aistudio',
-                'gmp_git_agentskills_v1',
-              ]}
-              defaultCenter={mapCenter}
-              defaultZoom={mapZoom}
-              gestureHandling="greedy"
-              disableDefaultUI={false}
-              className="w-full h-full"
-              style={{ width: '100%', height: '100%' }}
+          <>
+            <APIProvider
+              apiKey={apiKey}
+              onLoad={() => {
+                setTimedOut(false);
+              }}
+              onError={(err: unknown) => {
+                setLoadFailed(true);
+                const msg = sanitizeLoaderError(err);
+                if (msg) {
+                  setLoaderErrorMsg(msg);
+                }
+              }}
             >
-              <MapCameraController center={mapCenter} zoom={mapZoom} />
+              <Map
+                mapId="DEMO_MAP_ID"
+                internalUsageAttributionIds={[
+                  'gmp_mcp_codeassist_v1_aistudio',
+                  'gmp_git_agentskills_v1',
+                ]}
+                defaultCenter={mapCenter}
+                defaultZoom={mapZoom}
+                gestureHandling="greedy"
+                disableDefaultUI={false}
+                onTilesLoaded={handleMapReady}
+                onIdle={handleMapReady}
+                className="w-full h-full"
+                style={{ width: '100%', height: '100%' }}
+              >
+                <MapCameraController
+                  center={mapCenter}
+                  zoom={mapZoom}
+                  onMapReady={handleMapReady}
+                  onStatusError={handleStatusError}
+                />
 
               {/* User Current Location Marker (only when requested via 'আমার জিপিএস লোকেশন') */}
               {userLocation && (
@@ -310,6 +424,23 @@ export const GoogleAgentMap: React.FC<GoogleAgentMapProps> = ({
               )}
             </Map>
           </APIProvider>
+
+            {(authFailed || ((timedOut || loadFailed) && !mapLoaded)) && (
+              <div className="absolute inset-0 z-30 flex flex-col items-center justify-center p-6 text-center bg-slate-50/95 text-slate-700 space-y-2.5">
+                <AlertTriangle className="w-10 h-10 text-rose-600 shrink-0" />
+                <h3 className="text-sm font-black text-rose-700">
+                  {authFailed
+                    ? 'Google key অনুমোদিত নয় (referrer/API/billing সমস্যা)'
+                    : 'ম্যাপ লোড হয়নি, নেটওয়ার্ক বা key সমস্যা হতে পারে'}
+                </h3>
+                {loaderErrorMsg && (
+                  <p className="text-[11px] text-slate-500 max-w-md font-mono break-words bg-white px-3 py-1.5 rounded-lg border border-slate-200">
+                    {loaderErrorMsg}
+                  </p>
+                )}
+              </div>
+            )}
+          </>
         )}
 
         {/* Top-Right GPS Action Floating Button (kept as-is) */}
