@@ -490,7 +490,7 @@ export function AdminAgentSection(props: any) {
       (typeof process !== 'undefined' &&
         process.env &&
         (process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY)) ||
-      '';
+      'AIzaSyBsEZaLW1kpzMu2QP-T8IrdmkZqiM3gfe8';
 
     if (gmpKey) {
       try {

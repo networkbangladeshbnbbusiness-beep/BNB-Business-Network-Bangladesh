@@ -13,3 +13,5 @@ env:
     value: production
   - variable: FIRESTORE_DATABASE_ID
     value: ai-studio-120ec6e1-2db5-45d2-b1b1-46493400c959
+  - variable: VITE_GOOGLE_MAPS_API_KEY
+    value: AIzaSyBsEZaLW1kpzMu2QP-T8IrdmkZqiM3gfe8

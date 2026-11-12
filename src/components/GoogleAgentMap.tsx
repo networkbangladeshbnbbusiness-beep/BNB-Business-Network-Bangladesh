@@ -110,7 +110,7 @@ export const GoogleAgentMap: React.FC<GoogleAgentMapProps> = ({
     (typeof process !== 'undefined' &&
       process.env &&
       (process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY)) ||
-    '';
+    'AIzaSyBsEZaLW1kpzMu2QP-T8IrdmkZqiM3gfe8';
 
   const [mapLoaded, setMapLoaded] = useState(false);
   const [timedOut, setTimedOut] = useState(false);
