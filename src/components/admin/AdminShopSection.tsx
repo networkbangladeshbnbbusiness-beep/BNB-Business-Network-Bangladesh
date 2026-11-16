@@ -288,7 +288,13 @@ export function AdminShopSection(props: any) {
               <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs">
                 <SafiPremiumShop
                   user={currentUser}
-                  onClose={onBack || (() => {})}
+                  onClose={() => {
+                    if (typeof props.setViewingGrid === 'function') {
+                      props.setViewingGrid(true);
+                    } else if (onBack) {
+                      onBack();
+                    }
+                  }}
                   appConfig={appConfig || {}}
                   isAdminMode={true}
                 />

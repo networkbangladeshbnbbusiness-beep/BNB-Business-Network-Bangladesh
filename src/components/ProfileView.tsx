@@ -2560,19 +2560,6 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
               </div>
             </div>
           </div>
-
-          {/* Admin panel gate for admins only */}
-          {user.role === 'admin' && onTriggerAdmin && (
-            <div className="pt-1.5 border-t border-slate-100 mt-1">
-              <button
-                onClick={onTriggerAdmin}
-                className="w-full py-2.5 bg-slate-900 hover:bg-black text-white font-extrabold rounded-xl text-[10.5px] transition duration-150 active:scale-98 flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-slate-900/10"
-              >
-                <ShieldCheck className="w-4 h-4 text-amber-450" />
-                অ্যাডমিন গেটওয়ে মডিউলে প্রবেশ করুন
-              </button>
-            </div>
-          )}
         </div>
       ) : (
         /* Edit Profile Mode Form */

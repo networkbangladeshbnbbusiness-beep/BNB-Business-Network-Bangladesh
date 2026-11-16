@@ -1,7 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import App from './App.tsx';
-import AdminApp from './AdminApp.tsx';
+import App, { isStandaloneAdminRoute } from './App.tsx';
 import './index.css';
 
 // Global monkeypatch for English numerals & currency formatting
@@ -57,17 +56,17 @@ Date.prototype.toLocaleTimeString = function(locales?: any, options?: any): stri
   return originalDateToLocaleTimeString.call(this, targetLocale, options);
 };
 
-// Check if current URL indicates Admin App mode (e.g. /admin, ?admin=true, or admin. subdomain)
-const isExplicitAdminApp = (() => {
-  if (typeof window === 'undefined') return false;
-  const path = window.location.pathname.toLowerCase();
-  const search = window.location.search.toLowerCase();
-  const host = window.location.hostname.toLowerCase();
-  return path.includes('admin') || search.includes('admin=true') || host.startsWith('admin.');
-})();
+// Synchronize title & manifest for Standalone Admin Software (/admin) in both dev and production
+if (typeof window !== 'undefined' && isStandaloneAdminRoute()) {
+  document.title = 'BNB এডমিন সফটওয়্যার | Admin Control Panel';
+  const manifestEl = document.getElementById('app-manifest-link') as HTMLLinkElement | null;
+  if (manifestEl) {
+    manifestEl.href = '/manifest-admin.json';
+  }
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {isExplicitAdminApp ? <AdminApp /> : <App />}
+    <App />
   </StrictMode>
 );

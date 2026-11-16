@@ -760,12 +760,12 @@ export function AdminAgentSection(props: any) {
                                   <p className="flex items-center gap-1.5">
                                     <span>💬</span> 
                                     <strong className="text-slate-500">হোয়াটসঅ্যাপঃ</strong> 
-                                    <span className="text-slate-900 font-mono font-extrabold select-all">{req.whatsapp || req.phone}</span>
+                                    <span className="text-slate-900 font-mono font-extrabold select-all">{req.whatsapp || req.whatsNumber || req.phone}</span>
                                   </p>
                                   <p className="flex items-center gap-1.5">
-                                    <span>📧</span> 
-                                    <strong className="text-slate-500">ইমেইলঃ</strong> 
-                                    <span className="text-slate-900 font-semibold">{req.email || 'দেওয়া হয়নি'}</span>
+                                    <span>🪪</span> 
+                                    <strong className="text-slate-500">এনআইডি (NID)ঃ</strong> 
+                                    <span className="text-slate-900 font-mono font-extrabold select-all">{req.nid || req.nidNumber || targetUser?.nid || 'দেওয়া হয়নি'}</span>
                                   </p>
                                   <p className="flex items-center gap-1.5">
                                     <span>📍</span> 
@@ -774,9 +774,23 @@ export function AdminAgentSection(props: any) {
                                   </p>
                                   <p className="flex items-center gap-1.5 col-span-1 md:col-span-2">
                                     <span>🏪</span> 
-                                    <strong className="text-slate-500">লিখিত লোকেশনঃ</strong> 
+                                    <strong className="text-slate-500">দোকানের ঠিকানাঃ</strong> 
                                     <span className="text-emerald-800 font-black bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
-                                      {req.shopMapLink || 'দেওয়া হয়নি'}
+                                      {req.writtenLocation || req.address || req.shopMapLink || 'দেওয়া হয়নি'}
+                                    </span>
+                                  </p>
+                                  {(req.locationNumber || req.shopMapLink) && (
+                                    <p className="flex items-center gap-1.5 col-span-1 md:col-span-2">
+                                      <span>🧭</span>
+                                      <strong className="text-slate-500">ম্যাপ সিরিয়াল / লিংকঃ</strong>
+                                      <span className="text-slate-800 font-mono font-bold select-all break-all">{req.locationNumber || req.shopMapLink}</span>
+                                    </p>
+                                  )}
+                                  <p className="flex items-center gap-1.5 col-span-1 md:col-span-2">
+                                    <span>👥</span>
+                                    <strong className="text-slate-500">নমিনিঃ</strong>
+                                    <span className="text-slate-900 font-bold">
+                                      {req.nomineeName || targetUser?.nomineeName || 'দেওয়া হয়নি'} ({req.nomineeRelation || targetUser?.nomineeRelation || '-'}) — <span className="font-mono">{req.nomineePhone || targetUser?.nomineePhone || '-'}</span>
                                     </span>
                                   </p>
                                   <p className="flex items-center gap-1.5 col-span-1 md:col-span-2">
@@ -800,14 +814,21 @@ export function AdminAgentSection(props: any) {
                                   </p>
                                 </div>
 
-                                <div className="p-2.5 bg-white border border-slate-200 rounded-xl space-y-1">
-                                  <p className="text-[10px] text-slate-500 font-black uppercase tracking-wider">অভিজ্ঞতা ও মোটিভেশন বিবরণীঃ</p>
+                                <div className="p-2.5 bg-white border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-2">
                                   <p className="text-xs text-slate-700 font-medium">
                                     💼 <strong className="text-slate-800">কাজের অভিজ্ঞতাঃ</strong> <span className="font-extrabold text-amber-700">{req.experience || 'কোনো পূর্ব অভিজ্ঞতা নেই'}</span>
                                   </p>
-                                  <p className="text-xs text-slate-600 bg-slate-50 p-2 border border-slate-200 rounded-lg font-medium leading-relaxed">
-                                    "{req.motivation || 'কোনো মোটিভেশনাল বিবরণী দেওয়া হয়নি'}"
-                                  </p>
+                                  {Number(req.agentApplicationFeeAmount) > 0 && (
+                                    <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border ${
+                                      req.agentFeeRefunded
+                                        ? 'bg-sky-50 text-sky-800 border-sky-200'
+                                        : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                    }`}>
+                                      {req.agentFeeRefunded
+                                        ? `↩️ আবেদন ফি ৳${req.agentApplicationFeeAmount} রিফান্ড সম্পন্ন`
+                                        : `✓ আবেদন ফি ৳${req.agentApplicationFeeAmount} পরিশোধিত`}
+                                    </span>
+                                  )}
                                 </div>
 
                                 {isPending && (

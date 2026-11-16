@@ -411,7 +411,30 @@ export function AdminQardSection(props: any) {
     setRuleIsWarningInput
   } = props;
 
+  const { appConfig, onChangeConfig } = props;
   const [qardSelectedMonth, setQardSelectedMonth] = useState<number>(new Date().getMonth());
+  const [banningUid, setBanningUid] = useState<string | null>(null);
+  const [isBulkBanningOverdue, setIsBulkBanningOverdue] = useState(false);
+  const [borrowerSearchQuery, setBorrowerSearchQuery] = useState('');
+  const [blockedSearchQuery, setBlockedSearchQuery] = useState('');
+  const [confirmUnbanUid, setConfirmUnbanUid] = useState<string | null>(null);
+
+  // Sadaqah Jariyah recipient disbursement add/edit/void state
+  const [showSadaqahDisburseForm, setShowSadaqahDisburseForm] = useState(false);
+  const [editingSadaqahTxId, setEditingSadaqahTxId] = useState<string | null>(null);
+  const [sadaqahRecipName, setSadaqahRecipName] = useState('');
+  const [sadaqahRecipPhone, setSadaqahRecipPhone] = useState('');
+  const [sadaqahRecipAddr, setSadaqahRecipAddr] = useState('');
+  const [sadaqahRecipSector, setSadaqahRecipSector] = useState<'general_charity' | 'medical' | 'education' | 'micro' | 'emergency'>('general_charity');
+  const [sadaqahRecipAmt, setSadaqahRecipAmt] = useState('');
+  const [sadaqahRecipDesc, setSadaqahRecipDesc] = useState('');
+  const [sadaqahRecipDate, setSadaqahRecipDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [savingSadaqahDisburse, setSavingSadaqahDisburse] = useState(false);
+  const [voidConfirmTxId, setVoidConfirmTxId] = useState<string | null>(null);
+  const [sadaqahSearchQuery, setSadaqahSearchQuery] = useState('');
+  const [sadaqahManualTotalInput, setSadaqahManualTotalInput] = useState('');
+  const [sadaqahManualDisbInput, setSadaqahManualDisbInput] = useState('');
+  const [savingSadaqahManual, setSavingSadaqahManual] = useState(false);
 
   return (
     <>
@@ -478,17 +501,46 @@ export function AdminQardSection(props: any) {
                   </button>
                 </div>
               </div>
-              {/* ==================== 12-CARD UNIFIED GRID & SMART AUTO OPERATIONAL SECTIONS (QARD HASANA) ==================== */}
+              {/* ==================== SEPARATE 4-COL AUDIT & CONTROL PANELS (QARD HASANA + SADAQAH JARIYAH) ==================== */}
               {(() => {
-                // Filter transactions for Qard Hasana
+                const isApprovedOrSuccess = (t: any) => t.status === 'success' || t.status === 'approved';
+
+                const getSadaqahSectorKey = (t: any): 'medical' | 'education' | 'micro' | 'emergency' | 'general_charity' | null => {
+                  const pId = String(t.donationPurpose || t.purpose || '').toLowerCase();
+                  const typ = String(t.type || '').toLowerCase();
+                  const cat = String(t.category || '').toLowerCase();
+                  const desc = `${t.description || ''} ${t.details || ''}`.toLowerCase();
+
+                  if (pId === 'medical' || desc.includes('চিকিৎসা') || desc.includes('ঔষধ') || desc.includes('ওষুধ') || desc.includes('রোগী') || desc.includes('medicine')) return 'medical';
+                  if (pId === 'education' || desc.includes('শিক্ষা') || desc.includes('শিক্ষার্থী') || desc.includes('ছাত্র') || desc.includes('education')) return 'education';
+                  if (pId === 'micro' || desc.includes('ক্ষুদ্র') || desc.includes('স্বনির্ভর') || desc.includes('ভ্যান') || desc.includes('সেলাই') || desc.includes('micro')) return 'micro';
+                  if (pId === 'emergency' || desc.includes('জরুরি') || desc.includes('ত্রাণ') || desc.includes('বন্যা') || desc.includes('দুর্যোগ') || desc.includes('emergency')) return 'emergency';
+                  if (typ === 'general_charity_donation' || typ === 'general_charity_disbursed' || typ === 'sadaqah_disbursement' || cat === 'general_charity' || cat === 'charity_disbursement' || cat === 'charity_aid' || pId === 'general_charity' || desc.includes('সাদাকাহ') || desc.includes('সদকা') || desc.includes('লিল্লা')) {
+                    return 'general_charity';
+                  }
+                  return null;
+                };
+
+                // Pure Qard Hasana Transactions
                 const qardTxs = transactions.filter(t => [
                   'qard_donation', 'qard_loan_request', 'qard_loan_disbursment', 'qard_loan_repayment',
-                  'coop_loan_apply', 'loan_apply', 'loan_repayment', 'qard_fine', 'qard_penalty_fine', 'qard_withdrawal'
+                  'coop_loan_apply', 'loan_apply', 'loan_repayment', 'qard_fine', 'qard_penalty_fine', 'qard_withdrawal',
+                  'coop_instant_loan', 'gold_loan'
                 ].includes(t.type));
 
-                const totalDonations = qardTxs.filter(t => t.type === 'qard_donation' && (t.status === 'success' || t.status === 'approved')).reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
-                const totalDisbursed = qardTxs.filter(t => (t.type === 'qard_loan_disbursment' || t.type === 'qard_loan_request') && (t.status === 'success' || t.status === 'approved')).reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
-                const totalRepaid = qardTxs.filter(t => (t.type === 'qard_loan_repayment' || t.type === 'loan_repayment') && (t.status === 'success' || t.status === 'approved')).reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+                const donorList = qardTxs.filter(t => {
+                  if (t.type !== 'qard_donation' || !isApprovedOrSuccess(t)) return false;
+                  const sec = getSadaqahSectorKey(t);
+                  return sec === null;
+                });
+
+                const totalDonations = donorList.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+                const loanDisbursementTxs = qardTxs.filter(t =>
+                  (t.type === 'qard_loan_disbursment' || t.type === 'qard_loan_request' || t.type === 'coop_instant_loan' || t.type === 'gold_loan') &&
+                  isApprovedOrSuccess(t)
+                );
+                const totalDisbursed = loanDisbursementTxs.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+                const totalRepaid = qardTxs.filter(t => (t.type === 'qard_loan_repayment' || t.type === 'loan_repayment') && isApprovedOrSuccess(t)).reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
 
                 const userDueHawlat = users.reduce((sum, u) => sum + Math.max(0, Number(u.dueLoan) || 0), 0);
                 const activeLoanBal = userDueHawlat > 0 ? userDueHawlat : Math.max(0, totalDisbursed - totalRepaid);
@@ -497,33 +549,139 @@ export function AdminQardSection(props: any) {
                 const fundTot = objQard.val > 0 ? objQard.val : totalDonations;
                 const availableLiquidity = Math.max(0, fundTot - activeLoanBal);
 
-                const donorList = qardTxs.filter(t => t.type === 'qard_donation' && (t.status === 'success' || t.status === 'approved'));
+                // Comprehensive "কে কে নিয়েছে" (Borrowers Ledger across transactions + user balances)
+                const borrowersRecordMap = new Map<string, {
+                  uid: string;
+                  userObj?: User;
+                  name: string;
+                  phone: string;
+                  memberId: string;
+                  takenAmt: number;
+                  repaidAmt: number;
+                  dueAmt: number;
+                  txCount: number;
+                  lastLoanDate: string;
+                  isBanned: boolean;
+                }>();
 
-                const getSectorStats = (secId: string) => {
-                  const items = donorList.filter(t => {
-                    const pId = (t as any).donationPurpose || (t as any).purpose || '';
-                    const desc = (t.description || t.details || '').toLowerCase();
-                    if (secId === 'medical') return pId === 'medical' || desc.includes('চিকিৎসা') || desc.includes('ঔষধ') || desc.includes('ওষুধ') || desc.includes('রোগী') || desc.includes('medicine');
-                    if (secId === 'education') return pId === 'education' || desc.includes('শিক্ষা') || desc.includes('শিক্ষার্থী') || desc.includes('ছাত্র') || desc.includes('education');
-                    if (secId === 'micro') return pId === 'micro' || desc.includes('ক্ষুদ্র') || desc.includes('স্বনির্ভর') || desc.includes('ভ্যান') || desc.includes('সেলাই') || desc.includes('micro');
-                    if (secId === 'emergency') return pId === 'emergency' || desc.includes('জরুরি') || desc.includes('ত্রাণ') || desc.includes('বন্যা') || desc.includes('দুর্যোগ') || desc.includes('emergency');
-                    return pId === 'general' || (!['medical', 'education', 'micro', 'emergency'].some(s => {
-                      if (s === 'medical') return desc.includes('চিকিৎসা') || desc.includes('ঔষধ') || desc.includes('ওষুধ') || desc.includes('রোগী') || desc.includes('medicine');
-                      if (s === 'education') return desc.includes('শিক্ষা') || desc.includes('শিক্ষার্থী') || desc.includes('ছাত্র') || desc.includes('education');
-                      if (s === 'micro') return desc.includes('ক্ষুদ্র') || desc.includes('স্বনির্ভর') || desc.includes('ভ্যান') || desc.includes('সেলাই') || desc.includes('micro');
-                      if (s === 'emergency') return desc.includes('জরুরি') || desc.includes('ত্রাণ') || desc.includes('বন্যা') || desc.includes('দুর্যোগ') || desc.includes('emergency');
-                      return false;
-                    }));
-                  });
-                  const sumAmt = items.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
-                  return { count: items.length, amount: sumAmt, items };
+                loanDisbursementTxs.forEach(t => {
+                  const uMatch = users.find(usr => usr.uid === t.userId || usr.id === t.userId || (t.userPhone && usr.phone === t.userPhone));
+                  const key = uMatch?.uid || t.userId || t.userPhone || t.userName || t.id;
+                  const prev = borrowersRecordMap.get(key) || {
+                    uid: uMatch?.uid || t.userId || key,
+                    userObj: uMatch,
+                    name: uMatch?.name || t.userName || 'সদস্য',
+                    phone: uMatch?.phone || t.userPhone || '—',
+                    memberId: uMatch?.memberId || (t as any).memberId || '—',
+                    takenAmt: 0,
+                    repaidAmt: 0,
+                    dueAmt: Number(uMatch?.dueLoan || 0),
+                    txCount: 0,
+                    lastLoanDate: t.createdAt || '',
+                    isBanned: uMatch?.isLifetimeBannedFromQard === true
+                  };
+                  prev.takenAmt += Number(t.amount) || 0;
+                  prev.txCount += 1;
+                  if (t.createdAt && (!prev.lastLoanDate || new Date(t.createdAt).getTime() > new Date(prev.lastLoanDate).getTime())) {
+                    prev.lastLoanDate = t.createdAt;
+                  }
+                  borrowersRecordMap.set(key, prev);
+                });
+
+                qardTxs.filter(t => (t.type === 'qard_loan_repayment' || t.type === 'loan_repayment') && isApprovedOrSuccess(t)).forEach(t => {
+                  const uMatch = users.find(usr => usr.uid === t.userId || usr.id === t.userId || (t.userPhone && usr.phone === t.userPhone));
+                  const key = uMatch?.uid || t.userId || t.userPhone || t.userName || t.id;
+                  const existing = borrowersRecordMap.get(key);
+                  if (existing) {
+                    existing.repaidAmt += Number(t.amount) || 0;
+                  }
+                });
+
+                users.forEach(usr => {
+                  const d = Number(usr.dueLoan) || 0;
+                  const p = Number(usr.paidLoan) || 0;
+                  if (d > 0 || p > 0 || usr.isLifetimeBannedFromQard) {
+                    const key = usr.uid || usr.id;
+                    const existing = borrowersRecordMap.get(key);
+                    if (!existing) {
+                      borrowersRecordMap.set(key, {
+                        uid: key,
+                        userObj: usr,
+                        name: usr.name || usr.phone || 'সদস্য',
+                        phone: usr.phone || '—',
+                        memberId: usr.memberId || '—',
+                        takenAmt: d + p,
+                        repaidAmt: p,
+                        dueAmt: d,
+                        txCount: 1,
+                        lastLoanDate: (usr as any).instantLoanTakenAt || (usr as any).loanTakenAt || (usr as any).lastLoanDate || '',
+                        isBanned: usr.isLifetimeBannedFromQard === true
+                      });
+                    } else {
+                      existing.dueAmt = Math.max(existing.dueAmt, d);
+                      existing.repaidAmt = Math.max(existing.repaidAmt, p);
+                      existing.isBanned = usr.isLifetimeBannedFromQard === true;
+                    }
+                  }
+                });
+
+                const allQardBorrowersList = Array.from(borrowersRecordMap.values()).sort((a, b) => b.dueAmt - a.dueAmt || b.takenAmt - a.takenAmt);
+                const lifetimeBannedUsers = users.filter(u => u.isLifetimeBannedFromQard === true);
+
+                // ==================== SADAQAH JARIYAH ANALYTICS ====================
+                const sadaqahDonorList = transactions.filter(t => {
+                  if (!isApprovedOrSuccess(t)) return false;
+                  if (t.type === 'general_charity_donation' || t.category === 'general_charity') return true;
+                  if (t.type === 'qard_donation') {
+                    const sec = getSadaqahSectorKey(t);
+                    return sec !== null;
+                  }
+                  return false;
+                });
+
+                const sadaqahDisburseList = transactions.filter(t => {
+                  if (!isApprovedOrSuccess(t)) return false;
+                  return t.type === 'general_charity_disbursed' || t.type === 'sadaqah_disbursement' || t.category === 'charity_disbursement' || t.category === 'charity_aid';
+                });
+
+                const getSadaqahSectorData = (secId: 'medical' | 'education' | 'micro' | 'emergency' | 'general_charity') => {
+                  const donors = sadaqahDonorList.filter(t => getSadaqahSectorKey(t) === secId);
+                  const recipients = sadaqahDisburseList.filter(t => (getSadaqahSectorKey(t) || 'general_charity') === secId);
+                  const donatedAmt = donors.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+                  const disbursedAmt = recipients.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+                  return {
+                    donorCount: donors.length,
+                    recipientCount: recipients.length,
+                    donatedAmt,
+                    disbursedAmt,
+                    balanceAmt: Math.max(0, donatedAmt - disbursedAmt),
+                    donors,
+                    recipients
+                  };
                 };
 
-                const generalStats = getSectorStats('general');
-                const medicalStats = getSectorStats('medical');
-                const educationStats = getSectorStats('education');
-                const microStats = getSectorStats('micro');
-                const emergencyStats = getSectorStats('emergency');
+                const medicalStats = getSadaqahSectorData('medical');
+                const educationStats = getSadaqahSectorData('education');
+                const microOnlyStats = getSadaqahSectorData('micro');
+                const generalCharityOnlyStats = getSadaqahSectorData('general_charity');
+                const microAndGeneralStats = {
+                  donorCount: microOnlyStats.donorCount + generalCharityOnlyStats.donorCount,
+                  recipientCount: microOnlyStats.recipientCount + generalCharityOnlyStats.recipientCount,
+                  donatedAmt: microOnlyStats.donatedAmt + generalCharityOnlyStats.donatedAmt,
+                  disbursedAmt: microOnlyStats.disbursedAmt + generalCharityOnlyStats.disbursedAmt,
+                  balanceAmt: Math.max(0, (microOnlyStats.donatedAmt + generalCharityOnlyStats.donatedAmt) - (microOnlyStats.disbursedAmt + generalCharityOnlyStats.disbursedAmt)),
+                  donors: [...microOnlyStats.donors, ...generalCharityOnlyStats.donors],
+                  recipients: [...microOnlyStats.recipients, ...generalCharityOnlyStats.recipients]
+                };
+                const emergencyStats = getSadaqahSectorData('emergency');
+
+                const liveSadaqahCollected = sadaqahDonorList.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+                const liveSadaqahDisbursed = sadaqahDisburseList.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+                const cfgSadaqahTotal = Number(appConfig?.generalCharityTotal || 0);
+                const cfgSadaqahDisbursed = Number(appConfig?.generalCharityDisbursed || 0);
+                const sadaqahCollected = cfgSadaqahTotal > 0 ? cfgSadaqahTotal : liveSadaqahCollected;
+                const sadaqahDisbursed = cfgSadaqahDisbursed > 0 ? cfgSadaqahDisbursed : liveSadaqahDisbursed;
+                const sadaqahAvailable = Math.max(0, sadaqahCollected - sadaqahDisbursed);
 
                 const pendingQardLoanRequests = transactions.filter(t => (
                   t.type === 'qard_loan_request' || t.type === 'coop_loan_apply' || t.type === 'loan_apply'
@@ -536,24 +694,21 @@ export function AdminQardSection(props: any) {
                 const activeBorrowersList = users.filter(u => (Number(u.dueLoan) || 0) > 0);
                 const totalActiveLoansAmt = activeBorrowersList.reduce((sum, u) => sum + (Number(u.dueLoan) || 0), 0);
 
-                const oneMonthBorrowers = activeBorrowersList.filter(u => Number((u as any).instantLoanDurationMonths || (u as any).loanDurationMonths || (u as any).loanDuration || 1) === 1);
-                const threeMonthBorrowers = activeBorrowersList.filter(u => Number((u as any).instantLoanDurationMonths || (u as any).loanDurationMonths || (u as any).loanDuration || 1) === 3);
+                const oneMonthBorrowers = activeBorrowersList;
 
-                // Derive daily repayment due schedule based on day of month (1-31) and tenure
+                // Derive daily repayment due schedule based on strict 1-month (30 days) rule
                 const todayDate = new Date();
                 const currentDayOfMonth = todayDate.getDate(); // 1-31
                 const currentMonth = todayDate.getMonth();
                 const currentYear = todayDate.getFullYear();
 
-                // Compute borrower repayment schedule & overdue fine info
                 const scheduleList = activeBorrowersList.map(u => {
                   const dueAmt = Number(u.dueLoan) || 0;
-                  const tenureMonths = Number((u as any).instantLoanDurationMonths || (u as any).loanDurationMonths || (u as any).qardDuration || (u as any).loanDuration || (u as any).durationMonths || 1);
-                  const tenureLabel = tenureMonths === 3 ? '৩ মাস মেয়াদি (৩ কিস্তি)' : tenureMonths === 1 ? '১ মাস মেয়াদি (৩০ দিন)' : `${tenureMonths} মাস মেয়াদি`;
+                  const tenureMonths = 1; // Strict 1-month rule
+                  const tenureLabel = '১ মাস মেয়াদি (৩০ দিন)';
                   
-                  // Repayment Day in Month (1-31) based on exact loan taken date
-                  const takenDateStr = (u as any).instantLoanTakenAt || (u as any).lastCoopInstantLoanAt || (u as any).loanTakenAt || (u as any).createdAt;
-                  let assignedDueDay = 5;
+                  const takenDateStr = (u as any).instantLoanTakenAt || (u as any).lastCoopInstantLoanAt || (u as any).loanTakenAt || (u as any).lastLoanDate || (u as any).createdAt;
+                  let assignedDueDay = currentDayOfMonth;
                   let daysElapsed = 0;
                   if (takenDateStr) {
                     const takenDateObj = new Date(takenDateStr);
@@ -563,8 +718,7 @@ export function AdminQardSection(props: any) {
                     assignedDueDay = Number((u as any).loanRepaymentDay);
                   }
 
-                  // 30 days deadline: Next month same date
-                  const isOverdue = daysElapsed > 30 || (daysElapsed === 0 && currentDayOfMonth > assignedDueDay);
+                  const isOverdue = daysElapsed > 30;
                   const overdueDays = daysElapsed > 30 ? (daysElapsed - 30) : 0;
                   const daysRemaining = isOverdue ? 0 : Math.max(0, 30 - daysElapsed);
                   
@@ -574,10 +728,7 @@ export function AdminQardSection(props: any) {
                   let isYesterday = diffDays === -1;
                   let isUpcoming = diffDays > 1 && diffDays <= 7;
 
-                  // Overdue Penalty Rate: 10 TK per 1000 TK per day late
                   const calculatedPenalty = overdueDays > 0 ? Math.max(10, Math.floor((dueAmt / 1000) * 10 * overdueDays)) : 0;
-
-                  // Date format string
                   const monthNamesBn = ['জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'];
                   const nextDueDateStr = `${assignedDueDay}ই ${monthNamesBn[currentMonth]} ${currentYear}`;
 
@@ -615,9 +766,242 @@ export function AdminQardSection(props: any) {
                 const upcomingDueList = scheduleList.filter(s => s.isUpcoming);
                 const totalOverduePenaltySum = overdueList.reduce((sum, s) => sum + s.calculatedPenalty, 0);
 
-                // Auto Instant Loan Disburse Handler for Samity Members (50% of savings limit)
-                const handleInstantDisburseSamityLoan = async (targetUser: User, maxAutoLoan: number, durationMonths: number = 1) => {
+                // Permanent Lifetime Ban Handler (1-month overdue = permanent block)
+                const handlePermanentBanBorrower = async (targetUser: User, customReason?: string) => {
+                  const uid = targetUser.uid || targetUser.id;
+                  if (!uid) return;
+                  setBanningUid(uid);
                   try {
+                    const nowIso = new Date().toISOString();
+                    const reasonText = customReason || '১ মাস (৩০ দিন) মেয়াদের মধ্যে কর্জে হাসানা ঋণ ফেরত না দেওয়ায় আজীবনের জন্য ব্লক করা হয়েছে।';
+                    if (db) {
+                      await updateDoc(doc(db, 'users', uid), {
+                        isLifetimeBannedFromQard: true,
+                        qardBannedAt: nowIso,
+                        qardBanReason: reasonText
+                      });
+                      await addDoc(collection(db, 'user_notifications'), {
+                        userId: uid,
+                        title: '🚫 কর্জে হাসানা থেকে আজীবন ব্লক',
+                        message: `${reasonText} ভবিষ্যতে আর কখনোই কর্জে হাসানা ঋণ নিতে পারবেন না।`,
+                        body: `${reasonText} ভবিষ্যতে আর কখনোই কর্জে হাসানা ঋণ নিতে পারবেন না।`,
+                        type: 'warning',
+                        read: false,
+                        isPersonal: true,
+                        createdAt: nowIso
+                      });
+                    }
+                    setUsers((prev: User[]) => prev.map(u => (u.uid === uid || u.id === uid) ? {
+                      ...u,
+                      isLifetimeBannedFromQard: true,
+                      qardBannedAt: nowIso,
+                      qardBanReason: reasonText
+                    } : u));
+                    requestAlert('🚫 আজীবন ব্লক কার্যকর', `${targetUser.name || targetUser.phone}-কে কর্জে হাসানা থেকে আজীবনের জন্য ব্লক করা হয়েছে।`);
+                  } catch (err: any) {
+                    requestAlert('ত্রুটি', 'ব্লক করতে সমস্যা হয়েছে: ' + (err?.message || err));
+                  } finally {
+                    setBanningUid(null);
+                  }
+                };
+
+                const handleBulkBanOverdueBorrowers = async () => {
+                  const toBan = overdueList.filter(s => !s.user.isLifetimeBannedFromQard);
+                  if (toBan.length === 0) {
+                    requestAlert('সবাই ইতিমধ্যে ব্লক', '৩০ দিন ওভারডিউ সকল সদস্য ইতিমধ্যেই আজীবন ব্লক তালিকায় রয়েছেন।');
+                    return;
+                  }
+                  setIsBulkBanningOverdue(true);
+                  try {
+                    const nowIso = new Date().toISOString();
+                    const bannedUids = new Set<string>();
+                    for (const item of toBan) {
+                      const uid = item.user.uid || item.user.id;
+                      if (!uid) continue;
+                      const reasonText = `১ মাস (৩০ দিন) পার হয়ে ${item.overdueDays} দিন ওভারডিউ থাকায় এবং ৳${item.dueAmt.toLocaleString('en-US')} ফেরত না দেওয়ায় আজীবনের জন্য ব্লক করা হয়েছে।`;
+                      if (db) {
+                        await updateDoc(doc(db, 'users', uid), {
+                          isLifetimeBannedFromQard: true,
+                          qardBannedAt: nowIso,
+                          qardBanReason: reasonText
+                        });
+                        await addDoc(collection(db, 'user_notifications'), {
+                          userId: uid,
+                          title: '🚫 কর্জে হাসানা থেকে আজীবন ব্লক',
+                          message: reasonText,
+                          body: reasonText,
+                          type: 'warning',
+                          read: false,
+                          isPersonal: true,
+                          createdAt: nowIso
+                        });
+                      }
+                      bannedUids.add(uid);
+                    }
+                    setUsers((prev: User[]) => prev.map(u => bannedUids.has(u.uid) || bannedUids.has(u.id) ? {
+                      ...u,
+                      isLifetimeBannedFromQard: true,
+                      qardBannedAt: nowIso,
+                      qardBanReason: '১ মাস মেয়াদে ফেরত না দেওয়ায় আজীবন ব্লক'
+                    } : u));
+                    requestAlert('🚫 গণ-ব্লক সম্পন্ন', `${bannedUids.size} জন ওভারডিউ সদস্যকে আজীবনের জন্য কর্জে হাসানা থেকে ব্লক করা হয়েছে।`);
+                  } catch (err: any) {
+                    requestAlert('ত্রুটি', 'ব্লক প্রক্রিয়ায় সমস্যা: ' + (err?.message || err));
+                  } finally {
+                    setIsBulkBanningOverdue(false);
+                  }
+                };
+
+                const handleUnbanBorrower = async (targetUser: User) => {
+                  const uid = targetUser.uid || targetUser.id;
+                  if (!uid) return;
+                  setBanningUid(uid);
+                  try {
+                    if (db) {
+                      await updateDoc(doc(db, 'users', uid), {
+                        isLifetimeBannedFromQard: false,
+                        qardBannedAt: '',
+                        qardBanReason: ''
+                      });
+                    }
+                    setUsers((prev: User[]) => prev.map(u => (u.uid === uid || u.id === uid) ? {
+                      ...u,
+                      isLifetimeBannedFromQard: false,
+                      qardBannedAt: '',
+                      qardBanReason: ''
+                    } : u));
+                    setConfirmUnbanUid(null);
+                    requestAlert('✅ ব্লক প্রত্যাহার', `${targetUser.name || targetUser.phone}-এর কর্জে হাসানা ব্লক প্রত্যাহার করা হয়েছে।`);
+                  } catch (err: any) {
+                    requestAlert('ত্রুটি', 'ব্লক প্রত্যাহারে সমস্যা: ' + (err?.message || err));
+                  } finally {
+                    setBanningUid(null);
+                  }
+                };
+
+                // Sadaqah Jariyah Recipient Disbursement Save (Add or Edit)
+                const handleSaveSadaqahDisbursement = async (e: React.FormEvent) => {
+                  e.preventDefault();
+                  const amtNum = Number(sadaqahRecipAmt);
+                  if (!sadaqahRecipName.trim() || !amtNum || amtNum <= 0) {
+                    requestAlert('তথ্য অসম্পূর্ণ', 'অনুগ্রহ করে গ্রহীতার নাম এবং সঠিক টাকার পরিমাণ লিখুন।');
+                    return;
+                  }
+                  setSavingSadaqahDisburse(true);
+                  try {
+                    const secLabels: Record<string, string> = {
+                      general_charity: 'সাধারণ সদকায়ে জারিয়া / লিল্লা সহায়তা',
+                      medical: 'চিকিৎসা ও ঔষধ সহায়তা',
+                      education: 'দরিদ্র শিক্ষার্থী শিক্ষা বৃত্তি',
+                      micro: 'ক্ষুদ্র স্বনির্ভর ও আত্মকর্মসংস্থান',
+                      emergency: 'জরুরি মানবিক ও ত্রাণ সহায়তা'
+                    };
+                    const createdIso = sadaqahRecipDate ? new Date(`${sadaqahRecipDate}T12:00:00`).toISOString() : new Date().toISOString();
+                    if (editingSadaqahTxId) {
+                      const updatePayload: any = {
+                        userName: sadaqahRecipName.trim(),
+                        recipientName: sadaqahRecipName.trim(),
+                        userPhone: sadaqahRecipPhone.trim(),
+                        recipientPhone: sadaqahRecipPhone.trim(),
+                        recipientAddress: sadaqahRecipAddr.trim(),
+                        donationPurpose: sadaqahRecipSector,
+                        amount: amtNum,
+                        description: sadaqahRecipDesc.trim() || `${secLabels[sadaqahRecipSector]} — গ্রহীতা: ${sadaqahRecipName.trim()}`,
+                        createdAt: createdIso,
+                        updatedAt: new Date().toISOString()
+                      };
+                      if (db) {
+                        await updateDoc(doc(db, 'transactions', editingSadaqahTxId), updatePayload);
+                      }
+                      setTransactions((prev: any[]) => prev.map(t => t.id === editingSadaqahTxId ? { ...t, ...updatePayload } : t));
+                      requestAlert('✅ আপডেট সম্পন্ন', 'সদকায়ে জারিয়া বিতরণের তথ্য সফলভাবে আপডেট হয়েছে।');
+                    } else {
+                      const newTxRef = db ? doc(collection(db, 'transactions')) : null;
+                      const txId = newTxRef ? newTxRef.id : `sadaqah_disb_${Date.now()}`;
+                      const newTx: any = {
+                        id: txId,
+                        trxId: `SDQ-${Date.now().toString().slice(-7)}`,
+                        type: 'general_charity_disbursed',
+                        typeLabel: 'সদকায়ে জারিয়া দান বিতরণ',
+                        category: 'charity_disbursement',
+                        donationPurpose: sadaqahRecipSector,
+                        userId: `SDQ-RECIP-${Date.now().toString().slice(-5)}`,
+                        userName: sadaqahRecipName.trim(),
+                        recipientName: sadaqahRecipName.trim(),
+                        userPhone: sadaqahRecipPhone.trim(),
+                        recipientPhone: sadaqahRecipPhone.trim(),
+                        recipientAddress: sadaqahRecipAddr.trim(),
+                        amount: amtNum,
+                        status: 'success',
+                        description: sadaqahRecipDesc.trim() || `${secLabels[sadaqahRecipSector]} — গ্রহীতা: ${sadaqahRecipName.trim()}`,
+                        paymentMethod: 'SADAQAH_FUND',
+                        createdAt: createdIso,
+                        updatedAt: new Date().toISOString()
+                      };
+                      if (db && newTxRef) {
+                        await setDoc(newTxRef, newTx);
+                      }
+                      setTransactions((prev: any[]) => [newTx, ...prev]);
+                      requestAlert('🎁 সদকা বিতরণ সংরক্ষিত', `${sadaqahRecipName.trim()}-কে ৳${amtNum.toLocaleString('en-US')} দান বিতরণের হিসাব সফলভাবে যুক্ত হয়েছে।`);
+                    }
+                    setEditingSadaqahTxId(null);
+                    setSadaqahRecipName('');
+                    setSadaqahRecipPhone('');
+                    setSadaqahRecipAddr('');
+                    setSadaqahRecipAmt('');
+                    setSadaqahRecipDesc('');
+                    setShowSadaqahDisburseForm(false);
+                  } catch (err: any) {
+                    requestAlert('ত্রুটি', 'সদকা বিতরণ সংরক্ষণে সমস্যা: ' + (err?.message || err));
+                  } finally {
+                    setSavingSadaqahDisburse(false);
+                  }
+                };
+
+                const handleVoidSadaqahDisbursement = async (tx: any) => {
+                  if (!tx?.id) return;
+                  try {
+                    if (db) {
+                      await updateDoc(doc(db, 'transactions', tx.id), {
+                        status: 'rejected',
+                        updatedAt: new Date().toISOString()
+                      });
+                    }
+                    setTransactions((prev: any[]) => prev.map(t => t.id === tx.id ? { ...t, status: 'rejected' } : t));
+                    setVoidConfirmTxId(null);
+                    requestAlert('🗑️ রেকর্ড বাতিল', 'সদকা বিতরণ এন্ট্রিটি হিসাব থেকে সরানো হয়েছে।');
+                  } catch (err: any) {
+                    requestAlert('ত্রুটি', 'এন্ট্রি সরাতে সমস্যা: ' + (err?.message || err));
+                  }
+                };
+
+                const handleSaveSadaqahManualTotals = async () => {
+                  setSavingSadaqahManual(true);
+                  try {
+                    const totVal = sadaqahManualTotalInput.trim() === '' ? 0 : Math.max(0, Number(sadaqahManualTotalInput) || 0);
+                    const disbVal = sadaqahManualDisbInput.trim() === '' ? 0 : Math.max(0, Number(sadaqahManualDisbInput) || 0);
+                    const updatedConfig = {
+                      ...(appConfig || {}),
+                      generalCharityTotal: totVal,
+                      generalCharityDisbursed: disbVal
+                    };
+                    await saveAppConfig(updatedConfig as AppConfig);
+                    if (onChangeConfig) onChangeConfig(updatedConfig as AppConfig);
+                    requestAlert('✅ সদকা ব্যালেন্স সংরক্ষিত', 'সদকায়ে জারিয়া ফান্ডের মোট জমা ও বিতরণ অডিট সংখ্যা আপডেট করা হয়েছে।');
+                  } catch (err: any) {
+                    requestAlert('ত্রুটি', 'সংরক্ষণে সমস্যা: ' + (err?.message || err));
+                  } finally {
+                    setSavingSadaqahManual(false);
+                  }
+                };
+
+                // Auto Instant Loan Disburse Handler for Samity Members (STRICT 1-Month Max)
+                const handleInstantDisburseSamityLoan = async (targetUser: User, maxAutoLoan: number) => {
+                  try {
+                    if (targetUser.isLifetimeBannedFromQard) {
+                      requestAlert('🚫 আজীবন ব্লককৃত সদস্য', `${targetUser.name} ১ মাসের মধ্যে টাকা ফেরত না দেওয়ায় আজীবনের জন্য ব্লককৃত। আর ঋণ দেওয়া যাবে না।`);
+                      return;
+                    }
                     const memberSavings = Number(targetUser.savings) || 0;
                     const currentDue = Number(targetUser.dueLoan) || 0;
 
@@ -631,11 +1015,12 @@ export function AdminQardSection(props: any) {
                       return;
                     }
 
+                    const durationMonths = 1; // Strict 1 month max
                     const loanAmount = maxAutoLoan;
-                    const tenureText = durationMonths === 3 ? '3 মাস মেয়াদি (3 কিস্তি)' : '1 মাস মেয়াদি (30 দিন)';
+                    const tenureText = '১ মাস মেয়াদি (৩০ দিন)';
                     const repaymentDay = Math.min(28, currentDayOfMonth);
+                    const nowIso = new Date().toISOString();
 
-                    // 1. Create Transaction for Instant Disbursment
                     const newTx: any = {
                       id: `qard_inst_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
                       trxId: `QARD-${Date.now().toString().slice(-8)}`,
@@ -645,20 +1030,19 @@ export function AdminQardSection(props: any) {
                       userPhone: targetUser.phone,
                       amount: loanAmount,
                       status: 'success',
-                      durationMonths: durationMonths,
+                      durationMonths,
                       loanDuration: durationMonths,
                       repaymentDueDay: repaymentDay,
                       category: 'instant_samity_loan',
                       description: `সমিতি সঞ্চয়ের ৫০% ইনস্ট্যান্ট করজে হাসানা ঋণ (৳${memberSavings.toLocaleString('en-US')} সঞ্চয়ের বিপরীতে) - মেয়াদ: ${tenureText}`,
-                      createdAt: new Date().toISOString(),
-                      updatedAt: new Date().toISOString()
+                      createdAt: nowIso,
+                      updatedAt: nowIso
                     };
 
                     if (db) {
                       await addDoc(collection(db, 'transactions'), newTx);
                     }
 
-                    // 2. Update User Wallet and Loan Due
                     const currentBal = getUserMainWalletBalance(targetUser);
                     const newBal = currentBal + loanAmount;
                     const newDue = currentDue + loanAmount;
@@ -671,11 +1055,12 @@ export function AdminQardSection(props: any) {
                         instantLoanDurationMonths: durationMonths,
                         loanDuration: durationMonths,
                         loanRepaymentDay: repaymentDay,
-                        lastLoanDate: new Date().toISOString()
+                        instantLoanTakenAt: nowIso,
+                        loanTakenAt: nowIso,
+                        lastLoanDate: nowIso
                       });
                     }
 
-                    // 3. Update local state
                     setTransactions(prev => [newTx, ...prev]);
                     setUsers(prev => prev.map(u => (u.id === targetUser.id || u.uid === targetUser.uid) ? {
                       ...u,
@@ -683,7 +1068,9 @@ export function AdminQardSection(props: any) {
                       mainBalance: newBal,
                       dueLoan: newDue,
                       instantLoanDurationMonths: durationMonths,
-                      loanDuration: durationMonths
+                      loanDuration: durationMonths,
+                      instantLoanTakenAt: nowIso,
+                      loanTakenAt: nowIso
                     } : u));
 
                     requestAlert('ঋণ বিতরণ সম্পন্ন ⚡', `৳${loanAmount.toLocaleString('en-US')} (${tenureText}) সফলভাবে ${targetUser.name} এর মেইন ওয়ালেটে ক্যাশ ক্রেডিট করা হয়েছে!`);
@@ -719,7 +1106,7 @@ export function AdminQardSection(props: any) {
                           userPhone: u.phone,
                           amount: penalty,
                           status: 'success',
-                          description: `করজে হাসানা ঋণ কিস্তি ওভারডিউ জরিমানা (${item.overdueDays} দিন বিলম্ব - কিস্তি বকেয়া: ৳${item.dueAmt})`,
+                          description: `করজে হাসানা ঋণ ওভারডিউ জরিমানা (${item.overdueDays} দিন বিলম্ব - বকেয়া: ৳${item.dueAmt})`,
                           createdAt: new Date().toISOString()
                         };
                         if (db) {
@@ -812,7 +1199,7 @@ export function AdminQardSection(props: any) {
                         userPhone: u.phone,
                         amount: deductAmount,
                         status: 'success',
-                        description: `করজে হাসানা ঋণ কিস্তি অটো কর্তন (${deductAmount === curDue ? 'সম্পূর্ণ পরিশোধ' : 'আংশিক পরিশোধ'})`,
+                        description: `করজে হাসানা ঋণ অটো কর্তন (${deductAmount === curDue ? 'সম্পূর্ণ পরিশোধ' : 'আংশিক পরিশোধ'})`,
                         createdAt: new Date().toISOString()
                       };
 
@@ -837,10 +1224,10 @@ export function AdminQardSection(props: any) {
 
                       deductedCount++;
                     }
-                    requestAlert('কিস্তি অটো-কর্তন সম্পন্ন', `${deductedCount} জন সদস্যের ওয়ালেট থেকে ঋণ কিস্তি সফলভাবে সমন্বয় করা হয়েছে।`);
+                    requestAlert('অটো-কর্তন সম্পন্ন', `${deductedCount} জন সদস্যের ওয়ালেট থেকে ঋণ পরিশোধ সমন্বয় করা হয়েছে।`);
                   } catch (err: any) {
                     console.error('Bulk deduct due error:', err);
-                    requestAlert('ত্রুটি', 'কিস্তি কর্তনে সমস্যা: ' + (err?.message || err));
+                    requestAlert('ত্রুটি', 'ঋণ কর্তনে সমস্যা: ' + (err?.message || err));
                   } finally {
                     setIsBulkDeductingQard(false);
                   }
@@ -850,14 +1237,16 @@ export function AdminQardSection(props: any) {
                 const handleSendSingleNotice = async (targetUser: User, dueAmt: number, dueDateStr: string) => {
                   setIsSendingQardNotice(targetUser.id || targetUser.uid);
                   try {
-                    const noticeText = `প্রিয় ${targetUser.name}, করজে হাসানা সুদমুক্ত ঋণ কিস্তি বাবদ আপনার ৳${dueAmt.toLocaleString('en-US')} বকেয়া রয়েছে (পরিশোধের তারিখ: ${dueDateStr})। জরিমানা এড়াতে মেইন ওয়ালেটে ব্যালেন্স রাখুন বা পরিশোধ করুন।`;
+                    const noticeText = `প্রিয় ${targetUser.name}, করজে হাসানা সুদমুক্ত ঋণ বাবদ আপনার ৳${dueAmt.toLocaleString('en-US')} বকেয়া রয়েছে (শেষ তারিখ: ${dueDateStr})। ১ মাস মেয়াদে ফেরত না দিলে আজীবনের জন্য ব্লক করা হবে।`;
                     if (db) {
-                      await addDoc(collection(db, 'notices'), {
+                      await addDoc(collection(db, 'user_notifications'), {
                         userId: targetUser.id || targetUser.uid,
-                        title: '⚠️ করজে হাসানা কিস্তি পরিশোধ তাগাদা',
-                        content: noticeText,
-                        type: 'loan_reminder',
-                        isRead: false,
+                        title: '⚠️ করজে হাসানা ১ মাস পরিশোধ তাগাদা',
+                        message: noticeText,
+                        body: noticeText,
+                        type: 'warning',
+                        read: false,
+                        isPersonal: true,
                         createdAt: new Date().toISOString()
                       });
                     }
@@ -870,213 +1259,461 @@ export function AdminQardSection(props: any) {
                   }
                 };
 
-                const cardItems = [
-                  // ROW 1: 4 Cards (Master Funds & Core Operations)
+                // PANEL 1: QARD HASANA (8 Cards = 2 Rows × 4 Columns)
+                const qardPanelCards = [
                   {
                     key: 'main_fund',
-                    title: '1. মোট মূল তহবিল',
-                    sub: 'সর্বমোট সংগৃহীত ফান্ড',
+                    title: '১. কে দিয়েছে (জমা)',
+                    sub: 'দাতা তালিকা ও মূল তহবিল',
                     amount: fundTot,
                     isCurrency: true,
                     countText: `${donorList.length} টি দান`,
-                    color: 'emerald',
                     icon: '💰',
                     textColor: 'text-emerald-400',
                     badge: 'bg-emerald-500/20 text-emerald-300'
                   },
                   {
+                    key: 'qard_borrowers',
+                    title: '২. কে কে নিয়েছে (ঋণ)',
+                    sub: 'সকল ঋণগ্রহীতার পূর্ণ তালিকা',
+                    amount: totalDisbursed > 0 ? totalDisbursed : totalActiveLoansAmt,
+                    isCurrency: true,
+                    countText: `${allQardBorrowersList.length} জন গ্রহীতা`,
+                    icon: '🤝',
+                    textColor: 'text-cyan-300',
+                    badge: 'bg-cyan-500/20 text-cyan-300'
+                  },
+                  {
                     key: 'active_loans',
-                    title: '2. চলতি ঋণ (হাওলাত)',
-                    sub: 'সদস্যদের কাছে বকেয়া',
+                    title: '৩. বকেয়া ও ফেরত',
+                    sub: `ফেরত আদায়: ৳${totalRepaid.toLocaleString('en-US')}`,
                     amount: activeLoanBal,
                     isCurrency: true,
-                    countText: `${activeBorrowersList.length} জন গ্রহীতা`,
-                    color: 'amber',
+                    countText: `${activeBorrowersList.length} জন বকেয়া`,
                     icon: '👥',
                     textColor: 'text-amber-400',
                     badge: 'bg-amber-500/20 text-amber-300'
                   },
                   {
                     key: 'liquidity',
-                    title: '3. বর্তমান লিকুইডিটি',
-                    sub: 'মজুত অবশিষ্ট নগদ ব্যালেন্স',
+                    title: '৪. হাতে নগদ মজুত',
+                    sub: 'বিতরণযোগ্য তহবিল ব্যালেন্স',
                     amount: availableLiquidity,
                     isCurrency: true,
                     countText: 'নগদ মজুত',
-                    color: 'sky',
                     icon: '💧',
                     textColor: 'text-sky-400',
                     badge: 'bg-sky-500/20 text-sky-300'
                   },
                   {
                     key: 'applications',
-                    title: '4. ১. সাধারণ ঋণ আবেদন',
-                    sub: '১ ও ৩ মাস মেয়াদি যাচাই',
+                    title: '৫. ১ মাস আবেদন',
+                    sub: 'সর্বোচ্চ ৩০ দিন (৩ মাস বাতিল)',
                     amount: pendingQardRequestedTotal,
                     isCurrency: true,
-                    countText: `${pendingQardLoanRequests.length} টি আবেদন`,
-                    color: 'blue',
+                    countText: `${pendingQardLoanRequests.length} টি পেন্ডিং`,
                     icon: '📋',
                     textColor: 'text-blue-400',
                     badge: pendingQardLoanRequests.length > 0 ? 'bg-rose-500 text-white animate-pulse' : 'bg-blue-500/20 text-blue-300'
                   },
-
-                  // ROW 2: 4 Cards (Welfare & Sector-wise Funds)
-                  {
-                    key: 'general',
-                    title: '5. সাধারণ করযে হাসানা 🤝',
-                    sub: 'সুদমুক্ত ঋণ বিতরণ ফান্ড',
-                    amount: generalStats.amount,
-                    isCurrency: true,
-                    countText: `${generalStats.count} জন দাতা`,
-                    color: 'teal',
-                    icon: '🤝',
-                    textColor: 'text-teal-300',
-                    badge: 'bg-teal-500/20 text-teal-300'
-                  },
-                  {
-                    key: 'medical',
-                    title: '6. চিকিৎসা সহায়তা খাত 🩺',
-                    sub: 'রোগী ও ঔষধ সাহায্য',
-                    amount: medicalStats.amount,
-                    isCurrency: true,
-                    countText: `${medicalStats.count} জন দাতা`,
-                    color: 'rose',
-                    icon: '🩺',
-                    textColor: 'text-rose-400',
-                    badge: 'bg-rose-500/20 text-rose-300'
-                  },
-                  {
-                    key: 'education',
-                    title: '7. দরিদ্র শিক্ষার্থী শিক্ষা 🎓',
-                    sub: 'শিক্ষা উপকরণ ও মেধা বিকাশ',
-                    amount: educationStats.amount,
-                    isCurrency: true,
-                    countText: `${educationStats.count} জন দাতা`,
-                    color: 'indigo',
-                    icon: '🎓',
-                    textColor: 'text-indigo-400',
-                    badge: 'bg-indigo-500/20 text-indigo-300'
-                  },
-                  {
-                    key: 'micro',
-                    title: '8. ক্ষুদ্র স্বনির্ভর ব্যবসা 🚜',
-                    sub: 'ভ্যান / সেলাই মেশিন অনুদান',
-                    amount: microStats.amount,
-                    isCurrency: true,
-                    countText: `${microStats.count} জন দাতা`,
-                    color: 'cyan',
-                    icon: '🚜',
-                    textColor: 'text-cyan-400',
-                    badge: 'bg-cyan-500/20 text-cyan-300'
-                  },
-
-                  // ROW 3: 4 Cards (Emergency, Samity Instant, Gold Loan, Schedule Calendar & Ledger)
-                  {
-                    key: 'emergency',
-                    title: '9. জরুরি মানবিক ও ত্রাণ 🚨',
-                    sub: 'বন্যা ও দুর্যোগ পুনর্বাসন',
-                    amount: emergencyStats.amount,
-                    isCurrency: true,
-                    countText: `${emergencyStats.count} জন দাতা`,
-                    color: 'orange',
-                    icon: '🚨',
-                    textColor: 'text-orange-400',
-                    badge: 'bg-orange-500/20 text-orange-300'
-                  },
                   {
                     key: 'samity_auto',
-                    title: '10. ২. সমিতি ইনস্ট্যান্ট ঋণ ⚡',
-                    sub: '৫০% সঞ্চয় লিমিট ১-ক্লিক',
-                    amount: '৫০% সঞ্চয়',
+                    title: '৬. সমিতি ৫০% (১ মাস)',
+                    sub: 'সঞ্চয়ের ৫০% অটো ঋণ',
+                    amount: '১ মাস লিমিট',
                     isCurrency: false,
                     countText: `${samityEligibleUsers.length} জন যোগ্য`,
-                    color: 'emerald',
                     icon: '⚡',
                     textColor: 'text-emerald-300',
                     badge: 'bg-emerald-500/20 text-emerald-300'
                   },
                   {
                     key: 'gold_loan',
-                    title: '11. ৩. স্বর্ণ লোন ও ভল্ট 💎',
+                    title: '৭. স্বর্ণ লোন (১ মাস)',
                     sub: '১০০% বাজারমূল্য ও ভল্ট',
                     amount: adminGoldLoans.reduce((sum, g) => sum + (Number(g.requestedAmount || g.disbursedAmount || g.estimatedMarketValue) || 0), 0),
                     isCurrency: true,
                     countText: `${adminGoldLoans.length} টি লোন`,
-                    color: 'amber',
                     icon: '💎',
-                    textColor: 'text-amber-400',
+                    textColor: 'text-amber-300',
                     badge: 'bg-amber-500/20 text-amber-300'
                   },
                   {
                     key: 'calendar',
-                    title: '12. ৪. মেয়াদ, শিডিউল ও লেজার 📅',
-                    sub: 'অটো জরিমানা ও খতিয়ান',
+                    title: '৮. ওভারডিউ ও ব্লক 🚫',
+                    sub: '১ মাসে না দিলে আজীবন ব্লক',
                     amount: totalActiveLoansAmt,
                     isCurrency: true,
-                    countText: overdueList.length > 0 ? `${overdueList.length} জন বকেয়া` : `${scheduleList.length} জন`,
-                    color: 'purple',
-                    icon: '📅',
-                    textColor: 'text-purple-300',
-                    badge: overdueList.length > 0 ? 'bg-rose-600 text-white animate-pulse' : 'bg-purple-500/20 text-purple-300'
+                    countText: `${lifetimeBannedUsers.length} ব্লক • ${overdueList.length} লেট`,
+                    icon: '🚫',
+                    textColor: 'text-rose-400',
+                    badge: (overdueList.length > 0 || lifetimeBannedUsers.length > 0) ? 'bg-rose-600 text-white' : 'bg-purple-500/20 text-purple-300'
+                  }
+                ];
+
+                // PANEL 2: SADAQAH JARIYAH (8 Cards = 2 Rows × 4 Columns)
+                const sadaqahPanelCards = [
+                  {
+                    key: 'sadaqah_donors',
+                    title: '১. কে দিয়েছে (জমা)',
+                    sub: 'সদকা দাতাদের পূর্ণ তালিকা',
+                    amount: sadaqahCollected,
+                    isCurrency: true,
+                    countText: `${sadaqahDonorList.length} জন দাতা`,
+                    icon: '🤲',
+                    textColor: 'text-emerald-300',
+                    badge: 'bg-emerald-500/20 text-emerald-300'
+                  },
+                  {
+                    key: 'sadaqah_recipients',
+                    title: '২. কাকে দান করেছি',
+                    sub: 'দান গ্রহীতাদের তালিকা ও ফর্ম',
+                    amount: sadaqahDisbursed,
+                    isCurrency: true,
+                    countText: `${sadaqahDisburseList.length} জন গ্রহীতা`,
+                    icon: '🎁',
+                    textColor: 'text-amber-300',
+                    badge: 'bg-amber-500/20 text-amber-300'
+                  },
+                  {
+                    key: 'sadaqah_balance',
+                    title: '৩. বর্তমানে হাতে আছে',
+                    sub: 'সদকা ফান্ডের নিট অবশিষ্ট',
+                    amount: sadaqahAvailable,
+                    isCurrency: true,
+                    countText: 'মজুত ব্যালেন্স',
+                    icon: '🏦',
+                    textColor: 'text-teal-300',
+                    badge: 'bg-teal-500/20 text-teal-300'
+                  },
+                  {
+                    key: 'sadaqah_audit',
+                    title: '৪. দাতা ও গ্রহীতা খতিয়ান',
+                    sub: 'সম্পূর্ণ আয় বনাম দান বিবরণ',
+                    amount: sadaqahCollected + sadaqahDisbursed,
+                    isCurrency: true,
+                    countText: `${sadaqahDonorList.length} / ${sadaqahDisburseList.length}`,
+                    icon: '📜',
+                    textColor: 'text-sky-300',
+                    badge: 'bg-sky-500/20 text-sky-300'
+                  },
+                  {
+                    key: 'medical',
+                    title: '৫. চিকিৎসা ও ঔষধ 🩺',
+                    sub: `বিতরণ: ৳${medicalStats.disbursedAmt.toLocaleString('en-US')}`,
+                    amount: medicalStats.donatedAmt,
+                    isCurrency: true,
+                    countText: `${medicalStats.donorCount} দাতা / ${medicalStats.recipientCount} জন`,
+                    icon: '🩺',
+                    textColor: 'text-rose-400',
+                    badge: 'bg-rose-500/20 text-rose-300'
+                  },
+                  {
+                    key: 'education',
+                    title: '৬. শিক্ষার্থী শিক্ষা 🎓',
+                    sub: `বিতরণ: ৳${educationStats.disbursedAmt.toLocaleString('en-US')}`,
+                    amount: educationStats.donatedAmt,
+                    isCurrency: true,
+                    countText: `${educationStats.donorCount} দাতা / ${educationStats.recipientCount} জন`,
+                    icon: '🎓',
+                    textColor: 'text-indigo-400',
+                    badge: 'bg-indigo-500/20 text-indigo-300'
+                  },
+                  {
+                    key: 'micro',
+                    title: '৭. স্বনির্ভর ও লিল্লা 🚜',
+                    sub: `বিতরণ: ৳${microAndGeneralStats.disbursedAmt.toLocaleString('en-US')}`,
+                    amount: microAndGeneralStats.donatedAmt,
+                    isCurrency: true,
+                    countText: `${microAndGeneralStats.donorCount} দাতা / ${microAndGeneralStats.recipientCount} জন`,
+                    icon: '🚜',
+                    textColor: 'text-cyan-400',
+                    badge: 'bg-cyan-500/20 text-cyan-300'
+                  },
+                  {
+                    key: 'emergency',
+                    title: '৮. জরুরি ও ত্রাণ 🚨',
+                    sub: `বিতরণ: ৳${emergencyStats.disbursedAmt.toLocaleString('en-US')}`,
+                    amount: emergencyStats.donatedAmt,
+                    isCurrency: true,
+                    countText: `${emergencyStats.donorCount} দাতা / ${emergencyStats.recipientCount} জন`,
+                    icon: '🚨',
+                    textColor: 'text-orange-400',
+                    badge: 'bg-orange-500/20 text-orange-300'
                   }
                 ];
 
                 return (
-                  <div className="space-y-3 pt-0.5">
-                    {/* Header Bar */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-black text-amber-300 flex items-center gap-1.5">
-                        <span>📊 করযে হাসানা ১২টি পূর্ণাঙ্গ সেকশন কন্ট্রোল হাব (১ লাইনে ৪টি):</span>
-                      </span>
-                      <span className="text-[9.5px] text-slate-400 font-bold bg-slate-800/80 px-2 py-0.5 rounded-full border border-slate-700">
-                        যেকোনো সেকশনে ট্যাপ করলে নিচে বিস্তারিত পেজ ওপেন হবে
-                      </span>
-                    </div>
-
-                    {/* 12-Card Grid: 4 Columns on all screen sizes */}
-                    <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
-                      {cardItems.map((card) => {
-                        const isActive = qardActiveSection === card.key || (card.key === 'calendar' && qardActiveSection === 'ledger');
-                        return (
-                          <div
-                            key={card.key}
-                            onClick={() => {
-                              setQardActiveSection(card.key);
-                            }}
-                            className={`border p-1.5 sm:p-2 rounded-xl transition-all cursor-pointer select-none active:scale-98 flex flex-col justify-between min-h-[60px] sm:min-h-[68px] ${
-                              isActive
-                                ? 'bg-slate-900 ring-2 ring-amber-400 border-amber-400 shadow-md shadow-amber-500/20 scale-[1.01]'
-                                : 'bg-slate-900/60 hover:bg-slate-900/90 border-slate-700/60 hover:border-slate-500 shadow-xs'
+                  <div className="space-y-4 pt-0.5">
+                    {/* ========================================================
+                        প্যানেল ১: কর্জে হাসানা (সুদমুক্ত ঋণ) আলাদা প্যানেল (১ লাইনে ৪টি কার্ড)
+                       ======================================================== */}
+                    <div className="bg-slate-950/60 border border-amber-500/30 rounded-2xl p-2.5 sm:p-3 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[11px] font-black text-amber-300 flex items-center gap-1.5">
+                          <span>🤝 প্যানেল ১: কর্জে হাসানা (সুদমুক্ত ঋণ) অডিট ও কন্ট্রোল (১ লাইনে ৪টি)</span>
+                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[9px] font-black bg-rose-500/20 text-rose-200 border border-rose-500/40 px-2 py-0.5 rounded-full">
+                            ⏱️ সর্বোচ্চ ১ মাস (৩ মাস বাতিল) • ফেরত না দিলে আজীবন ব্লক 🚫
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setQardActiveSection('ledger')}
+                            className={`text-[9.5px] font-black px-2 py-0.5 rounded-full border transition cursor-pointer ${
+                              qardActiveSection === 'ledger'
+                                ? 'bg-amber-400 text-slate-950 border-amber-300'
+                                : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-600'
                             }`}
                           >
-                            <div className="flex items-center justify-between gap-1">
-                              <span className={`text-[8px] sm:text-[9.5px] font-bold truncate leading-tight flex items-center gap-1 ${
-                                isActive ? 'text-amber-300' : 'text-slate-200'
-                              }`}>
-                                <span>{card.icon}</span>
-                                <span className="truncate">{card.title}</span>
-                              </span>
-                              <span className={`text-[7px] sm:text-[8px] font-bold px-1 py-0.5 rounded shrink-0 ${
-                                isActive ? 'bg-amber-400 text-slate-950 font-black' : card.badge
-                              }`}>
-                                {card.countText}
+                            📜 সম্পূর্ণ লেজার
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Panel 1 Grid: Strictly 4 Columns per Row (8 Cards = 2 Rows × 4) */}
+                      <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
+                        {qardPanelCards.map((card) => {
+                          const isActive = qardActiveSection === card.key || (card.key === 'calendar' && qardActiveSection === 'ledger');
+                          return (
+                            <div
+                              key={card.key}
+                              onClick={() => setQardActiveSection(card.key)}
+                              className={`border p-1.5 sm:p-2 rounded-xl transition-all cursor-pointer select-none active:scale-98 flex flex-col justify-between min-h-[60px] sm:min-h-[68px] ${
+                                isActive
+                                  ? 'bg-slate-900 ring-2 ring-amber-400 border-amber-400 shadow-md shadow-amber-500/20 scale-[1.01]'
+                                  : 'bg-slate-900/70 hover:bg-slate-900 border-slate-700/70 hover:border-slate-500 shadow-xs'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <span className={`text-[8px] sm:text-[9.5px] font-bold truncate leading-tight flex items-center gap-1 ${
+                                  isActive ? 'text-amber-300' : 'text-slate-200'
+                                }`}>
+                                  <span>{card.icon}</span>
+                                  <span className="truncate">{card.title}</span>
+                                </span>
+                                <span className={`text-[7px] sm:text-[8px] font-bold px-1 py-0.5 rounded shrink-0 ${
+                                  isActive ? 'bg-amber-400 text-slate-950 font-black' : card.badge
+                                }`}>
+                                  {card.countText}
+                                </span>
+                              </div>
+                              <div className="mt-1">
+                                <span className={`text-xs sm:text-sm font-mono font-black ${
+                                  isActive ? 'text-amber-300' : card.textColor
+                                } block leading-tight`}>
+                                  {card.isCurrency ? `৳ ${(card.amount as number).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}` : card.amount}
+                                </span>
+                                <span className="text-[7px] sm:text-[8px] text-slate-400 font-medium block mt-0.5 truncate">
+                                  {card.sub}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* ========================================================
+                        প্যানেল ২: সদকায়ে জারিয়া ও মানবিক দান আলাদা প্যানেল (১ লাইনে ৪টি কার্ড)
+                       ======================================================== */}
+                    <div className="bg-emerald-950/45 border border-emerald-500/35 rounded-2xl p-2.5 sm:p-3 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[11px] font-black text-emerald-300 flex items-center gap-1.5">
+                          <span>🕊️ প্যানেল ২: সদকায়ে জারিয়া — দাতা, দান বিতরণ ও ফান্ড অডিট (১ লাইনে ৪টি)</span>
+                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (setQardDonatePurpose) setQardDonatePurpose('general_charity');
+                              setQardShowDonateModal(true);
+                            }}
+                            className="text-[9.5px] font-black bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-0.5 rounded-full transition cursor-pointer"
+                          >
+                            + সদকা জমা লিখুন
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingSadaqahTxId(null);
+                              setSadaqahRecipName('');
+                              setSadaqahRecipPhone('');
+                              setSadaqahRecipAddr('');
+                              setSadaqahRecipSector('general_charity');
+                              setSadaqahRecipAmt('');
+                              setSadaqahRecipDesc('');
+                              setShowSadaqahDisburseForm(true);
+                              setQardActiveSection('sadaqah_recipients');
+                            }}
+                            className="text-[9.5px] font-black bg-amber-400 hover:bg-amber-300 text-slate-950 px-2.5 py-0.5 rounded-full transition cursor-pointer"
+                          >
+                            🎁 + কাকে দান করেছি লিখুন
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Panel 2 Grid: Strictly 4 Columns per Row (8 Cards = 2 Rows × 4) */}
+                      <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
+                        {sadaqahPanelCards.map((card) => {
+                          const isActive = qardActiveSection === card.key;
+                          return (
+                            <div
+                              key={card.key}
+                              onClick={() => setQardActiveSection(card.key)}
+                              className={`border p-1.5 sm:p-2 rounded-xl transition-all cursor-pointer select-none active:scale-98 flex flex-col justify-between min-h-[60px] sm:min-h-[68px] ${
+                                isActive
+                                  ? 'bg-emerald-950 ring-2 ring-emerald-400 border-emerald-400 shadow-md shadow-emerald-500/20 scale-[1.01]'
+                                  : 'bg-slate-900/75 hover:bg-slate-900 border-emerald-700/40 hover:border-emerald-400/70 shadow-xs'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <span className={`text-[8px] sm:text-[9.5px] font-bold truncate leading-tight flex items-center gap-1 ${
+                                  isActive ? 'text-emerald-300' : 'text-slate-100'
+                                }`}>
+                                  <span>{card.icon}</span>
+                                  <span className="truncate">{card.title}</span>
+                                </span>
+                                <span className={`text-[7px] sm:text-[8px] font-bold px-1 py-0.5 rounded shrink-0 ${
+                                  isActive ? 'bg-emerald-400 text-slate-950 font-black' : card.badge
+                                }`}>
+                                  {card.countText}
+                                </span>
+                              </div>
+                              <div className="mt-1">
+                                <span className={`text-xs sm:text-sm font-mono font-black ${
+                                  isActive ? 'text-emerald-300' : card.textColor
+                                } block leading-tight`}>
+                                  {`৳ ${(card.amount as number).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`}
+                                </span>
+                                <span className="text-[7px] sm:text-[8px] text-slate-400 font-medium block mt-0.5 truncate">
+                                  {card.sub}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* ==================== NEW QARD SECTION: ২. কে কে কর্জে হাসানা নিয়েছে (BORROWERS REGISTER) ==================== */}
+                    {qardActiveSection === 'qard_borrowers' && (() => {
+                      const q = borrowerSearchQuery.trim().toLowerCase();
+                      const filteredBorrowers = allQardBorrowersList.filter(b =>
+                        !q || b.name.toLowerCase().includes(q) || b.phone.includes(q) || b.memberId.toLowerCase().includes(q)
+                      );
+                      return (
+                        <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-cyan-300 shadow-2xs space-y-4 text-left">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
+                            <div>
+                              <h4 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-2">
+                                🤝 ২. কে কে কর্জে হাসানা ঋণ নিয়েছে — সম্পূর্ণ ঋণগ্রহীতা তালিকা ({allQardBorrowersList.length} জন)
+                              </h4>
+                              <span className="text-[10px] text-slate-500 font-bold block mt-0.5">
+                                সর্বমোট বিতরণকৃত ঋণ, কে কত টাকা নিয়েছে, কত ফেরত দিয়েছে ও বর্তমান বকেয়া অডিট
                               </span>
                             </div>
-                            <div className="mt-1">
-                              <span className={`text-xs sm:text-sm font-mono font-black ${
-                                isActive ? 'text-amber-300' : card.textColor
-                              } block leading-tight`}>
-                                {card.isCurrency ? `৳ ${(card.amount as number).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}` : card.amount}
-                              </span>
-                              <span className="text-[7px] sm:text-[8px] text-slate-400 font-medium block mt-0.5 truncate">
-                                {card.sub}
-                              </span>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <input
+                                type="text"
+                                value={borrowerSearchQuery}
+                                onChange={(e) => setBorrowerSearchQuery(e.target.value)}
+                                placeholder="নাম বা ফোন খুঁজুন..."
+                                className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-800 outline-none focus:ring-1 focus:ring-cyan-500"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setQardShowDirectLoanModal(true)}
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition cursor-pointer"
+                              >
+                                ➕ ডাইরেক্ট ঋণ দিন
+                              </button>
                             </div>
                           </div>
-                        );
-                      })}
-                    </div>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                            <div className="bg-cyan-50 border border-cyan-200 p-2.5 rounded-xl">
+                              <span className="text-[10px] text-cyan-800 font-bold block">মোট বিতরণকৃত ঋণ</span>
+                              <span className="text-sm font-mono font-black text-cyan-700">৳ {totalDisbursed.toLocaleString('en-US')}</span>
+                            </div>
+                            <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl">
+                              <span className="text-[10px] text-emerald-800 font-bold block">মোট ফেরত আদায়</span>
+                              <span className="text-sm font-mono font-black text-emerald-700">৳ {totalRepaid.toLocaleString('en-US')}</span>
+                            </div>
+                            <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl">
+                              <span className="text-[10px] text-amber-800 font-bold block">মাঠে চলতি বকেয়া</span>
+                              <span className="text-sm font-mono font-black text-amber-700">৳ {activeLoanBal.toLocaleString('en-US')}</span>
+                            </div>
+                            <div className="bg-rose-50 border border-rose-200 p-2.5 rounded-xl">
+                              <span className="text-[10px] text-rose-800 font-bold block">আজীবন ব্লককৃত</span>
+                              <span className="text-sm font-mono font-black text-rose-700">{lifetimeBannedUsers.length} জন 🚫</span>
+                            </div>
+                          </div>
+
+                          <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-96 overflow-y-auto">
+                            {filteredBorrowers.length === 0 ? (
+                              <div className="p-6 text-center text-slate-400 text-xs font-bold">কোনো ঋণগ্রহীতার রেকর্ড পাওয়া যায়নি</div>
+                            ) : (
+                              filteredBorrowers.map((b, idx) => (
+                                <div key={b.uid || idx} className={`p-2.5 hover:bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs ${b.isBanned ? 'bg-rose-50/40' : ''}`}>
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span className="w-5 h-5 rounded-full bg-cyan-100 text-cyan-800 font-mono text-[9px] font-bold inline-flex items-center justify-center shrink-0">
+                                      {idx + 1}
+                                    </span>
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="font-black text-slate-900">{b.name}</span>
+                                        {b.isBanned && (
+                                          <span className="text-[8.5px] font-black bg-rose-600 text-white px-1.5 py-0.5 rounded">
+                                            🚫 আজীবন ব্লক
+                                          </span>
+                                        )}
+                                        <span className="text-[9px] font-bold bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded">
+                                          ১ মাস (৩০ দিন)
+                                        </span>
+                                      </div>
+                                      <span className="text-[10px] text-slate-500 font-mono block">
+                                        📱 {b.phone} • ID: {b.memberId} • সর্বশেষ: {b.lastLoanDate ? new Date(b.lastLoanDate).toLocaleDateString('bn-BD') : 'চলতি'}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                                    <div className="text-right">
+                                      <span className="text-[10px] font-mono font-bold text-slate-600 block">
+                                        মোট নেওয়া: <strong className="text-slate-900">৳{b.takenAmt.toLocaleString('en-US')}</strong> • ফেরত: <strong className="text-emerald-700">৳{b.repaidAmt.toLocaleString('en-US')}</strong>
+                                      </span>
+                                      <span className={`font-mono font-black text-xs ${b.dueAmt > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                                        {b.dueAmt > 0 ? `বকেয়া: ৳${b.dueAmt.toLocaleString('en-US')}` : '✅ সম্পূর্ণ পরিশোধিত'}
+                                      </span>
+                                    </div>
+                                    {b.userObj && (
+                                      <button
+                                        type="button"
+                                        onClick={() => openUserEditModal(b.userObj)}
+                                        className="text-[10px] bg-slate-800 hover:bg-slate-900 text-white font-bold px-2 py-1 rounded-lg cursor-pointer"
+                                      >
+                                        প্রোফাইল
+                                      </button>
+                                    )}
+                                    {b.userObj && !b.isBanned && b.dueAmt > 0 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handlePermanentBanBorrower(b.userObj!)}
+                                        disabled={banningUid === b.uid}
+                                        className="text-[10px] bg-rose-600 hover:bg-rose-700 text-white font-black px-2 py-1 rounded-lg cursor-pointer disabled:opacity-50"
+                                      >
+                                        {banningUid === b.uid ? '...' : '🚫 আজীবন ব্লক'}
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* ========================================================
                         SECTION: 💰 ১. মোট মূল তহবিল ও ক্যাশ ফ্লো অডিট (MAIN FUND)
@@ -1325,251 +1962,909 @@ export function AdminQardSection(props: any) {
                     )}
 
                     {/* ========================================================
-                        SECTION: 🤝 ৫. সাধারণ করযে হাসানা ফান্ড (GENERAL WELFARE)
+                        SADAQAH JARIYAH SECTION 1: 🤲 ১. কে দিয়েছে (দাতা তালিকা)
                        ======================================================== */}
-                    {qardActiveSection === 'general' && (
+                    {qardActiveSection === 'sadaqah_donors' && (() => {
+                      const q = sadaqahSearchQuery.trim().toLowerCase();
+                      const filteredDonors = sadaqahDonorList.filter(t =>
+                        !q ||
+                        (t.userName || '').toLowerCase().includes(q) ||
+                        (t.senderName || '').toLowerCase().includes(q) ||
+                        (t.userPhone || '').includes(q) ||
+                        (t.description || '').toLowerCase().includes(q)
+                      );
+                      const sectorTag = (t: any) => {
+                        const sec = getSadaqahSectorKey(t);
+                        if (sec === 'medical') return '🩺 চিকিৎসা';
+                        if (sec === 'education') return '🎓 শিক্ষা';
+                        if (sec === 'micro') return '🚜 স্বনির্ভর';
+                        if (sec === 'emergency') return '🚨 ত্রাণ';
+                        return '🕊️ লিল্লা / সাধারণ সদকা';
+                      };
+                      return (
+                        <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-emerald-300 shadow-2xs space-y-4 text-left">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
+                            <div>
+                              <h4 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-2">
+                                🤲 ১. সদকায়ে জারিয়া — কে কয় টাকা দিয়েছে ({sadaqahDonorList.length} টি দান)
+                              </h4>
+                              <span className="text-[10px] text-slate-500 font-bold block mt-0.5">
+                                সকল সদকা দাতার নাম, মোবাইল, খাত ও টাকার সম্পূর্ণ তালিকা
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <input
+                                type="text"
+                                value={sadaqahSearchQuery}
+                                onChange={(e) => setSadaqahSearchQuery(e.target.value)}
+                                placeholder="দাতার নাম বা ফোন খুঁজুন..."
+                                className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-800 outline-none focus:ring-1 focus:ring-emerald-500"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (setQardDonatePurpose) setQardDonatePurpose('general_charity');
+                                  setQardShowDonateModal(true);
+                                }}
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition cursor-pointer shadow-xs"
+                              >
+                                + সদকা জমা লিখুন
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                            <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl">
+                              <span className="text-[10px] text-emerald-800 font-bold block">মোট সদকা সংগ্রহ</span>
+                              <span className="text-sm font-mono font-black text-emerald-700">৳ {sadaqahCollected.toLocaleString('en-US')}</span>
+                            </div>
+                            <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl">
+                              <span className="text-[10px] text-amber-800 font-bold block">দান বিতরণ করা হয়েছে</span>
+                              <span className="text-sm font-mono font-black text-amber-700">৳ {sadaqahDisbursed.toLocaleString('en-US')}</span>
+                            </div>
+                            <div className="bg-teal-50 border border-teal-200 p-2.5 rounded-xl">
+                              <span className="text-[10px] text-teal-800 font-bold block">বর্তমানে হাতে আছে</span>
+                              <span className="text-sm font-mono font-black text-teal-700">৳ {sadaqahAvailable.toLocaleString('en-US')}</span>
+                            </div>
+                            <div className="bg-slate-50 border border-slate-200 p-2.5 rounded-xl">
+                              <span className="text-[10px] text-slate-700 font-bold block">মোট দাতা রেকর্ড</span>
+                              <span className="text-sm font-mono font-black text-slate-800">{sadaqahDonorList.length} টি</span>
+                            </div>
+                          </div>
+
+                          <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-96 overflow-y-auto">
+                            {filteredDonors.length === 0 ? (
+                              <div className="p-6 text-center text-slate-400 text-xs font-bold">সদকায়ে জারিয়া খাতে কোনো দানের রেকর্ড পাওয়া যায়নি</div>
+                            ) : (
+                              filteredDonors.map((tx, idx) => (
+                                <div key={tx.id || idx} className="p-2.5 hover:bg-slate-50 flex items-center justify-between text-xs gap-2">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 font-mono text-[9px] font-bold inline-flex items-center justify-center shrink-0">
+                                      {idx + 1}
+                                    </span>
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="font-black text-slate-900">{tx.senderName || tx.userName || 'গোপন সদকা দাতা'}</span>
+                                        <span className="text-[9px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 px-1.5 py-0.5 rounded">
+                                          {sectorTag(tx)}
+                                        </span>
+                                      </div>
+                                      <span className="text-[10px] text-slate-500 font-mono block truncate">
+                                        {tx.senderPhone || tx.userPhone || '—'} • {tx.createdAt ? new Date(tx.createdAt).toLocaleDateString('bn-BD') : 'আজ'} • {tx.description || 'সদকায়ে জারিয়া'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <span className="font-mono font-black text-emerald-700 shrink-0">+৳ {(Number(tx.amount) || 0).toLocaleString('en-US')}</span>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* ========================================================
+                        SADAQAH JARIYAH SECTION 2: 🎁 ২. কাকে দান করেছি (RECIPIENTS & FORM)
+                       ======================================================== */}
+                    {qardActiveSection === 'sadaqah_recipients' && (() => {
+                      const q = sadaqahSearchQuery.trim().toLowerCase();
+                      const filteredRecipients = sadaqahDisburseList.filter(t =>
+                        !q ||
+                        (t.recipientName || t.userName || '').toLowerCase().includes(q) ||
+                        (t.recipientPhone || t.userPhone || '').includes(q) ||
+                        (t.recipientAddress || '').toLowerCase().includes(q) ||
+                        (t.description || '').toLowerCase().includes(q)
+                      );
+                      const sectorLabel = (t: any) => {
+                        const sec = getSadaqahSectorKey(t) || t.donationPurpose;
+                        if (sec === 'medical') return '🩺 চিকিৎসা';
+                        if (sec === 'education') return '🎓 শিক্ষা';
+                        if (sec === 'micro') return '🚜 স্বনির্ভর';
+                        if (sec === 'emergency') return '🚨 ত্রাণ';
+                        return '🕊️ সাধারণ সদকা';
+                      };
+                      return (
+                        <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-amber-300 shadow-2xs space-y-4 text-left">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
+                            <div>
+                              <h4 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-2">
+                                🎁 ২. কাকে আমরা সদকা দান করেছি — গ্রহীতাদের তালিকা ({sadaqahDisburseList.length} জন)
+                              </h4>
+                              <span className="text-[10px] text-slate-500 font-bold block mt-0.5">
+                                অসহায় ও দুস্থদের মাঝে বিতরণকৃত সদকায়ে জারিয়ার পূর্ণ রেকর্ড ও নতুন বিতরণ এন্ট্রি
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <input
+                                type="text"
+                                value={sadaqahSearchQuery}
+                                onChange={(e) => setSadaqahSearchQuery(e.target.value)}
+                                placeholder="গ্রহীতার নাম, ফোন বা ঠিকানা..."
+                                className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-800 outline-none focus:ring-1 focus:ring-amber-500"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingSadaqahTxId(null);
+                                  setSadaqahRecipName('');
+                                  setSadaqahRecipPhone('');
+                                  setSadaqahRecipAddr('');
+                                  setSadaqahRecipAmt('');
+                                  setSadaqahRecipDesc('');
+                                  setShowSadaqahDisburseForm(!showSadaqahDisburseForm);
+                                }}
+                                className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-lg text-xs font-black transition cursor-pointer shadow-xs"
+                              >
+                                {showSadaqahDisburseForm ? '✖ ফর্ম বন্ধ করুন' : '🎁 + নতুন দান বিতরণ লিখুন'}
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Add / Edit Recipient Disbursement Form */}
+                          {showSadaqahDisburseForm && (
+                            <form onSubmit={handleSaveSadaqahDisbursement} className="bg-amber-50/70 border border-amber-300 rounded-2xl p-3.5 space-y-3">
+                              <div className="flex items-center justify-between">
+                                <h5 className="text-xs font-black text-amber-950">
+                                  {editingSadaqahTxId ? '✏️ সদকা বিতরণ রেকর্ড এডিট করুন' : '🎁 নতুন সদকা দান বিতরণের হিসাব লিখুন'}
+                                </h5>
+                                <span className="text-[10px] font-bold text-amber-800">
+                                  হাতে মজুত: ৳{sadaqahAvailable.toLocaleString('en-US')}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                                <div>
+                                  <label className="text-[10px] font-black text-slate-700 block mb-1">গ্রহীতার নাম *:</label>
+                                  <input
+                                    type="text"
+                                    value={sadaqahRecipName}
+                                    onChange={(e) => setSadaqahRecipName(e.target.value)}
+                                    placeholder="যেমন: মো. করিম মিয়া / এতিমখানা"
+                                    className="w-full bg-white border border-amber-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-800 outline-none focus:ring-1 focus:ring-amber-500"
+                                    required
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-black text-slate-700 block mb-1">ফোন নম্বর:</label>
+                                  <input
+                                    type="text"
+                                    value={sadaqahRecipPhone}
+                                    onChange={(e) => setSadaqahRecipPhone(e.target.value)}
+                                    placeholder="017xxxxxxxx"
+                                    className="w-full bg-white border border-amber-200 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold text-slate-800 outline-none focus:ring-1 focus:ring-amber-500"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-black text-slate-700 block mb-1">টাকার পরিমাণ (৳) *:</label>
+                                  <input
+                                    type="number"
+                                    value={sadaqahRecipAmt}
+                                    onChange={(e) => setSadaqahRecipAmt(e.target.value)}
+                                    placeholder="যেমন: 2000"
+                                    className="w-full bg-white border border-amber-200 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold text-slate-800 outline-none focus:ring-1 focus:ring-amber-500"
+                                    required
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-black text-slate-700 block mb-1">সদকার খাত:</label>
+                                  <select
+                                    value={sadaqahRecipSector}
+                                    onChange={(e) => setSadaqahRecipSector(e.target.value as any)}
+                                    className="w-full bg-white border border-amber-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-800 outline-none focus:ring-1 focus:ring-amber-500"
+                                  >
+                                    <option value="general_charity">🕊️ সাধারণ সদকা / লিল্লা</option>
+                                    <option value="medical">🩺 চিকিৎসা ও ঔষধ সহায়তা</option>
+                                    <option value="education">🎓 দরিদ্র শিক্ষার্থী শিক্ষা</option>
+                                    <option value="micro">🚜 ক্ষুদ্র স্বনির্ভর ও ব্যবসা</option>
+                                    <option value="emergency">🚨 জরুরি মানবিক ও ত্রাণ</option>
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-black text-slate-700 block mb-1">ঠিকানা / এলাকা:</label>
+                                  <input
+                                    type="text"
+                                    value={sadaqahRecipAddr}
+                                    onChange={(e) => setSadaqahRecipAddr(e.target.value)}
+                                    placeholder="গ্রাম/থানা/জেলা"
+                                    className="w-full bg-white border border-amber-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-800 outline-none focus:ring-1 focus:ring-amber-500"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-black text-slate-700 block mb-1">বিতরণের তারিখ:</label>
+                                  <input
+                                    type="date"
+                                    value={sadaqahRecipDate}
+                                    onChange={(e) => setSadaqahRecipDate(e.target.value)}
+                                    className="w-full bg-white border border-amber-200 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold text-slate-800 outline-none focus:ring-1 focus:ring-amber-500"
+                                  />
+                                </div>
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-black text-slate-700 block mb-1">বিস্তারিত বিবরণ (কী কাজে দেওয়া হয়েছে):</label>
+                                <input
+                                  type="text"
+                                  value={sadaqahRecipDesc}
+                                  onChange={(e) => setSadaqahRecipDesc(e.target.value)}
+                                  placeholder="যেমন: অসুস্থ মায়ের অপারেশনের জন্য নগদ অনুদান প্রদান"
+                                  className="w-full bg-white border border-amber-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-800 outline-none focus:ring-1 focus:ring-amber-500"
+                                />
+                              </div>
+                              <div className="flex items-center justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowSadaqahDisburseForm(false);
+                                    setEditingSadaqahTxId(null);
+                                  }}
+                                  className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-xl text-xs font-bold cursor-pointer"
+                                >
+                                  বাতিল
+                                </button>
+                                <button
+                                  type="submit"
+                                  disabled={savingSadaqahDisburse}
+                                  className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black cursor-pointer disabled:opacity-50"
+                                >
+                                  {savingSadaqahDisburse ? 'সংরক্ষণ হচ্ছে...' : editingSadaqahTxId ? '💾 আপডেট করুন' : '✅ দান বিতরণ সংরক্ষণ করুন'}
+                                </button>
+                              </div>
+                            </form>
+                          )}
+
+                          {/* Summary Bar */}
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                            <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl">
+                              <span className="text-[10px] text-amber-800 font-bold block">মোট দান বিতরণ</span>
+                              <span className="text-sm font-mono font-black text-amber-700">৳ {sadaqahDisbursed.toLocaleString('en-US')}</span>
+                            </div>
+                            <div className="bg-teal-50 border border-teal-200 p-2.5 rounded-xl">
+                              <span className="text-[10px] text-teal-800 font-bold block">বর্তমানে হাতে মজুত</span>
+                              <span className="text-sm font-mono font-black text-teal-700">৳ {sadaqahAvailable.toLocaleString('en-US')}</span>
+                            </div>
+                            <div className="bg-slate-50 border border-slate-200 p-2.5 rounded-xl col-span-2 sm:col-span-1">
+                              <span className="text-[10px] text-slate-700 font-bold block">মোট উপকৃত গ্রহীতা</span>
+                              <span className="text-sm font-mono font-black text-slate-800">{sadaqahDisburseList.length} জন</span>
+                            </div>
+                          </div>
+
+                          {/* Recipients List */}
+                          <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-96 overflow-y-auto">
+                            {filteredRecipients.length === 0 ? (
+                              <div className="p-6 text-center text-slate-400 text-xs font-bold">এখনো কোনো সদকা দান বিতরণের রেকর্ড যুক্ত করা হয়নি</div>
+                            ) : (
+                              filteredRecipients.map((tx: any, idx) => (
+                                <div key={tx.id || idx} className="p-2.5 hover:bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between text-xs gap-2">
+                                  <div className="flex items-start gap-2 min-w-0">
+                                    <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 font-mono text-[9px] font-bold inline-flex items-center justify-center shrink-0 mt-0.5">
+                                      {idx + 1}
+                                    </span>
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="font-black text-slate-900">{tx.recipientName || tx.userName || 'দান গ্রহীতা'}</span>
+                                        <span className="text-[9px] font-bold bg-amber-50 text-amber-900 border border-amber-200 px-1.5 py-0.5 rounded">
+                                          {sectorLabel(tx)}
+                                        </span>
+                                      </div>
+                                      <span className="text-[10px] text-slate-500 font-mono block">
+                                        📱 {tx.recipientPhone || tx.userPhone || '—'} {tx.recipientAddress ? `• 📍 ${tx.recipientAddress}` : ''} • 📅 {tx.createdAt ? new Date(tx.createdAt).toLocaleDateString('bn-BD') : 'আজ'}
+                                      </span>
+                                      {tx.description && (
+                                        <span className="text-[10px] text-slate-600 block mt-0.5">{tx.description}</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <span className="font-mono font-black text-rose-700 mr-1">-৳ {(Number(tx.amount) || 0).toLocaleString('en-US')}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingSadaqahTxId(tx.id);
+                                        setSadaqahRecipName(tx.recipientName || tx.userName || '');
+                                        setSadaqahRecipPhone(tx.recipientPhone || tx.userPhone || '');
+                                        setSadaqahRecipAddr(tx.recipientAddress || '');
+                                        setSadaqahRecipSector((getSadaqahSectorKey(tx) || 'general_charity') as any);
+                                        setSadaqahRecipAmt(String(tx.amount || ''));
+                                        setSadaqahRecipDesc(tx.description || '');
+                                        setSadaqahRecipDate(tx.createdAt ? new Date(tx.createdAt).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10));
+                                        setShowSadaqahDisburseForm(true);
+                                      }}
+                                      className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[10px] font-bold cursor-pointer"
+                                    >
+                                      ✏️ এডিট
+                                    </button>
+                                    {voidConfirmTxId === tx.id ? (
+                                      <div className="flex items-center gap-1">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleVoidSadaqahDisbursement(tx)}
+                                          className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[10px] font-black cursor-pointer"
+                                        >
+                                          ✓ নিশ্চিত
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => setVoidConfirmTxId(null)}
+                                          className="px-1.5 py-1 bg-slate-200 text-slate-700 rounded-lg text-[10px] font-bold cursor-pointer"
+                                        >
+                                          না
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => setVoidConfirmTxId(tx.id)}
+                                        className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-[10px] font-bold cursor-pointer"
+                                      >
+                                        🗑️
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* ========================================================
+                        SADAQAH JARIYAH SECTION 3: 🏦 ৩. বর্তমানে হাতে আছে (BALANCE & TUNING)
+                       ======================================================== */}
+                    {qardActiveSection === 'sadaqah_balance' && (
                       <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-teal-300 shadow-2xs space-y-4 text-left">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
                           <div>
                             <h4 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-2">
-                              🤝 5. সাধারণ করযে হাসানা ফান্ড (সুদমুক্ত কল্যাণ ঋণ খাত)
+                              🏦 ৩. সদকায়ে জারিয়া ফান্ড — বর্তমানে হাতে আছে ও ম্যানুয়াল ব্যালেন্স অডিট
                             </h4>
                             <span className="text-[10px] text-slate-500 font-bold block mt-0.5">
-                              বিনা সুদে ঋণ বিতরণ ও সাধারণ দানকারীদের তালিকা
+                              মোট সংগৃহীত সদকা, মোট বিতরণ ও অবশিষ্ট হাতে থাকা নগদ ব্যালেন্স
                             </span>
                           </div>
                           <button
                             type="button"
-                            onClick={() => setQardShowDonateModal(true)}
-                            className="px-2.5 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold transition cursor-pointer shadow-xs"
+                            onClick={() => setQardActiveSection('sadaqah_recipients')}
+                            className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-lg text-xs font-black transition cursor-pointer"
                           >
-                            ❤️ সাধারণ ফান্ডে দান যুক্ত করুন
+                            🎁 বিতরণ ফর্ম খুলুন
                           </button>
                         </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="bg-teal-50 border border-teal-200 p-2.5 rounded-xl">
-                            <span className="text-[10px] text-teal-800 font-bold block">মোট সাধারণ ফান্ড</span>
-                            <span className="text-base font-mono font-black text-teal-700">৳ {generalStats.amount.toLocaleString('en-US')}</span>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl">
+                            <span className="text-[10px] text-emerald-800 font-bold block">মোট সদকা প্রাপ্তি (লাইভ: ৳{liveSadaqahCollected.toLocaleString('en-US')})</span>
+                            <span className="text-lg font-mono font-black text-emerald-700">৳ {sadaqahCollected.toLocaleString('en-US')}</span>
                           </div>
-                          <div className="bg-slate-50 border border-slate-200 p-2.5 rounded-xl">
-                            <span className="text-[10px] text-slate-700 font-bold block">মোট দাতা সংখ্যা</span>
-                            <span className="text-base font-mono font-black text-slate-800">{generalStats.count} জন দাতা</span>
+                          <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl">
+                            <span className="text-[10px] text-amber-800 font-bold block">মোট দান বিতরণ (লাইভ: ৳{liveSadaqahDisbursed.toLocaleString('en-US')})</span>
+                            <span className="text-lg font-mono font-black text-amber-700">৳ {sadaqahDisbursed.toLocaleString('en-US')}</span>
+                          </div>
+                          <div className="bg-teal-50 border border-teal-300 p-3 rounded-xl">
+                            <span className="text-[10px] text-teal-800 font-bold block">বর্তমানে ফান্ডে হাতে আছে</span>
+                            <span className="text-lg font-mono font-black text-teal-800">৳ {sadaqahAvailable.toLocaleString('en-US')}</span>
                           </div>
                         </div>
-                        <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-72 overflow-y-auto">
-                          {generalStats.items.length === 0 ? (
-                            <div className="p-5 text-center text-slate-400 text-xs font-bold">এই খাতে কোনো দানের রেকর্ড নেই</div>
-                          ) : (
-                            generalStats.items.map((tx, idx) => (
-                              <div key={tx.id || idx} className="p-2.5 hover:bg-slate-50 flex items-center justify-between text-xs">
-                                <div>
-                                  <span className="font-black text-slate-900 block">{tx.senderName || tx.userName || 'সাধারণ দাতা'}</span>
-                                  <span className="text-[10px] text-slate-500 font-mono">{tx.senderPhone || tx.userPhone || '—'} • {tx.createdAt ? new Date(tx.createdAt).toLocaleDateString('bn-BD') : 'আজ'}</span>
-                                </div>
-                                <span className="font-mono font-black text-teal-700">৳ {(Number(tx.amount) || 0).toLocaleString('en-US')}</span>
-                              </div>
-                            ))
-                          )}
+
+                        <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                          <div className="flex justify-between text-xs font-bold">
+                            <span className="text-slate-700">ফান্ড বিতরণ অনুপাত</span>
+                            <span className="font-mono text-teal-700">
+                              হাতে আছে: {sadaqahCollected > 0 ? Math.round((sadaqahAvailable / sadaqahCollected) * 100) : 100}% • বিতরণ: {sadaqahCollected > 0 ? Math.round((sadaqahDisbursed / sadaqahCollected) * 100) : 0}%
+                            </span>
+                          </div>
+                          <div className="w-full h-3 bg-amber-200 rounded-full overflow-hidden flex">
+                            <div
+                              className="bg-teal-600 h-full transition-all"
+                              style={{ width: `${sadaqahCollected > 0 ? Math.min(100, (sadaqahAvailable / sadaqahCollected) * 100) : 100}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Optional Manual Override Form */}
+                        <div className="p-3.5 bg-slate-900 text-white rounded-2xl space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-black text-emerald-300">⚙️ ম্যানুয়াল সদকা ব্যালেন্স টিউন (0 রাখলে লাইভ অটো হিসাব হবে)</span>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-end">
+                            <div>
+                              <label className="text-[10px] text-slate-300 font-bold block mb-1">ম্যানুয়াল মোট জমা (৳):</label>
+                              <input
+                                type="number"
+                                value={sadaqahManualTotalInput}
+                                onChange={(e) => setSadaqahManualTotalInput(e.target.value)}
+                                placeholder={`অটো: ${liveSadaqahCollected}`}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs font-mono font-bold text-white outline-none focus:ring-1 focus:ring-emerald-400"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-slate-300 font-bold block mb-1">ম্যানুয়াল মোট বিতরণ (৳):</label>
+                              <input
+                                type="number"
+                                value={sadaqahManualDisbInput}
+                                onChange={(e) => setSadaqahManualDisbInput(e.target.value)}
+                                placeholder={`অটো: ${liveSadaqahDisbursed}`}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs font-mono font-bold text-white outline-none focus:ring-1 focus:ring-emerald-400"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleSaveSadaqahManualTotals}
+                              disabled={savingSadaqahManual}
+                              className="px-3.5 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs rounded-xl cursor-pointer disabled:opacity-50"
+                            >
+                              {savingSadaqahManual ? 'সেভ হচ্ছে...' : '💾 ব্যালেন্স আপডেট করুন'}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     )}
 
                     {/* ========================================================
-                        SECTION: 🩺 ৬. চিকিৎসা সহায়তা খাত (MEDICAL WELFARE)
+                        SADAQAH JARIYAH SECTION 4: 📜 ৪. দাতা ও গ্রহীতা সম্পূর্ণ খতিয়ান
+                       ======================================================== */}
+                    {qardActiveSection === 'sadaqah_audit' && (
+                      <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-sky-300 shadow-2xs space-y-4 text-left">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
+                          <div>
+                            <h4 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-2">
+                              📜 ৪. সদকায়ে জারিয়া দাতা ও গ্রহীতা সম্পূর্ণ খতিয়ান (আয় বনাম দান)
+                            </h4>
+                            <span className="text-[10px] text-slate-500 font-bold block mt-0.5">
+                              কে কয় টাকা দিয়েছে এবং কাকে আমরা কত টাকা দান করেছি তার পূর্ণ তুলনামূলক তালিকা
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-black bg-teal-50 text-teal-800 border border-teal-200 px-2.5 py-1 rounded-lg">
+                              বর্তমানে হাতে: ৳{sadaqahAvailable.toLocaleString('en-US')}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                          {/* Donors Column */}
+                          <div className="border border-emerald-200 rounded-xl overflow-hidden">
+                            <div className="bg-emerald-50 px-3 py-2 border-b border-emerald-200 flex items-center justify-between">
+                              <span className="text-xs font-black text-emerald-900">🤲 কে দিয়েছে ({sadaqahDonorList.length} জন)</span>
+                              <span className="text-xs font-mono font-black text-emerald-700">৳{sadaqahCollected.toLocaleString('en-US')}</span>
+                            </div>
+                            <div className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
+                              {sadaqahDonorList.length === 0 ? (
+                                <div className="p-5 text-center text-slate-400 text-xs font-bold">কোনো দাতার রেকর্ড নেই</div>
+                              ) : (
+                                sadaqahDonorList.map((tx, idx) => (
+                                  <div key={tx.id || idx} className="p-2.5 flex items-center justify-between text-xs hover:bg-slate-50">
+                                    <div className="min-w-0">
+                                      <span className="font-black text-slate-900 block truncate">{tx.senderName || tx.userName || 'দাতা'}</span>
+                                      <span className="text-[10px] text-slate-500 font-mono">{tx.createdAt ? new Date(tx.createdAt).toLocaleDateString('bn-BD') : 'আজ'}</span>
+                                    </div>
+                                    <span className="font-mono font-black text-emerald-700 shrink-0">+৳{(Number(tx.amount) || 0).toLocaleString('en-US')}</span>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Recipients Column */}
+                          <div className="border border-amber-200 rounded-xl overflow-hidden">
+                            <div className="bg-amber-50 px-3 py-2 border-b border-amber-200 flex items-center justify-between">
+                              <span className="text-xs font-black text-amber-900">🎁 কাকে দান করেছি ({sadaqahDisburseList.length} জন)</span>
+                              <span className="text-xs font-mono font-black text-amber-700">৳{sadaqahDisbursed.toLocaleString('en-US')}</span>
+                            </div>
+                            <div className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
+                              {sadaqahDisburseList.length === 0 ? (
+                                <div className="p-5 text-center text-slate-400 text-xs font-bold">কোনো বিতরণের রেকর্ড নেই</div>
+                              ) : (
+                                sadaqahDisburseList.map((tx: any, idx) => (
+                                  <div key={tx.id || idx} className="p-2.5 flex items-center justify-between text-xs hover:bg-slate-50">
+                                    <div className="min-w-0">
+                                      <span className="font-black text-slate-900 block truncate">{tx.recipientName || tx.userName || 'গ্রহীতা'}</span>
+                                      <span className="text-[10px] text-slate-500 font-mono block truncate">{tx.description || 'সদকা বিতরণ'}</span>
+                                    </div>
+                                    <span className="font-mono font-black text-rose-700 shrink-0">-৳{(Number(tx.amount) || 0).toLocaleString('en-US')}</span>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ========================================================
+                        SADAQAH SECTOR 5: 🩺 চিকিৎসা সহায়তা খাত (দাতা ও গ্রহীতা)
                        ======================================================== */}
                     {qardActiveSection === 'medical' && (
                       <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-rose-300 shadow-2xs space-y-4 text-left">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
                           <div>
                             <h4 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-2">
-                              🩺 6. চিকিৎসা সহায়তা খাত (মুমূর্ষু ও অসুস্থদের ঔষধ অনুদান)
+                              🩺 ৫. চিকিৎসা সহায়তা খাত (দাতা ও দান গ্রহীতা)
                             </h4>
                             <span className="text-[10px] text-slate-500 font-bold block mt-0.5">
-                              অসুস্থ ও অসহায় সদস্যদের চিকিৎসা সহায়তা ও অনুদান খতিয়ান
+                              অসুস্থ ও অসহায় মানুষের চিকিৎসা অনুদান জমা এবং বিতরণের পূর্ণ হিসাব
                             </span>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => setQardShowDonateModal(true)}
-                            className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition cursor-pointer shadow-xs"
-                          >
-                            ❤️ চিকিৎসা ফান্ডে দান যুক্ত করুন
-                          </button>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (setQardDonatePurpose) setQardDonatePurpose('medical');
+                                setQardShowDonateModal(true);
+                              }}
+                              className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition cursor-pointer shadow-xs"
+                            >
+                              ❤️ চিকিৎসা সদকা জমা
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingSadaqahTxId(null);
+                                setSadaqahRecipName('');
+                                setSadaqahRecipPhone('');
+                                setSadaqahRecipAddr('');
+                                setSadaqahRecipSector('medical');
+                                setSadaqahRecipAmt('');
+                                setSadaqahRecipDesc('');
+                                setShowSadaqahDisburseForm(true);
+                                setQardActiveSection('sadaqah_recipients');
+                              }}
+                              className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-lg text-xs font-black transition cursor-pointer shadow-xs"
+                            >
+                              🎁 + চিকিৎসা দান বিতরণ
+                            </button>
+                          </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-3 gap-2">
                           <div className="bg-rose-50 border border-rose-200 p-2.5 rounded-xl">
-                            <span className="text-[10px] text-rose-800 font-bold block">মোট চিকিৎসা ফান্ড</span>
-                            <span className="text-base font-mono font-black text-rose-700">৳ {medicalStats.amount.toLocaleString('en-US')}</span>
+                            <span className="text-[10px] text-rose-800 font-bold block">চিকিৎসা জমা ({medicalStats.donorCount} জন)</span>
+                            <span className="text-base font-mono font-black text-rose-700">৳ {medicalStats.donatedAmt.toLocaleString('en-US')}</span>
                           </div>
-                          <div className="bg-slate-50 border border-slate-200 p-2.5 rounded-xl">
-                            <span className="text-[10px] text-slate-700 font-bold block">মোট দাতা সংখ্যা</span>
-                            <span className="text-base font-mono font-black text-slate-800">{medicalStats.count} জন দাতা</span>
+                          <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl">
+                            <span className="text-[10px] text-amber-800 font-bold block">বিতরণ ({medicalStats.recipientCount} জন)</span>
+                            <span className="text-base font-mono font-black text-amber-700">৳ {medicalStats.disbursedAmt.toLocaleString('en-US')}</span>
+                          </div>
+                          <div className="bg-teal-50 border border-teal-200 p-2.5 rounded-xl">
+                            <span className="text-[10px] text-teal-800 font-bold block">অবশিষ্ট ব্যালেন্স</span>
+                            <span className="text-base font-mono font-black text-teal-800">৳ {medicalStats.balanceAmt.toLocaleString('en-US')}</span>
                           </div>
                         </div>
-                        <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-72 overflow-y-auto">
-                          {medicalStats.items.length === 0 ? (
-                            <div className="p-5 text-center text-slate-400 text-xs font-bold">এই খাতে কোনো দানের রেকর্ড নেই</div>
-                          ) : (
-                            medicalStats.items.map((tx, idx) => (
-                              <div key={tx.id || idx} className="p-2.5 hover:bg-slate-50 flex items-center justify-between text-xs">
-                                <div>
-                                  <span className="font-black text-slate-900 block">{tx.senderName || tx.userName || 'চিকিৎসা দাতা'}</span>
-                                  <span className="text-[10px] text-slate-500 font-mono">{tx.senderPhone || tx.userPhone || '—'} • {tx.createdAt ? new Date(tx.createdAt).toLocaleDateString('bn-BD') : 'আজ'}</span>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-64 overflow-y-auto">
+                            <div className="px-3 py-1.5 bg-rose-50 text-[11px] font-black text-rose-900">দাতাদের তালিকা ({medicalStats.donorCount})</div>
+                            {medicalStats.donors.length === 0 ? (
+                              <div className="p-4 text-center text-slate-400 text-xs font-bold">কোনো দানের রেকর্ড নেই</div>
+                            ) : (
+                              medicalStats.donors.map((tx, idx) => (
+                                <div key={tx.id || idx} className="p-2.5 hover:bg-slate-50 flex items-center justify-between text-xs">
+                                  <div>
+                                    <span className="font-black text-slate-900 block">{tx.senderName || tx.userName || 'চিকিৎসা দাতা'}</span>
+                                    <span className="text-[10px] text-slate-500 font-mono">{tx.senderPhone || tx.userPhone || '—'} • {tx.createdAt ? new Date(tx.createdAt).toLocaleDateString('bn-BD') : 'আজ'}</span>
+                                  </div>
+                                  <span className="font-mono font-black text-emerald-700">+৳ {(Number(tx.amount) || 0).toLocaleString('en-US')}</span>
                                 </div>
-                                <span className="font-mono font-black text-rose-700">৳ {(Number(tx.amount) || 0).toLocaleString('en-US')}</span>
-                              </div>
-                            ))
-                          )}
+                              ))
+                            )}
+                          </div>
+                          <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-64 overflow-y-auto">
+                            <div className="px-3 py-1.5 bg-amber-50 text-[11px] font-black text-amber-900">যাদের দান করেছি / গ্রহীতা ({medicalStats.recipientCount})</div>
+                            {medicalStats.recipients.length === 0 ? (
+                              <div className="p-4 text-center text-slate-400 text-xs font-bold">কোনো বিতরণের রেকর্ড নেই</div>
+                            ) : (
+                              medicalStats.recipients.map((tx: any, idx) => (
+                                <div key={tx.id || idx} className="p-2.5 hover:bg-slate-50 flex items-center justify-between text-xs">
+                                  <div>
+                                    <span className="font-black text-slate-900 block">{tx.recipientName || tx.userName || 'চিকিৎসা গ্রহীতা'}</span>
+                                    <span className="text-[10px] text-slate-500 font-mono">{tx.recipientPhone || tx.userPhone || '—'} • {tx.createdAt ? new Date(tx.createdAt).toLocaleDateString('bn-BD') : 'আজ'}</span>
+                                  </div>
+                                  <span className="font-mono font-black text-rose-700">-৳ {(Number(tx.amount) || 0).toLocaleString('en-US')}</span>
+                                </div>
+                              ))
+                            )}
+                          </div>
                         </div>
                       </div>
                     )}
 
                     {/* ========================================================
-                        SECTION: 🎓 ৭. দরিদ্র শিক্ষার্থীদের শিক্ষা ফান্ড (EDUCATION)
+                        SADAQAH SECTOR 6: 🎓 দরিদ্র শিক্ষার্থীদের শিক্ষা ফান্ড (দাতা ও গ্রহীতা)
                        ======================================================== */}
                     {qardActiveSection === 'education' && (
                       <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-indigo-300 shadow-2xs space-y-4 text-left">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
                           <div>
                             <h4 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-2">
-                              🎓 7. দরিদ্র শিক্ষার্থীদের শিক্ষা ফান্ড (বৃত্তি ও উপকরণ)
+                              🎓 ৬. দরিদ্র শিক্ষার্থীদের শিক্ষা ফান্ড (দাতা ও গ্রহীতা)
                             </h4>
                             <span className="text-[10px] text-slate-500 font-bold block mt-0.5">
-                              অসচ্ছল ও মেধাবী শিক্ষার্থীদের বই, খাতা ও শিক্ষা বৃত্তি সহায়তা
+                              অসচ্ছল ও মেধাবী শিক্ষার্থীদের বই, খাতা ও বৃত্তি অনুদান জমা ও বিতরণ
                             </span>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => setQardShowDonateModal(true)}
-                            className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition cursor-pointer shadow-xs"
-                          >
-                            ❤️ শিক্ষা ফান্ডে দান যুক্ত করুন
-                          </button>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (setQardDonatePurpose) setQardDonatePurpose('education');
+                                setQardShowDonateModal(true);
+                              }}
+                              className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition cursor-pointer shadow-xs"
+                            >
+                              ❤️ শিক্ষা সদকা জমা
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingSadaqahTxId(null);
+                                setSadaqahRecipName('');
+                                setSadaqahRecipPhone('');
+                                setSadaqahRecipAddr('');
+                                setSadaqahRecipSector('education');
+                                setSadaqahRecipAmt('');
+                                setSadaqahRecipDesc('');
+                                setShowSadaqahDisburseForm(true);
+                                setQardActiveSection('sadaqah_recipients');
+                              }}
+                              className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-lg text-xs font-black transition cursor-pointer shadow-xs"
+                            >
+                              🎁 + শিক্ষা বৃত্তি বিতরণ
+                            </button>
+                          </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-3 gap-2">
                           <div className="bg-indigo-50 border border-indigo-200 p-2.5 rounded-xl">
-                            <span className="text-[10px] text-indigo-800 font-bold block">মোট শিক্ষা ফান্ড</span>
-                            <span className="text-base font-mono font-black text-indigo-700">৳ {educationStats.amount.toLocaleString('en-US')}</span>
+                            <span className="text-[10px] text-indigo-800 font-bold block">শিক্ষা জমা ({educationStats.donorCount} জন)</span>
+                            <span className="text-base font-mono font-black text-indigo-700">৳ {educationStats.donatedAmt.toLocaleString('en-US')}</span>
                           </div>
-                          <div className="bg-slate-50 border border-slate-200 p-2.5 rounded-xl">
-                            <span className="text-[10px] text-slate-700 font-bold block">মোট দাতা সংখ্যা</span>
-                            <span className="text-base font-mono font-black text-slate-800">{educationStats.count} জন দাতা</span>
+                          <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl">
+                            <span className="text-[10px] text-amber-800 font-bold block">বিতরণ ({educationStats.recipientCount} জন)</span>
+                            <span className="text-base font-mono font-black text-amber-700">৳ {educationStats.disbursedAmt.toLocaleString('en-US')}</span>
+                          </div>
+                          <div className="bg-teal-50 border border-teal-200 p-2.5 rounded-xl">
+                            <span className="text-[10px] text-teal-800 font-bold block">অবশিষ্ট ব্যালেন্স</span>
+                            <span className="text-base font-mono font-black text-teal-800">৳ {educationStats.balanceAmt.toLocaleString('en-US')}</span>
                           </div>
                         </div>
-                        <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-72 overflow-y-auto">
-                          {educationStats.items.length === 0 ? (
-                            <div className="p-5 text-center text-slate-400 text-xs font-bold">এই খাতে কোনো দানের রেকর্ড নেই</div>
-                          ) : (
-                            educationStats.items.map((tx, idx) => (
-                              <div key={tx.id || idx} className="p-2.5 hover:bg-slate-50 flex items-center justify-between text-xs">
-                                <div>
-                                  <span className="font-black text-slate-900 block">{tx.senderName || tx.userName || 'শিক্ষা দাতা'}</span>
-                                  <span className="text-[10px] text-slate-500 font-mono">{tx.senderPhone || tx.userPhone || '—'} • {tx.createdAt ? new Date(tx.createdAt).toLocaleDateString('bn-BD') : 'আজ'}</span>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-64 overflow-y-auto">
+                            <div className="px-3 py-1.5 bg-indigo-50 text-[11px] font-black text-indigo-900">দাতাদের তালিকা ({educationStats.donorCount})</div>
+                            {educationStats.donors.length === 0 ? (
+                              <div className="p-4 text-center text-slate-400 text-xs font-bold">কোনো দানের রেকর্ড নেই</div>
+                            ) : (
+                              educationStats.donors.map((tx, idx) => (
+                                <div key={tx.id || idx} className="p-2.5 hover:bg-slate-50 flex items-center justify-between text-xs">
+                                  <div>
+                                    <span className="font-black text-slate-900 block">{tx.senderName || tx.userName || 'শিক্ষা দাতা'}</span>
+                                    <span className="text-[10px] text-slate-500 font-mono">{tx.senderPhone || tx.userPhone || '—'} • {tx.createdAt ? new Date(tx.createdAt).toLocaleDateString('bn-BD') : 'আজ'}</span>
+                                  </div>
+                                  <span className="font-mono font-black text-emerald-700">+৳ {(Number(tx.amount) || 0).toLocaleString('en-US')}</span>
                                 </div>
-                                <span className="font-mono font-black text-indigo-700">৳ {(Number(tx.amount) || 0).toLocaleString('en-US')}</span>
-                              </div>
-                            ))
-                          )}
+                              ))
+                            )}
+                          </div>
+                          <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-64 overflow-y-auto">
+                            <div className="px-3 py-1.5 bg-amber-50 text-[11px] font-black text-amber-900">যাদের দান করেছি / শিক্ষার্থী ({educationStats.recipientCount})</div>
+                            {educationStats.recipients.length === 0 ? (
+                              <div className="p-4 text-center text-slate-400 text-xs font-bold">কোনো বিতরণের রেকর্ড নেই</div>
+                            ) : (
+                              educationStats.recipients.map((tx: any, idx) => (
+                                <div key={tx.id || idx} className="p-2.5 hover:bg-slate-50 flex items-center justify-between text-xs">
+                                  <div>
+                                    <span className="font-black text-slate-900 block">{tx.recipientName || tx.userName || 'শিক্ষার্থী'}</span>
+                                    <span className="text-[10px] text-slate-500 font-mono">{tx.recipientPhone || tx.userPhone || '—'} • {tx.createdAt ? new Date(tx.createdAt).toLocaleDateString('bn-BD') : 'আজ'}</span>
+                                  </div>
+                                  <span className="font-mono font-black text-rose-700">-৳ {(Number(tx.amount) || 0).toLocaleString('en-US')}</span>
+                                </div>
+                              ))
+                            )}
+                          </div>
                         </div>
                       </div>
                     )}
 
                     {/* ========================================================
-                        SECTION: 🚜 ৮. ক্ষুদ্র স্বনির্ভর ব্যবসা ফান্ড (MICRO BUSINESS)
+                        SADAQAH SECTOR 7: 🚜 ক্ষুদ্র স্বনির্ভর ও সাধারণ লিল্লা ফান্ড (দাতা ও গ্রহীতা)
                        ======================================================== */}
                     {qardActiveSection === 'micro' && (
                       <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-cyan-300 shadow-2xs space-y-4 text-left">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
                           <div>
                             <h4 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-2">
-                              🚜 8. ক্ষুদ্র স্বনির্ভর ব্যবসা ফান্ড (ভ্যান / সেলাই মেশিন)
+                              🚜 ৭. ক্ষুদ্র স্বনির্ভর ও সাধারণ লিল্লা ফান্ড (দাতা ও গ্রহীতা)
                             </h4>
                             <span className="text-[10px] text-slate-500 font-bold block mt-0.5">
-                              হতদরিদ্রদের আত্মকর্মসংস্থান ও ক্ষুদ্র উপকরণ প্রদান রেজিস্টার
+                              ভ্যান, সেলাই মেশিন, আত্মকর্মসংস্থান ও সাধারণ লিল্লা সদকা জমা এবং বিতরণ
                             </span>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => setQardShowDonateModal(true)}
-                            className="px-2.5 py-1 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg text-xs font-bold transition cursor-pointer shadow-xs"
-                          >
-                            ❤️ ক্ষুদ্র ব্যবসা ফান্ডে দান যুক্ত করুন
-                          </button>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (setQardDonatePurpose) setQardDonatePurpose('micro');
+                                setQardShowDonateModal(true);
+                              }}
+                              className="px-2.5 py-1 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg text-xs font-bold transition cursor-pointer shadow-xs"
+                            >
+                              ❤️ স্বনির্ভর সদকা জমা
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingSadaqahTxId(null);
+                                setSadaqahRecipName('');
+                                setSadaqahRecipPhone('');
+                                setSadaqahRecipAddr('');
+                                setSadaqahRecipSector('micro');
+                                setSadaqahRecipAmt('');
+                                setSadaqahRecipDesc('');
+                                setShowSadaqahDisburseForm(true);
+                                setQardActiveSection('sadaqah_recipients');
+                              }}
+                              className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-lg text-xs font-black transition cursor-pointer shadow-xs"
+                            >
+                              🎁 + স্বনির্ভর দান বিতরণ
+                            </button>
+                          </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-3 gap-2">
                           <div className="bg-cyan-50 border border-cyan-200 p-2.5 rounded-xl">
-                            <span className="text-[10px] text-cyan-800 font-bold block">মোট স্বনির্ভর ফান্ড</span>
-                            <span className="text-base font-mono font-black text-cyan-700">৳ {microStats.amount.toLocaleString('en-US')}</span>
+                            <span className="text-[10px] text-cyan-800 font-bold block">স্বনির্ভর ও লিল্লা জমা ({microAndGeneralStats.donorCount} জন)</span>
+                            <span className="text-base font-mono font-black text-cyan-700">৳ {microAndGeneralStats.donatedAmt.toLocaleString('en-US')}</span>
                           </div>
-                          <div className="bg-slate-50 border border-slate-200 p-2.5 rounded-xl">
-                            <span className="text-[10px] text-slate-700 font-bold block">মোট দাতা সংখ্যা</span>
-                            <span className="text-base font-mono font-black text-slate-800">{microStats.count} জন দাতা</span>
+                          <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl">
+                            <span className="text-[10px] text-amber-800 font-bold block">বিতরণ ({microAndGeneralStats.recipientCount} জন)</span>
+                            <span className="text-base font-mono font-black text-amber-700">৳ {microAndGeneralStats.disbursedAmt.toLocaleString('en-US')}</span>
+                          </div>
+                          <div className="bg-teal-50 border border-teal-200 p-2.5 rounded-xl">
+                            <span className="text-[10px] text-teal-800 font-bold block">অবশিষ্ট ব্যালেন্স</span>
+                            <span className="text-base font-mono font-black text-teal-800">৳ {microAndGeneralStats.balanceAmt.toLocaleString('en-US')}</span>
                           </div>
                         </div>
-                        <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-72 overflow-y-auto">
-                          {microStats.items.length === 0 ? (
-                            <div className="p-5 text-center text-slate-400 text-xs font-bold">এই খাতে কোনো দানের রেকর্ড নেই</div>
-                          ) : (
-                            microStats.items.map((tx, idx) => (
-                              <div key={tx.id || idx} className="p-2.5 hover:bg-slate-50 flex items-center justify-between text-xs">
-                                <div>
-                                  <span className="font-black text-slate-900 block">{tx.senderName || tx.userName || 'স্বনির্ভর দাতা'}</span>
-                                  <span className="text-[10px] text-slate-500 font-mono">{tx.senderPhone || tx.userPhone || '—'} • {tx.createdAt ? new Date(tx.createdAt).toLocaleDateString('bn-BD') : 'আজ'}</span>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-64 overflow-y-auto">
+                            <div className="px-3 py-1.5 bg-cyan-50 text-[11px] font-black text-cyan-900">দাতাদের তালিকা ({microAndGeneralStats.donorCount})</div>
+                            {microAndGeneralStats.donors.length === 0 ? (
+                              <div className="p-4 text-center text-slate-400 text-xs font-bold">কোনো দানের রেকর্ড নেই</div>
+                            ) : (
+                              microAndGeneralStats.donors.map((tx, idx) => (
+                                <div key={tx.id || idx} className="p-2.5 hover:bg-slate-50 flex items-center justify-between text-xs">
+                                  <div>
+                                    <span className="font-black text-slate-900 block">{tx.senderName || tx.userName || 'দাতা'}</span>
+                                    <span className="text-[10px] text-slate-500 font-mono">{tx.senderPhone || tx.userPhone || '—'} • {tx.createdAt ? new Date(tx.createdAt).toLocaleDateString('bn-BD') : 'আজ'}</span>
+                                  </div>
+                                  <span className="font-mono font-black text-emerald-700">+৳ {(Number(tx.amount) || 0).toLocaleString('en-US')}</span>
                                 </div>
-                                <span className="font-mono font-black text-cyan-700">৳ {(Number(tx.amount) || 0).toLocaleString('en-US')}</span>
-                              </div>
-                            ))
-                          )}
+                              ))
+                            )}
+                          </div>
+                          <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-64 overflow-y-auto">
+                            <div className="px-3 py-1.5 bg-amber-50 text-[11px] font-black text-amber-900">যাদের দান করেছি / গ্রহীতা ({microAndGeneralStats.recipientCount})</div>
+                            {microAndGeneralStats.recipients.length === 0 ? (
+                              <div className="p-4 text-center text-slate-400 text-xs font-bold">কোনো বিতরণের রেকর্ড নেই</div>
+                            ) : (
+                              microAndGeneralStats.recipients.map((tx: any, idx) => (
+                                <div key={tx.id || idx} className="p-2.5 hover:bg-slate-50 flex items-center justify-between text-xs">
+                                  <div>
+                                    <span className="font-black text-slate-900 block">{tx.recipientName || tx.userName || 'গ্রহীতা'}</span>
+                                    <span className="text-[10px] text-slate-500 font-mono">{tx.recipientPhone || tx.userPhone || '—'} • {tx.createdAt ? new Date(tx.createdAt).toLocaleDateString('bn-BD') : 'আজ'}</span>
+                                  </div>
+                                  <span className="font-mono font-black text-rose-700">-৳ {(Number(tx.amount) || 0).toLocaleString('en-US')}</span>
+                                </div>
+                              ))
+                            )}
+                          </div>
                         </div>
                       </div>
                     )}
 
                     {/* ========================================================
-                        SECTION: 🚨 ৯. জরুরি মানবিক ও দুর্যোগ ত্রাণ ফান্ড (EMERGENCY)
+                        SADAQAH SECTOR 8: 🚨 জরুরি মানবিক ও দুর্যোগ ত্রাণ ফান্ড (দাতা ও গ্রহীতা)
                        ======================================================== */}
                     {qardActiveSection === 'emergency' && (
                       <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-orange-300 shadow-2xs space-y-4 text-left">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
                           <div>
                             <h4 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-2">
-                              🚨 9. জরুরি মানবিক ও দুর্যোগ ত্রাণ ফান্ড
+                              🚨 ৮. জরুরি মানবিক ও দুর্যোগ ত্রাণ ফান্ড (দাতা ও গ্রহীতা)
                             </h4>
                             <span className="text-[10px] text-slate-500 font-bold block mt-0.5">
-                              বন্যা, দুর্যোগ ও আকস্মিক দুর্ঘটনায় জরুরি ত্রাণ ও পুনর্বাসন
+                              বন্যা, দুর্যোগ ও আকস্মিক দুর্ঘটনায় জরুরি ত্রাণ জমা এবং বিতরণ
                             </span>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => setQardShowDonateModal(true)}
-                            className="px-2.5 py-1 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold transition cursor-pointer shadow-xs"
-                          >
-                            ❤️ ত্রাণ ফান্ডে দান যুক্ত করুন
-                          </button>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (setQardDonatePurpose) setQardDonatePurpose('emergency');
+                                setQardShowDonateModal(true);
+                              }}
+                              className="px-2.5 py-1 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold transition cursor-pointer shadow-xs"
+                            >
+                              ❤️ ত্রাণ সদকা জমা
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingSadaqahTxId(null);
+                                setSadaqahRecipName('');
+                                setSadaqahRecipPhone('');
+                                setSadaqahRecipAddr('');
+                                setSadaqahRecipSector('emergency');
+                                setSadaqahRecipAmt('');
+                                setSadaqahRecipDesc('');
+                                setShowSadaqahDisburseForm(true);
+                                setQardActiveSection('sadaqah_recipients');
+                              }}
+                              className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-lg text-xs font-black transition cursor-pointer shadow-xs"
+                            >
+                              🎁 + ত্রাণ দান বিতরণ
+                            </button>
+                          </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-3 gap-2">
                           <div className="bg-orange-50 border border-orange-200 p-2.5 rounded-xl">
-                            <span className="text-[10px] text-orange-800 font-bold block">মোট জরুরি ত্রাণ ফান্ড</span>
-                            <span className="text-base font-mono font-black text-orange-700">৳ {emergencyStats.amount.toLocaleString('en-US')}</span>
+                            <span className="text-[10px] text-orange-800 font-bold block">জরুরি ত্রাণ জমা ({emergencyStats.donorCount} জন)</span>
+                            <span className="text-base font-mono font-black text-orange-700">৳ {emergencyStats.donatedAmt.toLocaleString('en-US')}</span>
                           </div>
-                          <div className="bg-slate-50 border border-slate-200 p-2.5 rounded-xl">
-                            <span className="text-[10px] text-slate-700 font-bold block">মোট দাতা সংখ্যা</span>
-                            <span className="text-base font-mono font-black text-slate-800">{emergencyStats.count} জন দাতা</span>
+                          <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl">
+                            <span className="text-[10px] text-amber-800 font-bold block">বিতরণ ({emergencyStats.recipientCount} জন)</span>
+                            <span className="text-base font-mono font-black text-amber-700">৳ {emergencyStats.disbursedAmt.toLocaleString('en-US')}</span>
+                          </div>
+                          <div className="bg-teal-50 border border-teal-200 p-2.5 rounded-xl">
+                            <span className="text-[10px] text-teal-800 font-bold block">অবশিষ্ট ব্যালেন্স</span>
+                            <span className="text-base font-mono font-black text-teal-800">৳ {emergencyStats.balanceAmt.toLocaleString('en-US')}</span>
                           </div>
                         </div>
-                        <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-72 overflow-y-auto">
-                          {emergencyStats.items.length === 0 ? (
-                            <div className="p-5 text-center text-slate-400 text-xs font-bold">এই খাতে কোনো দানের রেকর্ড নেই</div>
-                          ) : (
-                            emergencyStats.items.map((tx, idx) => (
-                              <div key={tx.id || idx} className="p-2.5 hover:bg-slate-50 flex items-center justify-between text-xs">
-                                <div>
-                                  <span className="font-black text-slate-900 block">{tx.senderName || tx.userName || 'ত্রাণ দাতা'}</span>
-                                  <span className="text-[10px] text-slate-500 font-mono">{tx.senderPhone || tx.userPhone || '—'} • {tx.createdAt ? new Date(tx.createdAt).toLocaleDateString('bn-BD') : 'আজ'}</span>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-64 overflow-y-auto">
+                            <div className="px-3 py-1.5 bg-orange-50 text-[11px] font-black text-orange-900">দাতাদের তালিকা ({emergencyStats.donorCount})</div>
+                            {emergencyStats.donors.length === 0 ? (
+                              <div className="p-4 text-center text-slate-400 text-xs font-bold">কোনো দানের রেকর্ড নেই</div>
+                            ) : (
+                              emergencyStats.donors.map((tx, idx) => (
+                                <div key={tx.id || idx} className="p-2.5 hover:bg-slate-50 flex items-center justify-between text-xs">
+                                  <div>
+                                    <span className="font-black text-slate-900 block">{tx.senderName || tx.userName || 'ত্রাণ দাতা'}</span>
+                                    <span className="text-[10px] text-slate-500 font-mono">{tx.senderPhone || tx.userPhone || '—'} • {tx.createdAt ? new Date(tx.createdAt).toLocaleDateString('bn-BD') : 'আজ'}</span>
+                                  </div>
+                                  <span className="font-mono font-black text-emerald-700">+৳ {(Number(tx.amount) || 0).toLocaleString('en-US')}</span>
                                 </div>
-                                <span className="font-mono font-black text-orange-700">৳ {(Number(tx.amount) || 0).toLocaleString('en-US')}</span>
-                              </div>
-                            ))
-                          )}
+                              ))
+                            )}
+                          </div>
+                          <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-64 overflow-y-auto">
+                            <div className="px-3 py-1.5 bg-amber-50 text-[11px] font-black text-amber-900">যাদের দান করেছি / ত্রাণ গ্রহীতা ({emergencyStats.recipientCount})</div>
+                            {emergencyStats.recipients.length === 0 ? (
+                              <div className="p-4 text-center text-slate-400 text-xs font-bold">কোনো বিতরণের রেকর্ড নেই</div>
+                            ) : (
+                              emergencyStats.recipients.map((tx: any, idx) => (
+                                <div key={tx.id || idx} className="p-2.5 hover:bg-slate-50 flex items-center justify-between text-xs">
+                                  <div>
+                                    <span className="font-black text-slate-900 block">{tx.recipientName || tx.userName || 'ত্রাণ গ্রহীতা'}</span>
+                                    <span className="text-[10px] text-slate-500 font-mono">{tx.recipientPhone || tx.userPhone || '—'} • {tx.createdAt ? new Date(tx.createdAt).toLocaleDateString('bn-BD') : 'আজ'}</span>
+                                  </div>
+                                  <span className="font-mono font-black text-rose-700">-৳ {(Number(tx.amount) || 0).toLocaleString('en-US')}</span>
+                                </div>
+                              ))
+                            )}
+                          </div>
                         </div>
                       </div>
                     )}
@@ -1582,60 +2877,25 @@ export function AdminQardSection(props: any) {
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
                           <div>
                             <h4 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-2">
-                              📋 1. করজে হাসানা ঋণ আবেদন ও যাচাই ({pendingQardLoanRequests.length} টি অপেক্ষমাণ আবেদন)
+                              📋 ৫. করজে হাসানা ১ মাস ঋণ আবেদন ও যাচাই ({pendingQardLoanRequests.length} টি অপেক্ষমাণ আবেদন)
                             </h4>
-                            <span className="text-[10px] text-slate-500 font-bold block mt-0.5">
-                              1 মাস ও 3 মাস মেয়াদে নেওয়া আবেদনসমূহ যাচাই, গ্রহণের তারিখ ও সরাসরি অনুমোদন করুন
+                            <span className="text-[10px] text-rose-700 font-bold block mt-0.5">
+                              সর্বোচ্চ মেয়াদ: ১ মাস / ৩০ দিন (পূর্বের ৩ মাস বাতিল) • ১ মাসে ফেরত না দিলে আজীবন ব্লক 🚫
                             </span>
                           </div>
 
-                          {/* Tenure Filter for Applications */}
+                          {/* Tenure Filter for Applications (Strict 1 Month Only) */}
                           <div className="flex items-center gap-1.5 flex-wrap">
-                            <button
-                              type="button"
-                              onClick={() => setQardTenureFilter('all')}
-                              className={`text-[10px] font-bold px-2.5 py-1 rounded-lg transition cursor-pointer ${
-                                qardTenureFilter === 'all'
-                                  ? 'bg-slate-900 text-white shadow-xs'
-                                  : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                              }`}
-                            >
-                              সকল ({pendingQardLoanRequests.length})
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setQardTenureFilter('1month')}
-                              className={`text-[10px] font-bold px-2.5 py-1 rounded-lg transition cursor-pointer ${
-                                qardTenureFilter === '1month'
-                                  ? 'bg-emerald-600 text-white shadow-xs'
-                                  : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200'
-                              }`}
-                            >
-                              1 মাস মেয়াদি ({pendingQardLoanRequests.filter(t => (t as any).durationMonths === 1 || (t as any).loanDuration === 1 || !(t as any).durationMonths || (t as any).durationMonths === '1').length})
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setQardTenureFilter('3months')}
-                              className={`text-[10px] font-bold px-2.5 py-1 rounded-lg transition cursor-pointer ${
-                                qardTenureFilter === '3months'
-                                  ? 'bg-blue-600 text-white shadow-xs'
-                                  : 'bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200'
-                              }`}
-                            >
-                              3 মাস মেয়াদি ({pendingQardLoanRequests.filter(t => (t as any).durationMonths === 3 || (t as any).loanDuration === 3 || (t as any).durationMonths === '3').length})
-                            </button>
+                            <span className="text-[10px] font-black px-2.5 py-1 rounded-lg bg-emerald-600 text-white shadow-xs">
+                              ⏱️ সকল আবেদন — ১ মাস (৩০ দিন) মেয়াদি ({pendingQardLoanRequests.length})
+                            </span>
                           </div>
                         </div>
 
                         {/* Dense List of Pending Loan Requests */}
                         <div className="border border-slate-200 rounded-xl bg-white shadow-2xs overflow-hidden divide-y divide-slate-100 max-h-[60vh] overflow-y-auto">
                           {(() => {
-                            const filteredApps = pendingQardLoanRequests.filter(tx => {
-                              const dur = Number((tx as any).durationMonths || (tx as any).loanDuration || 1);
-                              if (qardTenureFilter === '1month') return dur === 1;
-                              if (qardTenureFilter === '3months') return dur === 3;
-                              return true;
-                            });
+                            const filteredApps = pendingQardLoanRequests;
 
                             if (filteredApps.length === 0) {
                               return (
@@ -1650,13 +2910,13 @@ export function AdminQardSection(props: any) {
                               const reqAmt = Number(tx.amount) || 0;
                               const desiredDate = (tx as any).desiredDate || (tx as any).receivingDate || (tx as any).requestedDate || 'তাৎক্ষণিক';
                               const loanReason = (tx as any).loanReason || (tx as any).reason || tx.description || 'জরুরি প্রয়োজন';
-                              const appDuration = Number((tx as any).durationMonths || (tx as any).loanDuration || 1);
-                              const tenureBadge = appDuration === 3 ? '⏱️ 3 মাস মেয়াদি (90 দিন / 3 সমান কিস্তি)' : '⏱️ 1 মাস মেয়াদি (30 দিন)';
+                              const tenureBadge = '⏱️ ১ মাস মেয়াদি (৩০ দিন) — না দিলে আজীবন ব্লক';
+                              const isApplicantBanned = targetUser?.isLifetimeBannedFromQard === true;
 
                               return (
                                 <div
                                   key={tx.id || idx}
-                                  className="px-3 py-2.5 hover:bg-blue-50/50 transition flex flex-col justify-center gap-1.5 group/row border-b border-slate-100 last:border-b-0"
+                                  className={`px-3 py-2.5 hover:bg-blue-50/50 transition flex flex-col justify-center gap-1.5 group/row border-b border-slate-100 last:border-b-0 ${isApplicantBanned ? 'bg-rose-50/60' : ''}`}
                                 >
                                   {/* Line 1: User details + Tenure + Amount + Actions */}
                                   <div className="flex items-center justify-between gap-2 min-w-0">
@@ -1698,10 +2958,14 @@ export function AdminQardSection(props: any) {
                                         {tx.userPhone || targetUser?.phone || '—'}
                                       </span>
 
+                                      {isApplicantBanned && (
+                                        <span className="text-[8.5px] font-black px-2 py-0.5 rounded-md bg-rose-600 text-white shrink-0">
+                                          🚫 আজীবন ব্লককৃত
+                                        </span>
+                                      )}
+
                                       {/* Tenure Badge */}
-                                      <span className={`text-[8.5px] font-black px-2 py-0.5 rounded-md shrink-0 ${
-                                        appDuration === 3 ? 'bg-blue-100 text-blue-800 border border-blue-200' : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                                      }`}>
+                                      <span className="text-[8.5px] font-black px-2 py-0.5 rounded-md shrink-0 bg-emerald-100 text-emerald-800 border border-emerald-200">
                                         {tenureBadge}
                                       </span>
                                     </div>
@@ -1772,16 +3036,16 @@ export function AdminQardSection(props: any) {
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
                           <div>
                             <h4 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-2">
-                              ⚡ 2. সমিতি মেম্বার অটো-ঋণ ও ইনস্ট্যান্ট অনুমোদন হাব ({samityEligibleUsers.length} জন সঞ্চয়ী সদস্য)
+                              ⚡ ৬. সমিতি মেম্বার অটো-ঋণ ও ইনস্ট্যান্ট অনুমোদন হাব ({samityEligibleUsers.length} জন সঞ্চয়ী সদস্য)
                             </h4>
                             <span className="text-[10px] text-slate-500 font-bold block mt-0.5">
-                              সমিতি সঞ্চয় জমার বিপরীতে 1% হতে 50% তাৎক্ষণিক সুদমুক্ত ঋণ প্রদান (1 মাস বা 3 মাস মেয়াদে) ও ওয়ালেটে ক্যাশ ক্রেডিট
+                              সমিতি সঞ্চয় জমার বিপরীতে ৫০% তাৎক্ষণিক সুদমুক্ত ঋণ (সর্বোচ্চ ১ মাস / ৩০ দিন মেয়াদ — না দিলে আজীবন ব্লক)
                             </span>
                           </div>
 
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="text-[10px] font-bold bg-amber-50 text-amber-900 border border-amber-200 px-2.5 py-1 rounded-lg">
-                              📌 অটো-নীতিমালা: সঞ্চয়ের সর্বোচ্চ 50% পর্যন্ত ইনস্ট্যান্ট অটো-ঋণ
+                              📌 অটো-নীতিমালা: সঞ্চয়ের ৫০% • মেয়াদ: ১ মাস (৩০ দিন)
                             </span>
                           </div>
                         </div>
@@ -1795,15 +3059,15 @@ export function AdminQardSection(props: any) {
                           ) : (
                             samityEligibleUsers.map((u, idx) => {
                               const savingsAmt = Number(u.savings) || 0;
-                              const maxAutoLoan = Math.round(savingsAmt * 0.5); // 50% instant limit
+                              const maxAutoLoan = Math.round(savingsAmt * 0.5);
                               const currentDue = Number(u.dueLoan) || 0;
                               const mainBal = getUserMainWalletBalance(u);
-                              const existingDuration = Number((u as any).instantLoanDurationMonths || (u as any).loanDuration || 1);
+                              const isBanned = u.isLifetimeBannedFromQard === true;
 
                               return (
                                 <div
                                   key={u.id || idx}
-                                  className="px-3 py-2 hover:bg-emerald-50/60 transition flex flex-col justify-center gap-1 group/row border-b border-slate-100 last:border-b-0"
+                                  className={`px-3 py-2 hover:bg-emerald-50/60 transition flex flex-col justify-center gap-1 group/row border-b border-slate-100 last:border-b-0 ${isBanned ? 'bg-rose-50/50' : ''}`}
                                 >
                                   {/* Line 1 */}
                                   <div className="flex items-center justify-between gap-1.5 min-w-0">
@@ -1837,24 +3101,29 @@ export function AdminQardSection(props: any) {
                                         >
                                           👤 প্রোফাইল
                                         </button>
+                                        {isBanned && (
+                                          <span className="text-[8px] bg-rose-600 text-white font-black px-1.5 py-0.5 rounded shrink-0">
+                                            🚫 আজীবন ব্লক
+                                          </span>
+                                        )}
                                       </div>
                                     </div>
 
-                                    {/* Action Buttons: 1 Month vs 3 Months Instant Loan Disburse */}
+                                    {/* Action Button: Strict 1 Month Instant Loan Disburse */}
                                     <div className="flex items-center gap-1 shrink-0">
                                       <button
                                         type="button"
-                                        onClick={() => handleInstantDisburseSamityLoan(u, maxAutoLoan, 1)}
-                                        className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[9.5px] rounded-lg shadow-xs transition flex items-center gap-1 cursor-pointer"
+                                        disabled={isBanned}
+                                        onClick={() => handleInstantDisburseSamityLoan(u, maxAutoLoan)}
+                                        className={`px-2.5 py-1 font-black text-[9.5px] rounded-lg shadow-xs transition flex items-center gap-1 ${
+                                          isBanned
+                                            ? 'bg-rose-200 text-rose-800 cursor-not-allowed opacity-70'
+                                            : 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer'
+                                        }`}
                                       >
-                                        ⚡ 1 মাস মেয়াদে 50% ঋণ (৳{maxAutoLoan.toLocaleString('en-US')})
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleInstantDisburseSamityLoan(u, maxAutoLoan, 3)}
-                                        className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white font-black text-[9.5px] rounded-lg shadow-xs transition flex items-center gap-1 cursor-pointer"
-                                      >
-                                        ⚡ 3 মাস মেয়াদে 50% ঋণ
+                                        {isBanned
+                                          ? '🚫 আজীবন ব্লককৃত'
+                                          : `⚡ ১ মাস মেয়াদে ৫০% ঋণ (৳${maxAutoLoan.toLocaleString('en-US')})`}
                                       </button>
                                     </div>
                                   </div>
@@ -1874,7 +3143,7 @@ export function AdminQardSection(props: any) {
                                     <div className="flex items-center gap-1.5 shrink-0 text-slate-500 font-mono text-[9px]">
                                       {currentDue > 0 ? (
                                         <span className="text-rose-700 font-bold bg-rose-50 px-1.5 py-0.2 rounded border border-rose-200">
-                                          বর্তমান বকেয়া: ৳{currentDue.toLocaleString('en-US')} ({existingDuration === 3 ? '3 মাস' : '1 মাস'})
+                                          বর্তমান বকেয়া: ৳{currentDue.toLocaleString('en-US')} (১ মাস)
                                         </span>
                                       ) : (
                                         <span className="text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
@@ -1929,7 +3198,7 @@ export function AdminQardSection(props: any) {
                           if (customDateStr) {
                             newDate = new Date(customDateStr);
                           } else {
-                            const current = loan.expiryDate ? new Date(loan.expiryDate) : new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+                            const current = loan.expiryDate ? new Date(loan.expiryDate) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
                             newDate = new Date(current.getTime() + daysDelta * 24 * 60 * 60 * 1000);
                           }
 
@@ -2130,7 +3399,7 @@ export function AdminQardSection(props: any) {
                                 
                                 const expDate = loan.expiryDate ? new Date(loan.expiryDate) : null;
                                 const isOverdue = expDate ? expDate.getTime() < Date.now() : false;
-                                const daysLeft = expDate ? Math.ceil((expDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)) : 90;
+                                const daysLeft = expDate ? Math.ceil((expDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)) : 30;
 
                                 return (
                                   <div
@@ -2216,7 +3485,7 @@ export function AdminQardSection(props: any) {
                                         <div className="flex items-center justify-between">
                                           <span className="text-slate-600">ভল্ট সুরক্ষার শেষ তারিখ:</span>
                                           <span className={`font-mono font-bold ${isOverdue && isSafeInVault ? 'text-rose-600' : 'text-slate-900'}`}>
-                                            {expDate ? expDate.toLocaleDateString('bn-BD') : '3 মাস মেয়াদে'}
+                                            {expDate ? expDate.toLocaleDateString('bn-BD') : '১ মাস (৩০ দিন)'}
                                           </span>
                                         </div>
                                         <div className="flex items-center justify-between">
@@ -2321,14 +3590,26 @@ export function AdminQardSection(props: any) {
                         <div className="flex flex-col lg:flex-row lg:items-center justify-between border-b border-slate-100 pb-3 gap-2">
                           <div>
                             <h4 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-2">
-                              📅 4. ঋণ মেয়াদ, পরিশোধ শিডিউল ও ওভারডিউ জরিমানা হাব ({scheduleList.length} জন মোট ঋণগ্রহীতা)
+                              🚫 ৮. ঋণ মেয়াদ (সর্বোচ্চ ১ মাস), ওভারডিউ ও আজীবন ব্লক হাব ({scheduleList.length} জন গ্রহীতা)
                             </h4>
-                            <span className="text-[10px] text-slate-500 font-bold block mt-0.5">
-                              1 মাস মেয়াদি ও 3 মাস মেয়াদি ঋণগ্রহীতাদের তালিকা, পরবর্তী কিস্তির ডেট ট্র্যাকিং এবং নির্ধারিত সময়ে টাকা না দিলে অটো-জরিমানা কর্তন
+                            <span className="text-[10px] text-rose-700 font-bold block mt-0.5">
+                              সর্বোচ্চ মেয়াদ ১ মাস (৩০ দিন) — নির্ধারিত সময়ে পরিশোধ না করলে সদস্য আজীবনের জন্য ব্লক (LIFETIME BANNED) হয়ে যাবে।
                             </span>
                           </div>
 
                           <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                            {/* Bulk Permanent Ban for Overdue */}
+                            {overdueList.filter(s => !s.user.isLifetimeBannedFromQard).length > 0 && (
+                              <button
+                                type="button"
+                                onClick={handleBulkBanOverdueBorrowers}
+                                disabled={isBulkBanningOverdue}
+                                className="px-3 py-1.5 bg-slate-950 hover:bg-rose-800 text-rose-300 border border-rose-500/60 font-black text-xs rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                              >
+                                <span>{isBulkBanningOverdue ? 'ব্লক চলছে...' : `🚫 ওভারডিউদের আজীবন ব্লক করুন (${overdueList.filter(s => !s.user.isLifetimeBannedFromQard).length} জন)`}</span>
+                              </button>
+                            )}
+
                             {/* Bulk Auto Fine Deduct */}
                             {overdueList.length > 0 && (
                               <button
@@ -2338,7 +3619,7 @@ export function AdminQardSection(props: any) {
                                 className="px-3.5 py-1.5 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-700 hover:to-red-700 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 animate-pulse"
                               >
                                 <AlertTriangle className={`w-3.5 h-3.5 ${isBulkPenaltyDeducting ? 'animate-spin' : ''}`} />
-                                <span>{isBulkPenaltyDeducting ? 'জরিমানা কর্তন চলছে...' : `🚨 1-ক্লিকে ওভারডিউ জরিমানা অটো-কর্তন (${overdueList.length} জন • ৳${totalOverduePenaltySum})`}</span>
+                                <span>{isBulkPenaltyDeducting ? 'জরিমানা কর্তন চলছে...' : `🚨 1-ক্লিকে ওভারডিউ জরিমানা (${overdueList.length} জন • ৳${totalOverduePenaltySum})`}</span>
                               </button>
                             )}
 
@@ -2356,56 +3637,27 @@ export function AdminQardSection(props: any) {
                               className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                             >
                               <RefreshCw className={`w-3.5 h-3.5 ${isBulkDeductingQard ? 'animate-spin' : ''}`} />
-                              <span>{isBulkDeductingQard ? 'অটো কর্তন চলছে...' : '⚡ 1-ক্লিকে মেইন ব্যালেন্স হতে কিস্তি অটো-কর্তন'}</span>
+                              <span>{isBulkDeductingQard ? 'অটো কর্তন চলছে...' : '⚡ 1-ক্লিকে কিস্তি অটো-কর্তন'}</span>
                             </button>
                           </div>
                         </div>
 
-                        {/* Top Tenure Filter Tabs (1 মাস মেয়াদি / 3 মাস মেয়াদি / সকল) */}
+                        {/* Strict 1-Month Banner (3-Month Removed) */}
                         <div className="bg-slate-50 p-2 rounded-xl border border-slate-200 flex items-center justify-between gap-2 flex-wrap">
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="text-[10px] font-black text-slate-700 flex items-center gap-1">
-                              ⏱️ ঋণের মেয়াদ ফিল্টারঃ
+                              ⏱️ অনুমোদিত মেয়াদ:
                             </span>
-                            <button
-                              type="button"
-                              onClick={() => setQardTenureFilter('all')}
-                              className={`text-[10px] font-bold px-2.5 py-1 rounded-lg transition cursor-pointer ${
-                                qardTenureFilter === 'all'
-                                  ? 'bg-slate-900 text-white shadow-xs'
-                                  : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
-                              }`}
-                            >
-                              সকল মেয়াদ ({scheduleList.length} জন)
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setQardTenureFilter('1month')}
-                              className={`text-[10px] font-bold px-2.5 py-1 rounded-lg transition cursor-pointer flex items-center gap-1 ${
-                                qardTenureFilter === '1month'
-                                  ? 'bg-emerald-600 text-white shadow-xs'
-                                  : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200'
-                              }`}
-                            >
-                              <span>🟢 1 মাস মেয়াদি</span>
-                              <span className="font-mono">({oneMonthBorrowers.length})</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setQardTenureFilter('3months')}
-                              className={`text-[10px] font-bold px-2.5 py-1 rounded-lg transition cursor-pointer flex items-center gap-1 ${
-                                qardTenureFilter === '3months'
-                                  ? 'bg-blue-600 text-white shadow-xs'
-                                  : 'bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200'
-                              }`}
-                            >
-                              <span>🔵 3 মাস মেয়াদি</span>
-                              <span className="font-mono">({threeMonthBorrowers.length})</span>
-                            </button>
+                            <span className="text-[10px] font-black px-2.5 py-1 rounded-lg bg-emerald-600 text-white shadow-xs">
+                              🟢 শুধুমাত্র ১ মাস (৩০ দিন) — {oneMonthBorrowers.length} জন গ্রহীতা
+                            </span>
+                            <span className="text-[10px] font-black px-2.5 py-1 rounded-lg bg-rose-100 text-rose-800 border border-rose-200">
+                              🚫 আজীবন ব্লককৃত: {lifetimeBannedUsers.length} জন
+                            </span>
                           </div>
 
-                          <div className="text-[9.5px] text-slate-500 font-bold">
-                            ⚠️ বিলম্ব জরিমানা নিয়ম: নির্ধারিত দিন পার হলে প্রতিদিন প্রতি 1,000 টাকায় 10৳ অটো-জরিমানা ধার্য
+                          <div className="text-[9.5px] text-rose-700 font-bold">
+                            ⚠️ ১ মাসে (৩০ দিনে) ফেরত না দিলে আজীবনের জন্য কর্জে হাসানা ব্লক!
                           </div>
                         </div>
 
@@ -2507,22 +3759,9 @@ export function AdminQardSection(props: any) {
                           const bengaliMonthNames = ['জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'];
                           
                           const monthlyStats = bengaliMonthNames.map((mName, mIdx) => {
-                            const matchingBorrowers = scheduleList.filter(s => {
-                              if (mIdx === currentMonth) return true;
-                              if (s.tenureMonths === 3) {
-                                const offset = (mIdx - currentMonth + 12) % 12;
-                                return offset >= 0 && offset < 3;
-                              }
-                              return false;
-                            });
-
+                            const matchingBorrowers = mIdx === currentMonth ? scheduleList : [];
                             const count = matchingBorrowers.length;
-                            const totalAmt = matchingBorrowers.reduce((sum, s) => {
-                              if (s.tenureMonths === 3 && mIdx !== currentMonth) {
-                                return sum + Math.ceil(s.dueAmt / 3);
-                              }
-                              return sum + (s.tenureMonths === 3 ? Math.ceil(s.dueAmt / (3 - (s.daysElapsed > 60 ? 2 : (s.daysElapsed > 30 ? 1 : 0)))) : s.dueAmt);
-                            }, 0);
+                            const totalAmt = matchingBorrowers.reduce((sum, s) => sum + s.dueAmt, 0);
 
                             return {
                               monthIndex: mIdx,
@@ -2724,13 +3963,6 @@ export function AdminQardSection(props: any) {
                         <div className="border border-slate-200 rounded-xl bg-white shadow-2xs overflow-hidden divide-y divide-slate-100 max-h-[60vh] overflow-y-auto">
                           {(() => {
                             let displayList = scheduleList;
-
-                            // Apply tenure filter
-                            if (qardTenureFilter === '1month') {
-                              displayList = displayList.filter(s => s.tenureMonths === 1);
-                            } else if (qardTenureFilter === '3months') {
-                              displayList = displayList.filter(s => s.tenureMonths === 3);
-                            }
 
                             // Apply calendar status filter
                             if (qardCalendarSpecificDay !== 'all') {
@@ -3318,12 +4550,15 @@ export function AdminQardSection(props: any) {
                           </div>
 
                           <div className="space-y-1">
-                            <label className="text-[11px] font-black text-emerald-200 block">সর্বোচ্চ মেয়াদ (মাস):</label>
+                            <label className="text-[11px] font-black text-emerald-200 block">সর্বোচ্চ মেয়াদ (১ মাস ফিক্সড):</label>
                             <input
                               type="number"
-                              value={qardCoopInstantMaxDuration}
-                              onChange={(e) => setQardCoopInstantMaxDuration(Number(e.target.value))}
+                              min={1}
+                              max={1}
+                              value={1}
+                              onChange={() => setQardCoopInstantMaxDuration(1)}
                               className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono font-bold text-white outline-none focus:ring-1 focus:ring-emerald-400"
+                              readOnly
                             />
                           </div>
                         </div>
@@ -3697,14 +4932,13 @@ export function AdminQardSection(props: any) {
                         />
                       </div>
                       <div>
-                        <label className="block mb-1">পরিশোধের মেয়াদ:</label>
+                        <label className="block mb-1">পরিশোধের মেয়াদ (সর্বোচ্চ ১ মাস):</label>
                         <select
-                          value={qardDirectDuration}
-                          onChange={(e) => setQardDirectDuration(Number(e.target.value))}
+                          value={1}
+                          onChange={() => setQardDirectDuration(1)}
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-800 outline-none focus:ring-1 focus:ring-emerald-500"
                         >
-                          <option value={1}>1 মাস (30 দিন)</option>
-                          <option value={3}>3 মাস (3 কিস্তি)</option>
+                          <option value={1}>১ মাস (৩০ দিন) — না দিলে আজীবন ব্লক</option>
                         </select>
                       </div>
                     </div>
@@ -3806,7 +5040,8 @@ export function AdminQardSection(props: any) {
                           onChange={(e) => setQardDonatePurpose(e.target.value)}
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-800 outline-none focus:ring-1 focus:ring-rose-500"
                         >
-                          <option value="general">সাধারণ কল্যাণ ফান্ড</option>
+                          <option value="general">সাধারণ কর্জে হাসানা তহবিল</option>
+                          <option value="general_charity">সদকায়ে জারিয়া / লিল্লা ফান্ড</option>
                           <option value="medical">চিকিৎসা সহায়তা</option>
                           <option value="education">শিক্ষা সহায়তা</option>
                           <option value="micro">ক্ষুদ্র ব্যবসা সহায়তা</option>

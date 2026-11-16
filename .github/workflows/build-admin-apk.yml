@@ -1,0 +1,91 @@
+name: Build Standalone Admin Panel APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-admin-apk:
+    name: Build Signed Admin Panel APK (com.bnb.business.admin)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Java JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Accept Android SDK Licenses & Install Required Platforms
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "build-tools;36.0.0" "platforms;android-35" "build-tools;35.0.0" || true
+
+      - name: Install Node Dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Generate Official Green BNB App Icons
+        run: node scripts/generate-official-icons.mjs
+
+      - name: Build Admin Web Production Bundle (VITE_APP_VARIANT=admin)
+        env:
+          VITE_APP_VARIANT: admin
+        run: |
+          rm -rf public/assets/aistudio
+          npm run build
+          rm -rf dist/assets/aistudio
+
+      - name: Configure Isolated Admin Android Package (com.bnb.business.admin)
+        run: node scripts/prepare-admin-android.mjs
+
+      - name: Sync Capacitor Android (Admin Variant)
+        run: npx cap sync android
+
+      - name: Setup Release Keystore for Admin APK
+        run: |
+          mkdir -p android/app
+          if [ -n "${{ secrets.ADMIN_RELEASE_KEYSTORE_BASE64 }}" ]; then
+            echo "Loading Admin keystore from ADMIN_RELEASE_KEYSTORE_BASE64..."
+            echo "${{ secrets.ADMIN_RELEASE_KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
+          elif [ -n "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" ]; then
+            echo "Loading keystore from RELEASE_KEYSTORE_BASE64..."
+            echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
+          elif [ ! -f android/app/release.keystore ] || [ ! -s android/app/release.keystore ]; then
+            echo "Generating fallback release.keystore for Admin APK..."
+            keytool -genkeypair -v -keystore android/app/release.keystore -alias almayadin -keypass almayadin123 -storepass almayadin123 -validity 10000 -dname "CN=BNB Admin Panel, O=BNB, C=BD" -keyalg RSA -keysize 2048 -storetype PKCS12
+          fi
+
+      - name: Grant Execute Permission to Gradle Wrapper
+        run: chmod +x android/gradlew
+
+      - name: Build Signed Standalone Admin APK
+        run: |
+          cd android
+          echo "=== Building Signed Standalone Admin Panel APK ==="
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Prepare Versioned Admin APK Artifact
+        run: |
+          mkdir -p final-admin-apk
+          VERSION_CODE=$(grep -m1 "versionCode" android/app/build.gradle | awk '{print $2}' | tr -d '\r\n' || echo "release")
+          BUILD_TAG="v${VERSION_CODE}-run${GITHUB_RUN_NUMBER}"
+          find android/app/build/outputs/apk/release -name "*.apk" -exec cp {} "final-admin-apk/BNB-Admin-Panel-${BUILD_TAG}.apk" \;
+          ls -lh final-admin-apk/
+          test -n "$(ls -A final-admin-apk/*.apk 2>/dev/null)"
+
+      - name: Upload Admin Panel APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BNB-Admin-Panel-APK
+          path: final-admin-apk/*
+          compression-level: 6
+          retention-days: 30

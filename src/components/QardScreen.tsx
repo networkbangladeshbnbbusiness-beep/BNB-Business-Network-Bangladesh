@@ -7,6 +7,7 @@ import { hasCompletedSamityProfile, getMissingProfileFields, getMembershipCatego
 import BNBPaymentReceiptModal from './BNBPaymentReceiptModal';
 import UnifiedBackButton from './UnifiedBackButton';
 import { useBackHandler } from '../lib/navigationManager';
+import { isStandaloneAdminRoute } from '../lib/adminRoute';
 import { 
   collection, 
   query, 
@@ -777,9 +778,9 @@ BNB Business Co-operative Welfare Fund
     }
   };
 
-  // Auto-Engine for Qard Hasana:
-  // 1. 2-Day Reminder Notification before due date (for 1-Month or 3-Month installments)
-  // 2. Automated Daily Late Fine (10 BDT per 1,000 BDT per day after 30 days / overdue date) with auto-deduction from wallet balance
+  // Auto-Engine for Qard Hasana (STRICT 1-Month / 30-Day Rule + Lifetime Block on Default):
+  // 1. 2-Day Reminder Notification before 30-day due date
+  // 2. Automated Daily Late Fine + Permanent Lifetime Block if overdue beyond 30 days
   useEffect(() => {
     if (!user || !user.uid) return;
     const dueLoan = user.dueLoan || 0;
@@ -789,170 +790,109 @@ BNB Business Co-operative Welfare Fund
     const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     const nowIso = now.toISOString();
 
-    const duration = user.instantLoanDurationMonths || user.loanDuration || 1;
     const takenTimeStr = user.instantLoanTakenAt || user.lastCoopInstantLoanAt || user.loanTakenAt;
     const takenTime = takenTimeStr ? new Date(takenTimeStr).getTime() : now.getTime();
     const daysElapsed = Math.floor((now.getTime() - takenTime) / (1000 * 60 * 60 * 24));
 
-    // A. 1-MONTH (30 DAYS / NEXT MONTH SAME DATE) LOAN SYSTEM
-    if (duration === 1) {
-      // 1. 2-Day Warning Notification (Days 28 to 30)
-      if (daysElapsed >= 28 && daysElapsed <= 30) {
-        const reminderCycleKey = `remind_1m_${takenTimeStr || 'init'}`;
-        if (user.lastQardDueReminderCycle !== reminderCycleKey) {
-          const daysLeft = Math.max(0, 30 - daysElapsed);
-          addDoc(collection(db, 'user_notifications'), {
-            userId: user.uid,
-            title: '⚠️ করযে হাসানা ঋণ পরিশোধের সতর্কতা (২ দিন বাকি)',
-            message: `আপনার ৳${dueLoan.toLocaleString('en-US')} করযে হাসানা ঋণের ৩০ দিন মেয়াদের আর মাত্র ${daysLeft === 0 ? 'আজকেই শেষ দিন (পরের মাসের একই তারিখ)' : `${daysLeft} দিন বাকি`}। অতিরিক্ত জরিমানা এড়াতে অবিলম্বে ঋণ পরিশোধ করুন, অন্যথায় ৩০ দিন অতিক্রান্ত হলে প্রতিদিন প্রতি ১,০০০ টাকায় ১০ টাকা বিলম্ব জরিমানা অটোমেটিক মেইন ব্যালেন্স থেকে কর্তন করা শুরু হবে।`,
-            body: `আপনার ৳${dueLoan.toLocaleString('en-US')} করযে হাসানা ঋণের ৩০ দিন মেয়াদের আর মাত্র ${daysLeft === 0 ? 'আজকেই শেষ দিন (পরের মাসের একই তারিখ)' : `${daysLeft} দিন বাকি`}। অতিরিক্ত জরিমানা এড়াতে অবিলম্বে ঋণ পরিশোধ করুন, অন্যথায় ৩০ দিন অতিক্রান্ত হলে প্রতিদিন প্রতি ১,০০০ টাকায় ১০ টাকা বিলম্ব জরিমানা অটোমেটিক মেইন ব্যালেন্স থেকে কর্তন করা শুরু হবে।`,
-            type: 'qard_due_warning',
-            read: false,
-            createdAt: nowIso
-          });
-          updateDoc(doc(db, 'users', user.uid), {
-            lastQardDueReminderCycle: reminderCycleKey
-          });
-          user.lastQardDueReminderCycle = reminderCycleKey;
-        }
-      }
-
-      // 2. Overdue Late Fine (Day 31+) - Never silently deduct from user's main wallet balance in background; add to dueLoan only
-      if (daysElapsed > 30) {
-        if (user.lastQardFineDate !== todayKey) {
-          const dailyFine = Math.max(10, Math.floor(dueLoan / 1000) * 10);
-          const newDue = dueLoan + dailyFine;
-
-          const userRef = doc(db, 'users', user.uid);
-          updateDoc(userRef, {
-            dueLoan: newDue,
-            lastQardFineDate: todayKey,
-            totalQardFine: (user.totalQardFine || 0) + dailyFine
-          }).then(() => {
-            addDoc(collection(db, 'transactions'), {
-              userId: user.uid,
-              userName: user.name,
-              memberId: user.memberId || user.phone,
-              type: 'qard_fine',
-              typeLabel: 'করযে হাসানা বিলম্ব জরিমানা যুক্ত',
-              amount: dailyFine,
-              status: 'success',
-              category: 'qard_late_fine',
-              description: `⚠️ করযে হাসানা ঋণের ৩০ দিন মেয়াদ অতিক্রান্ত হওয়ায় (${daysElapsed - 30}তম দিন ওভারডিউ) আজ ${todayKey}-এ প্রতি হাজারে ১০ টাকা হারে ৳${dailyFine.toLocaleString('en-US')} বিলম্ব জরিমানা বকেয়া ঋণে যুক্ত করা হয়েছে।`,
-              paymentMethod: 'AUTO_FINE',
-              receiptNo: `FINE-${Math.floor(100000 + Math.random() * 900000)}`,
-              createdAt: nowIso
-            });
-
-            addDoc(collection(db, 'user_notifications'), {
-              userId: user.uid,
-              title: '⚠️ করযে হাসানা বিলম্ব জরিমানা যুক্ত',
-              message: `আপনার করযে হাসানা ঋণের ৩০ দিনের মেয়াদ অতিক্রান্ত হওয়ায় আজ (${todayKey}) নিয়ম অনুযায়ী প্রতি ১,০০০ টাকায় ১০ টাকা হারে ৳${dailyFine.toLocaleString('en-US')} বিলম্ব জরিমানা বকেয়া ঋণে যুক্ত করা হয়েছে। অতিরিক্ত জরিমানা এড়াতে অবিলম্বে সম্পূর্ণ ঋণ পরিশোধ করুন।`,
-              body: `আপনার করযে হাসানা ঋণের ৩০ দিনের মেয়াদ অতিক্রান্ত হওয়ায় আজ (${todayKey}) নিয়ম অনুযায়ী প্রতি ১,০০০ টাকায় ১০ টাকা হারে ৳${dailyFine.toLocaleString('en-US')} বিলম্ব জরিমানা বকেয়া ঋণে যুক্ত করা হয়েছে। অতিরিক্ত জরিমানা এড়াতে অবিলম্বে সম্পূর্ণ ঋণ পরিশোধ করুন।`,
-              type: 'qard_fine_charged',
-              read: false,
-              createdAt: nowIso
-            });
-
-            user.dueLoan = newDue;
-            user.lastQardFineDate = todayKey;
-            user.totalQardFine = (user.totalQardFine || 0) + dailyFine;
-          }).catch((err) => console.error("Fine charge error:", err));
-        }
-      }
-    } 
-    // B. 3-MONTH (3 INSTALLMENTS) LOAN SYSTEM
-    else {
-      let stage = 1;
-      let isWarningWindow = false;
-      let isOverdue = false;
-      let stageLabel = '১ম কিস্তি';
-
-      if (daysElapsed <= 30) {
-        stage = 1;
-        stageLabel = '১ম কিস্তি';
-        if (daysElapsed >= 28) isWarningWindow = true;
-      } else if (daysElapsed <= 60) {
-        stage = 2;
-        stageLabel = '২য় কিস্তি';
-        if (daysElapsed >= 58) isWarningWindow = true;
-      } else if (daysElapsed <= 90) {
-        stage = 3;
-        stageLabel = '৩য় কিস্তি';
-        if (daysElapsed >= 88) isWarningWindow = true;
-      } else {
-        stage = 3;
-        stageLabel = '৩য় কিস্তি';
-        isOverdue = true;
-      }
-
-      // 1. 2-Day Warning Notification for current installment
-      if (isWarningWindow) {
-        const reminderCycleKey = `remind_3m_stage${stage}_${takenTimeStr || 'init'}`;
-        if (user.lastQardDueReminderCycle !== reminderCycleKey) {
-          const targetDay = stage * 30;
-          const daysLeft = Math.max(0, targetDay - daysElapsed);
-          addDoc(collection(db, 'user_notifications'), {
-            userId: user.uid,
-            title: `⚠️ করযে হাসানা ${stageLabel} পরিশোধের সতর্কতা (২ দিন বাকি)`,
-            message: `আপনার করযে হাসানা ৩ মাস মেয়াদী ঋণের ${stageLabel} পরিশোধের মেয়াদ শেষ হতে আর মাত্র ${daysLeft === 0 ? 'আজকেই শেষ দিন' : `${daysLeft} দিন বাকি`}। অতিরিক্ত জরিমানা এড়াতে কিস্তি পরিশোধ করুন, অন্যথায় ৩০ দিন মেয়াদ পার হলে প্রতিদিন হাজারে ১০ টাকা বিলম্ব জরিমানা অটো কর্তন শুরু হবে।`,
-            body: `আপনার করযে হাসানা ৩ মাস মেয়াদী ঋণের ${stageLabel} পরিশোধের মেয়াদ শেষ হতে আর মাত্র ${daysLeft === 0 ? 'আজকেই শেষ দিন' : `${daysLeft} দিন বাকি`}। অতিরিক্ত জরিমানা এড়াতে কিস্তি পরিশোধ করুন, অন্যথায় ৩০ দিন মেয়াদ পার হলে প্রতিদিন হাজারে ১০ টাকা বিলম্ব জরিমানা অটো কর্তন শুরু হবে।`,
-            type: 'qard_due_warning',
-            read: false,
-            createdAt: nowIso
-          });
-          updateDoc(doc(db, 'users', user.uid), {
-            lastQardDueReminderCycle: reminderCycleKey
-          });
-          user.lastQardDueReminderCycle = reminderCycleKey;
-        }
-      }
-
-      // 2. Overdue Late Fine for 3-Month Loan (never silently deduct from user's main wallet balance in background)
-      if (isOverdue || (stage === 1 && daysElapsed > 30 && !user.lastAutoDeductedMonth) || (stage === 2 && daysElapsed > 60)) {
-        if (user.lastQardFineDate !== todayKey) {
-          const dailyFine = Math.max(10, Math.floor(dueLoan / 1000) * 10);
-          const newDue = dueLoan + dailyFine;
-
-          const userRef = doc(db, 'users', user.uid);
-          updateDoc(userRef, {
-            dueLoan: newDue,
-            lastQardFineDate: todayKey,
-            totalQardFine: (user.totalQardFine || 0) + dailyFine
-          }).then(() => {
-            addDoc(collection(db, 'transactions'), {
-              userId: user.uid,
-              userName: user.name,
-              memberId: user.memberId || user.phone,
-              type: 'qard_fine',
-              typeLabel: 'করযে হাসানা বিলম্ব জরিমানা যুক্ত',
-              amount: dailyFine,
-              status: 'success',
-              category: 'qard_late_fine',
-              description: `⚠️ করযে হাসানা ৩ মাস মেয়াদী ঋণের কিস্তির ৩০ দিন মেয়াদ অতিক্রান্ত হওয়ায় আজ ${todayKey}-এ প্রতি হাজারে ১০ টাকা হারে ৳${dailyFine.toLocaleString('en-US')} বিলম্ব জরিমানা বকেয়া ঋণে যুক্ত করা হয়েছে।`,
-              paymentMethod: 'AUTO_FINE',
-              receiptNo: `FINE-${Math.floor(100000 + Math.random() * 900000)}`,
-              createdAt: nowIso
-            });
-
-            addDoc(collection(db, 'user_notifications'), {
-              userId: user.uid,
-              title: '⚠️ করযে হাসানা বিলম্ব জরিমানা যুক্ত',
-              message: `আপনার ৩ মাস মেয়াদী করযে হাসানা ঋণের কিস্তির মেয়াদ অতিক্রান্ত হওয়ায় প্রতিদিন প্রতি ১,০০০ টাকায় ১০ টাকা হারে আজ ৳${dailyFine.toLocaleString('en-US')} জরিমানা বকেয়া ঋণে যুক্ত করা হয়েছে। অতিসত্বর কিস্তি পরিশোধ করুন।`,
-              body: `আপনার ৩ মাস মেয়াদী করযে হাসানা ঋণের কিস্তির মেয়াদ অতিক্রান্ত হওয়ায় প্রতিদিন প্রতি ১,০০০ টাকায় ১০ টাকা হারে আজ ৳${dailyFine.toLocaleString('en-US')} জরিমানা বকেয়া ঋণে যুক্ত করা হয়েছে। অতিসত্বর কিস্তি পরিশোধ করুন।`,
-              type: 'qard_fine_charged',
-              read: false,
-              createdAt: nowIso
-            });
-
-            user.dueLoan = newDue;
-            user.lastQardFineDate = todayKey;
-            user.totalQardFine = (user.totalQardFine || 0) + dailyFine;
-          }).catch((err) => console.error("Fine charge error:", err));
-        }
+    // 1. 2-Day Warning Notification (Days 28 to 30)
+    if (daysElapsed >= 28 && daysElapsed <= 30) {
+      const reminderCycleKey = `remind_1m_${takenTimeStr || 'init'}`;
+      if (user.lastQardDueReminderCycle !== reminderCycleKey) {
+        const daysLeft = Math.max(0, 30 - daysElapsed);
+        addDoc(collection(db, 'user_notifications'), {
+          userId: user.uid,
+          title: '⚠️ করযে হাসানা ঋণ পরিশোধের সতর্কতা (সর্বোচ্চ ১ মাস মেয়াদ)',
+          message: `আপনার ৳${dueLoan.toLocaleString('en-US')} করযে হাসানা ঋণের ১ মাস (৩০ দিন) মেয়াদের আর মাত্র ${daysLeft === 0 ? 'আজকেই শেষ দিন' : `${daysLeft} দিন বাকি`}। নির্ধারিত ১ মাসের মধ্যে পরিশোধ না করলে করযে হাসানা থেকে আজীবনের জন্য ব্লক (LIFETIME BANNED) হয়ে যাবেন এবং দৈনিক বিলম্ব জরিমানা যুক্ত হবে।`,
+          body: `আপনার ৳${dueLoan.toLocaleString('en-US')} করযে হাসানা ঋণের ১ মাস (৩০ দিন) মেয়াদের আর মাত্র ${daysLeft === 0 ? 'আজকেই শেষ দিন' : `${daysLeft} দিন বাকি`}। নির্ধারিত ১ মাসের মধ্যে পরিশোধ না করলে করযে হাসানা থেকে আজীবনের জন্য ব্লক (LIFETIME BANNED) হয়ে যাবেন এবং দৈনিক বিলম্ব জরিমানা যুক্ত হবে।`,
+          type: 'qard_due_warning',
+          read: false,
+          createdAt: nowIso
+        });
+        updateDoc(doc(db, 'users', user.uid), {
+          lastQardDueReminderCycle: reminderCycleKey
+        });
+        user.lastQardDueReminderCycle = reminderCycleKey;
       }
     }
-  }, [user?.uid, user?.dueLoan, user?.balance, user?.instantLoanTakenAt, user?.lastQardFineDate, appConfig]);
+
+    // 2. Overdue Beyond 1 Month (Day 31+): Immediate Permanent Lifetime Block + Daily Fine
+    if (daysElapsed > 30) {
+      if (user.isLifetimeBannedFromQard !== true) {
+        const banReason = `১ মাস (৩০ দিন) মেয়াদের মধ্যে ৳${dueLoan.toLocaleString('en-US')} করযে হাসানা ঋণ ফেরত না দেওয়ায় আজীবনের জন্য ব্লক করা হয়েছে।`;
+        updateDoc(doc(db, 'users', user.uid), {
+          isLifetimeBannedFromQard: true,
+          qardBannedAt: nowIso,
+          qardBanReason: banReason,
+          qardLateCount: (user.qardLateCount || 0) + 1
+        }).then(() => {
+          user.isLifetimeBannedFromQard = true;
+          user.qardBannedAt = nowIso;
+          user.qardBanReason = banReason;
+          addDoc(collection(db, 'user_notifications'), {
+            userId: user.uid,
+            title: '🚫 করযে হাসানা থেকে আজীবন ব্লক',
+            message: `${banReason} ভবিষ্যতে আর কখনোই করযে হাসানা ঋণ নিতে পারবেন না।`,
+            body: `${banReason} ভবিষ্যতে আর কখনোই করযে হাসানা ঋণ নিতে পারবেন না।`,
+            type: 'warning',
+            read: false,
+            createdAt: nowIso
+          });
+          addDoc(collection(db, 'admin_notifications'), {
+            title: '🚫 ১ মাস ওভারডিউ: সদস্য আজীবন ব্লক',
+            message: `${user.name || 'সদস্য'} (${user.phone || user.memberId || 'N/A'}) ৩০ দিন পার করেও ৳${dueLoan.toLocaleString('en-US')} ঋণ পরিশোধ না করায় স্বয়ংক্রিয়ভাবে আজীবন ব্লক হয়েছেন।`,
+            userId: user.uid,
+            userName: user.name || '',
+            userPhone: user.phone || '',
+            amount: dueLoan,
+            type: 'qard_lifetime_ban',
+            read: false,
+            createdAt: nowIso
+          });
+        }).catch((err) => console.error('Auto lifetime ban error:', err));
+      }
+
+      if (user.lastQardFineDate !== todayKey) {
+        const dailyFine = Math.max(10, Math.floor(dueLoan / 1000) * 10);
+        const newDue = dueLoan + dailyFine;
+
+        const userRef = doc(db, 'users', user.uid);
+        updateDoc(userRef, {
+          dueLoan: newDue,
+          lastQardFineDate: todayKey,
+          totalQardFine: (user.totalQardFine || 0) + dailyFine
+        }).then(() => {
+          addDoc(collection(db, 'transactions'), {
+            userId: user.uid,
+            userName: user.name,
+            memberId: user.memberId || user.phone,
+            type: 'qard_fine',
+            typeLabel: 'করযে হাসানা বিলম্ব জরিমানা যুক্ত',
+            amount: dailyFine,
+            status: 'success',
+            category: 'qard_late_fine',
+            description: `⚠️ করযে হাসানা ঋণের ১ মাস (৩০ দিন) মেয়াদ অতিক্রান্ত হওয়ায় (${daysElapsed - 30}তম দিন ওভারডিউ) আজ ${todayKey}-এ প্রতি হাজারে ১০ টাকা হারে ৳${dailyFine.toLocaleString('en-US')} বিলম্ব জরিমানা বকেয়া ঋণে যুক্ত করা হয়েছে।`,
+            paymentMethod: 'AUTO_FINE',
+            receiptNo: `FINE-${Math.floor(100000 + Math.random() * 900000)}`,
+            createdAt: nowIso
+          });
+
+          addDoc(collection(db, 'user_notifications'), {
+            userId: user.uid,
+            title: '⚠️ করযে হাসানা বিলম্ব জরিমানা যুক্ত',
+            message: `আপনার করযে হাসানা ঋণের ১ মাস (৩০ দিন) মেয়াদ অতিক্রান্ত হওয়ায় আজ (${todayKey}) নিয়ম অনুযায়ী প্রতি ১,০০০ টাকায় ১০ টাকা হারে ৳${dailyFine.toLocaleString('en-US')} বিলম্ব জরিমানা বকেয়া ঋণে যুক্ত করা হয়েছে।`,
+            body: `আপনার করযে হাসানা ঋণের ১ মাস (৩০ দিন) মেয়াদ অতিক্রান্ত হওয়ায় আজ (${todayKey}) নিয়ম অনুযায়ী প্রতি ১,০০০ টাকায় ১০ টাকা হারে ৳${dailyFine.toLocaleString('en-US')} বিলম্ব জরিমানা বকেয়া ঋণে যুক্ত করা হয়েছে।`,
+            type: 'qard_fine_charged',
+            read: false,
+            createdAt: nowIso
+          });
+
+          user.dueLoan = newDue;
+          user.lastQardFineDate = todayKey;
+          user.totalQardFine = (user.totalQardFine || 0) + dailyFine;
+        }).catch((err) => console.error("Fine charge error:", err));
+      }
+    }
+  }, [user?.uid, user?.dueLoan, user?.balance, user?.instantLoanTakenAt, user?.lastQardFineDate, user?.isLifetimeBannedFromQard, appConfig]);
 
   useEffect(() => {
     fetchLedgers();
@@ -1638,10 +1578,10 @@ BNB Business Co-operative Welfare Fund
     setSuccessMsg('');
     setErrorMsg('');
 
-    // Lifetime Ban Check for 2+ Late Repayments
-    const userLateStrikes = (user.qardLateCount || 0) + qardHistory.filter(t => t.userId === user.uid && (t.type === 'qard_fine' || t.category === 'qard_late_fine')).length;
-    if (userLateStrikes >= 2 || user.isLifetimeBannedFromQard === true) {
-      setErrorMsg('⚠️ দুঃখিত! আপনি পূর্বে ২ বার সময়মতো ঋণ পরিশোধে ব্যর্থ হয়েছেন। করযে হাসানা নিয়ম অনুযায়ী আপনি আজীবনের জন্য সুদমুক্ত ঋণ গ্রহণ থেকে স্থায়ীভাবে নিষিদ্ধ (LIFETIME BANNED)।');
+    // Permanent Lifetime Ban Check (1st default / overdue > 1 month = Lifetime Banned)
+    const hasPastFine = qardHistory.some(t => t.userId === user.uid && (t.type === 'qard_fine' || t.category === 'qard_late_fine'));
+    if (user.isLifetimeBannedFromQard === true || (user.qardLateCount || 0) >= 1 || hasPastFine) {
+      setErrorMsg('🚫 দুঃখিত! ১ মাস (৩০ দিন) মেয়াদের মধ্যে করযে হাসানা ঋণ পরিশোধে ব্যর্থ হওয়ায় আপনি আজীবনের জন্য সুদমুক্ত ঋণ গ্রহণ থেকে স্থায়ীভাবে ব্লককৃত (LIFETIME BANNED)।');
       return;
     }
 
@@ -1711,6 +1651,7 @@ BNB Business Co-operative Welfare Fund
       const generatedReceiptNo = `REC-${Math.floor(100000 + Math.random() * 900000)}`;
       const generatedTxId = `QRD-REQ-${Date.now().toString().slice(-6)}`;
 
+      const strictDuration = 1;
       const newTx: Partial<Transaction> = {
         userId: user.uid,
         userName: user.name,
@@ -1719,9 +1660,9 @@ BNB Business Co-operative Welfare Fund
         typeLabel: 'ঋণ সহায়তা রিকোয়েস্ট',
         amount: amt,
         status: 'pending',
-        description: `সুদমুক্ত করযে হাসানা ঋণ সহায়তা আবেদন রিভিউ পেন্ডিং। মেয়াদ: ${loanDuration} মাস, কিস্তি: ৳${monthlyRepay}/মাস, হোয়াটসঅ্যাপ: ${loanWhatsapp}`,
+        description: `সুদমুক্ত করযে হাসানা ঋণ সহায়তা আবেদন রিভিউ পেন্ডিং। মেয়াদ: ১ মাস (৩০ দিন), একবারে পরিশোধ: ৳${monthlyRepay}, হোয়াটসঅ্যাপ: ${loanWhatsapp}`,
         createdAt: new Date().toISOString(),
-        loanDuration: loanDuration,
+        loanDuration: strictDuration,
         whatsappNumber: loanWhatsapp,
         monthlyRepayAmount: monthlyRepay,
         transactionId: generatedTxId,
@@ -1731,14 +1672,14 @@ BNB Business Co-operative Welfare Fund
 
       await addDoc(collection(db, 'transactions'), newTx);
       addDoc(collection(db, 'admin_notifications'), {
-        title: '🤝 নতুন করজে হাসানা ঋণ সহায়তা আবেদন',
-        message: `${user.name || 'সদস্য'} (${user.memberId || 'N/A'}) ৳${amt.toLocaleString('en-US')} টাকা সুদমুক্ত ঋণ আবেদন করেছেন (মেয়াদ: ${loanDuration} মাস, কিস্তি: ৳${monthlyRepay}/মাস)।`,
+        title: '🤝 নতুন করজে হাসানা ঋণ সহায়তা আবেদন (১ মাস)',
+        message: `${user.name || 'সদস্য'} (${user.memberId || 'N/A'}) ৳${amt.toLocaleString('en-US')} টাকা সুদমুক্ত ঋণ আবেদন করেছেন (মেয়াদ: ১ মাস / ৩০ দিন)।`,
         userId: user.uid,
         userName: user.name || '',
         memberId: user.memberId || '',
         userPhone: user.phone || '',
         amount: amt,
-        loanDuration: loanDuration,
+        loanDuration: strictDuration,
         type: 'qard_loan_request',
         read: false,
         createdAt: new Date().toISOString()
@@ -1780,10 +1721,10 @@ BNB Business Co-operative Welfare Fund
     setSuccessMsg('');
     setErrorMsg('');
 
-    // Lifetime Ban Check for 2+ Late Repayments
-    const userLateStrikes = (user.qardLateCount || 0) + qardHistory.filter(t => t.userId === user.uid && (t.type === 'qard_fine' || t.category === 'qard_late_fine')).length;
-    if (userLateStrikes >= 2 || user.isLifetimeBannedFromQard === true) {
-      setErrorMsg('⚠️ দুঃখিত! আপনি পূর্বে ২ বার সময়মতো ঋণ পরিশোধে ব্যর্থ হয়েছেন। করযে হাসানা নিয়ম অনুযায়ী আপনি আজীবনের জন্য সুদমুক্ত ঋণ গ্রহণ থেকে স্থায়ীভাবে নিষিদ্ধ (LIFETIME BANNED)।');
+    // Permanent Lifetime Ban Check (1st default / overdue > 1 month = Lifetime Banned)
+    const hasPastFine = qardHistory.some(t => t.userId === user.uid && (t.type === 'qard_fine' || t.category === 'qard_late_fine'));
+    if (user.isLifetimeBannedFromQard === true || (user.qardLateCount || 0) >= 1 || hasPastFine) {
+      setErrorMsg('🚫 দুঃখিত! ১ মাস (৩০ দিন) মেয়াদের মধ্যে করযে হাসানা ঋণ পরিশোধে ব্যর্থ হওয়ায় আপনি আজীবনের জন্য সুদমুক্ত ঋণ গ্রহণ থেকে স্থায়ীভাবে ব্লককৃত (LIFETIME BANNED)।');
       return;
     }
 
@@ -1864,7 +1805,7 @@ BNB Business Co-operative Welfare Fund
       const userRef = doc(db, 'users', user.uid);
       let newBalance = getEffectiveBalance(user) + requestedAmt;
       let newDueLoan = (user.dueLoan || 0) + requestedAmt;
-      const durationMonths = instantLoanDurationInput === 3 ? 3 : 1;
+      const durationMonths = 1; // Strict 1-month max tenure (3-month cancelled)
       const nowIso = new Date().toISOString();
 
       await runTransaction(db, async (t) => {
@@ -1895,20 +1836,9 @@ BNB Business Co-operative Welfare Fund
       user.lastCoopInstantLoanAmount = requestedAmt;
       user.lastCoopLoanPercentage = loanPercent;
 
-      // 2. Calculate Installment Breakdown & Add Transaction Record
-      let monthlyPay = Math.ceil(requestedAmt / durationMonths);
-      let ratioNote = '';
-
-      if (durationMonths === 3) {
-        const m1 = Math.round(requestedAmt / 3);
-        const m2 = Math.round(requestedAmt / 3);
-        const m3 = requestedAmt - (m1 + m2);
-        ratioNote = ` [3 কিস্তি বন্টনঃ 1ম কিস্তি (30 দিন / পরের মাসের একই তারিখ) ৳${m1}, 2য় কিস্তি (60 দিন / 2য় মাসের একই তারিখ) ৳${m2}, 3য় কিস্তি (90 দিন / 3য় মাসের একই তারিখ) ৳${m3}]`;
-        monthlyPay = m1;
-      } else {
-        ratioNote = ` [1 মাস (30 দিন) মেয়াদে সম্পূর্ণ পরিশোধযোগ্যঃ ৳${requestedAmt} (পরের মাসের একই তারিখ)]`;
-        monthlyPay = requestedAmt;
-      }
+      // 2. Strict 1-Month Repayment Breakdown & Transaction Record
+      const monthlyPay = requestedAmt;
+      const ratioNote = ` [১ মাস (৩০ দিন) মেয়াদে সম্পূর্ণ পরিশোধযোগ্যঃ ৳${requestedAmt} — মেয়াদে না দিলে আজীবন ব্লক]`;
 
       const generatedReceiptNo = `REC-${Math.floor(100000 + Math.random() * 900000)}`;
       const generatedTxId = `QRD-AUTO-${Date.now().toString().slice(-6)}`;
@@ -1922,7 +1852,7 @@ BNB Business Co-operative Welfare Fund
         amount: requestedAmt,
         status: 'success',
         category: 'coop_instant_auto_loan',
-        description: `🏢 সমবায় সঞ্চয়ের (${loanPercent}%) ইনস্ট্যান্ট অটো-ঋণ (সঞ্চয়: ৳${userSavings.toLocaleString('en-US')}, ${durationMonths === 3 ? '3 মাস' : '1 মাস (30 দিন)'} মেয়াদে ডিসবার্সড)${ratioNote}`,
+        description: `🏢 সমবায় সঞ্চয়ের (${loanPercent}%) ইনস্ট্যান্ট অটো-ঋণ (সঞ্চয়: ৳${userSavings.toLocaleString('en-US')}, ১ মাস / ৩০ দিন মেয়াদে ডিসবার্সড)${ratioNote}`,
         loanDuration: durationMonths,
         monthlyRepayAmount: monthlyPay,
         createdAt: nowIso,
@@ -1932,8 +1862,8 @@ BNB Business Co-operative Welfare Fund
       };
       await addDoc(collection(db, 'transactions'), txRecord);
       addDoc(collection(db, 'admin_notifications'), {
-        title: '⚡ সমবায় ইনস্ট্যান্ট অটো-ঋণ ডিসবার্সড',
-        message: `${user.name || 'সদস্য'} (${user.memberId || 'N/A'}) সমবায় সঞ্চয়ের বিপরীতে ৳${requestedAmt.toLocaleString('en-US')} ইনস্ট্যান্ট ঋণ নিয়েছেন (${durationMonths} মাস মেয়াদ)।`,
+        title: '⚡ সমবায় ইনস্ট্যান্ট অটো-ঋণ ডিসবার্সড (১ মাস)',
+        message: `${user.name || 'সদস্য'} (${user.memberId || 'N/A'}) সমবায় সঞ্চয়ের বিপরীতে ৳${requestedAmt.toLocaleString('en-US')} ইনস্ট্যান্ট ঋণ নিয়েছেন (১ মাস মেয়াদ)।`,
         userId: user.uid,
         userName: user.name || '',
         memberId: user.memberId || '',
@@ -1947,8 +1877,8 @@ BNB Business Co-operative Welfare Fund
       // 3. Add notification for user
       const notifData = {
         userId: user.uid,
-        title: '🏢 1% - 50% ইনস্ট্যান্ট অটো-ঋণ অনুমোদিত!',
-        message: `আপনার সমবায় সঞ্চয় (৳${userSavings.toLocaleString('en-US')}) ভিত্তি ধরে ৳${requestedAmt.toLocaleString('en-US')} ইনস্ট্যান্ট অটো-ঋণ সরাসরি ওয়ালেটে জমা দেওয়া হয়েছে। পরিশোধের নিয়মঃ যেই তারিখে টাকা নেওয়া হয়েছে, ঠিক পরের মাসে সেই একই তারিখে পরিশোধ করতে হবে (30 দিন গণনা)। ${durationMonths === 3 ? '3 মাস মেয়াদের ক্ষেত্রে 90 দিন গণনা হবে এবং প্রতি 30 দিন পর পর 3টি সমান কিস্তিতে পরিশোধ করতে হবে।' : '1 মাস মেয়াদের ক্ষেত্রে 30 দিন পর সম্পূর্ণ পরিশোধ করতে হবে।'} মেয়াদ শেষ হওয়ার 2 দিন পূর্বে রিমাইন্ডার নোটিফিকেশন যাবে এবং 30 দিন পার হলে প্রতিদিন প্রতি হাজারে 10 টাকা বিলম্ব জরিমানা কার্যকর হবে।`,
+        title: '🏢 ইনস্ট্যান্ট অটো-ঋণ অনুমোদিত (সর্বোচ্চ ১ মাস মেয়াদ)!',
+        message: `আপনার সমবায় সঞ্চয় (৳${userSavings.toLocaleString('en-US')}) ভিত্তি ধরে ৳${requestedAmt.toLocaleString('en-US')} ইনস্ট্যান্ট অটো-ঋণ সরাসরি ওয়ালেটে জমা দেওয়া হয়েছে। পরিশোধের নিয়মঃ সর্বোচ্চ ১ মাস (৩০ দিন) মেয়াদের মধ্যে সম্পূর্ণ টাকা ফেরত দিতে হবে। নির্ধারিত ১ মাসের মধ্যে ফেরত না দিলে করযে হাসানা থেকে আজীবনের জন্য ব্লক (LIFETIME BANNED) হয়ে যাবেন এবং দৈনিক বিলম্ব জরিমানা কার্যকর হবে।`,
         type: 'qard_disbursed',
         read: false,
         createdAt: nowIso
@@ -2459,9 +2389,9 @@ BNB Business Co-operative Welfare Fund
     if (activeDue <= 0) return null;
 
     const latestDisb = myDisbursments[0];
-    const duration = latestDisb?.loanDuration || 1;
+    const duration = 1; // Strict 1-month rule
     const loanAmount = latestDisb?.amount || activeDue;
-    const monthlyInstalment = Math.min(activeDue, Math.ceil(loanAmount / duration));
+    const monthlyInstalment = activeDue;
 
     // Date calculations - Same date next month (30 days)
     const disbDateObj = latestDisb?.createdAt ? new Date(latestDisb.createdAt) : (user.instantLoanTakenAt ? new Date(user.instantLoanTakenAt) : new Date());
@@ -2469,9 +2399,9 @@ BNB Business Co-operative Welfare Fund
     const today = new Date();
     const daysElapsed = Math.floor((today.getTime() - disbDateObj.getTime()) / (1000 * 60 * 60 * 24));
     
-    // Exact due date: Same date next month (30 days total period)
+    // Exact due date: 30 days (1 month max)
     const nextDueDate = new Date(disbDateObj);
-    nextDueDate.setDate(nextDueDate.getDate() + (duration === 1 ? 30 : (daysElapsed > 60 ? 90 : (daysElapsed > 30 ? 60 : 30))));
+    nextDueDate.setDate(nextDueDate.getDate() + 30);
     const nextDueDateStr = nextDueDate.toLocaleDateString('bn-BD', { day: 'numeric', month: 'long', year: 'numeric' });
     const disbDateStr = disbDateObj.toLocaleDateString('bn-BD', { day: 'numeric', month: 'long', year: 'numeric' });
 
@@ -2944,10 +2874,10 @@ BNB Business Co-operative Welfare Fund
                 role: 'সদস্য',
                 rawAmount: loanAmt,
                 amount: loanAmt.toLocaleString('en-US'),
-                installments: isComplete ? '3/3' : (t.loanDuration ? `1/${t.loanDuration}` : '1/3'),
+                installments: isComplete ? '১/১ (পরিশোধিত)' : '১/১ (১ মাস)',
                 dueAmount: remaining.toLocaleString('en-US'),
                 rawDueAmount: remaining,
-                nextInstallment: t.loanDuration === 1 ? '30 দিন' : '25 জুন',
+                nextInstallment: '৩০ দিন (১ মাস)',
                 isComplete,
                 image: memberPhoto,
                 initialLetter
@@ -3357,23 +3287,23 @@ BNB Business Co-operative Welfare Fund
 
 
             {/* 🕊️ সাধারণ দান ও লিল্লা সাদাকাহ সেকশন (General Charity & Nationwide Aid Roadmap) */}
-            <div className="bg-gradient-to-br from-[#053822] via-[#042f1c] to-[#022113] p-4 sm:p-5 border border-emerald-600/30 rounded-3.5xl text-white shadow-md space-y-4 relative overflow-hidden text-left select-none">
+            <div className="bg-gradient-to-br from-[#053822] via-[#042f1c] to-[#022113] p-3.5 sm:p-4 border border-emerald-600/30 rounded-2xl text-white shadow-md space-y-2.5 relative overflow-hidden text-left select-none">
               {/* Header Title with Soothing Mint Accents */}
-              <div className="flex items-center justify-between gap-2 border-b border-white/10 pb-3">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-2xl bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 flex items-center justify-center shrink-0 shadow-xs">
-                    <HandHeart className="w-5 h-5 text-emerald-300 fill-emerald-300/30" />
+              <div className="flex items-center justify-between gap-2 border-b border-white/10 pb-2.5">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 flex items-center justify-center shrink-0">
+                    <HandHeart className="w-4 h-4 text-emerald-300 fill-emerald-300/30" />
                   </div>
-                  <div>
-                    <h3 className="text-xs sm:text-sm font-black text-emerald-100 tracking-wide">
+                  <div className="min-w-0">
+                    <h3 className="text-xs sm:text-sm font-black text-emerald-100 tracking-wide truncate">
                       🕊️ সাধারণ দান ও লিল্লা সাদাকাহ প্রকল্প
                     </h3>
-                    <p className="text-[10px] text-emerald-200/80 font-medium">
+                    <p className="text-[10px] text-emerald-200/80 font-medium truncate">
                       সারা বাংলাদেশে প্রতি মাসে এক জেলা সহায়তা কর্মসূচি
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center shrink-0">
                   <button
                     type="button"
                     onClick={() => {
@@ -3388,42 +3318,24 @@ BNB Business Co-operative Welfare Fund
                       setAutoDonationAnonymous(user.autoDonationConfig?.isAnonymous ?? false);
                       setShowAutoDonationModal(true);
                     }}
-                    className="px-5 py-3 rounded-2xl font-black text-sm sm:text-base shadow-xl flex items-center gap-2 bg-amber-400 text-slate-950 border-2 border-white/20 transition active:scale-95 cursor-pointer whitespace-nowrap animate-pulse-slow"
+                    className="px-3 py-1.5 rounded-xl font-black text-[11px] shadow-md flex items-center gap-1.5 bg-amber-400 text-slate-950 border border-white/20 transition active:scale-95 cursor-pointer whitespace-nowrap"
                     title="স্বয়ংক্রিয় বা অটো দান সিডিউল নির্ধারণ করুন"
                   >
-                    <RefreshCw className={`w-5 h-5 ${user.autoDonationConfig?.enabled ? 'animate-spin' : ''}`} style={{ animationDuration: '4s' }} />
+                    <RefreshCw className={`w-3.5 h-3.5 ${user.autoDonationConfig?.enabled ? 'animate-spin' : ''}`} style={{ animationDuration: '4s' }} />
                     <span>
-                      {user.autoDonationConfig?.enabled ? '(অটো দান: সচল)' : '(অটো দান)'}
+                      {user.autoDonationConfig?.enabled ? 'অটো দান: সচল' : 'অটো দান'}
                     </span>
                   </button>
                 </div>
               </div>
 
-              {/* Fund Metrics 3-Card Row — Soothing, Calm Colors */}
-              <div className="grid grid-cols-3 gap-2">
-                <div className="bg-black/25 border border-white/10 rounded-2xl p-2.5 text-center">
-                  <span className="text-[8.5px] sm:text-[9.5px] font-bold text-emerald-200/80 block truncate">মোট দান প্রাপ্তি</span>
-                  <span className="text-xs sm:text-sm font-black text-amber-300 font-mono block mt-0.5 truncate">৳ {generalCharityTotal.toLocaleString('bn-BD')}</span>
-                </div>
-
-                <div className="bg-black/25 border border-white/10 rounded-2xl p-2.5 text-center">
-                  <span className="text-[8.5px] sm:text-[9.5px] font-bold text-emerald-200/80 block truncate">বিতরণকৃত সাহায্য</span>
-                  <span className="text-xs sm:text-sm font-black text-rose-200 font-mono block mt-0.5 truncate">৳ {generalCharityDisbursed.toLocaleString('bn-BD')}</span>
-                </div>
-
-                <div className="bg-black/25 border border-white/10 rounded-2xl p-2.5 text-center">
-                  <span className="text-[8.5px] sm:text-[9.5px] font-bold text-emerald-200/80 block truncate">বিতরণযোগ্য তহবিল</span>
-                  <span className="text-xs sm:text-sm font-black text-teal-200 font-mono block mt-0.5 truncate">৳ {Math.max(0, generalCharityTotal - generalCharityDisbursed).toLocaleString('bn-BD')}</span>
-                </div>
-              </div>
-
               {/* দানের বিবরণী — দান করলে কি কি পাবে (ফজিলত ও আত্মিক প্রশান্তি) */}
-              <div className="bg-white/5 border border-white/10 rounded-2.5xl p-3 space-y-2">
+              <div className="bg-white/5 border border-white/10 rounded-xl p-2.5 space-y-1.5">
                 <div className="flex items-center gap-1.5 text-amber-300">
                   <Sparkles className="w-3.5 h-3.5" />
                   <span className="text-[11px] font-black">দানের বিবরণী — দান করলে যা যা পাবেন:</span>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px] text-emerald-100/90 font-medium">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[10px] text-emerald-100/90 font-medium">
                   <div className="flex items-start gap-1.5">
                     <span className="text-amber-300 shrink-0">✔</span>
                     <span><strong>সম্পদে বহুগুণ বরকত:</strong> হাদিস শরীফ অনুযায়ী দানশীল ব্যক্তির সম্পদ কখনোই কমে না, বরং বহুগুণে বৃদ্ধি পায়।</span>
@@ -3444,77 +3356,19 @@ BNB Business Co-operative Welfare Fund
               </div>
 
               {/* সারা বাংলাদেশ সহায়তা নীতিমালা — প্রতি মাসে এক জেলা */}
-              <div className="bg-white/5 border border-white/10 rounded-2.5xl p-3 space-y-2">
+              <div className="bg-white/5 border border-white/10 rounded-xl p-2.5 space-y-1">
                 <div className="flex items-center gap-1.5 text-emerald-200">
                   <MapPin className="w-3.5 h-3.5 text-amber-300" />
                   <span className="text-[11px] font-black">আমাদের সারা বাংলাদেশ সহায়তা নীতিমালা (প্রতি মাসে এক জেলা):</span>
                 </div>
-                <p className="text-[10.5px] text-emerald-100/90 leading-relaxed font-sans">
+                <p className="text-[10px] text-emerald-100/90 leading-snug font-sans">
                   আমরা সারা বাংলাদেশের ৬৪ জেলার মধ্যে প্রতি মাসে পর্যায়ক্রমে ১টি জেলা নির্বাচন করে সাধারণ দানের সম্পূর্ণ অর্থ সরাসরি পৌঁছাই। 
                   <strong className="text-amber-300"> যে জেলা থেকে যত টাকা দান আসবে, ওই জেলায় তত টাকাই খাদ্য, চিকিৎসা ও পুনর্বাসন সহায়তা প্রদান করা হবে!</strong>
                 </p>
               </div>
 
-              {/* জেলা ভিত্তিক দান ও সহায়তার লাইভ তালিকা (District Leaderboard) */}
-              <div className="space-y-2 pt-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-black text-emerald-100 flex items-center gap-1">
-                    <span>📍 জেলাভিত্তিক অনুদান ও সহায়তা পরিসংখ্যান</span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFundAnalyticsActiveTab('districts');
-                      setShowFundAnalyticsModal(true);
-                    }}
-                    className="text-[10px] font-bold text-amber-300 hover:underline cursor-pointer flex items-center gap-0.5"
-                  >
-                    <span>সব ৬৪ জেলা দেখুন</span>
-                    <ChevronRight className="w-3 h-3" />
-                  </button>
-                </div>
-
-                {/* 4-Item Compact District Cards */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {districtRankingList.filter(d => d.totalDonated > 0).length > 0 ? (
-                    districtRankingList.filter(d => d.totalDonated > 0).slice(0, 4).map((dist, idx) => (
-                      <div 
-                        key={idx}
-                        onClick={() => {
-                          setFundAnalyticsActiveTab('districts');
-                          setShowFundAnalyticsModal(true);
-                        }}
-                        className="bg-black/30 border border-white/10 hover:border-emerald-400/40 rounded-2xl p-2.5 transition cursor-pointer text-left group"
-                      >
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-black text-white group-hover:text-amber-300 transition">{dist.name}</span>
-                          <span className="text-[8px] font-bold text-emerald-300 bg-emerald-500/20 px-1.5 py-0.2 rounded-full font-mono">{dist.donorsCount} জন</span>
-                        </div>
-                        <div className="text-[9px] text-emerald-200/80">মোট দান: <strong className="text-white font-mono">৳{dist.totalDonated.toLocaleString('bn-BD')}</strong></div>
-                        <div className="text-[8.5px] text-amber-300/90 mt-0.5 font-bold">সহায়তা বরাদ্দ: ৳{dist.aidAllocation.toLocaleString('bn-BD')}</div>
-                      </div>
-                    ))
-                  ) : (
-                    <div 
-                      onClick={() => {
-                        setFundAnalyticsActiveTab('districts');
-                        setShowFundAnalyticsModal(true);
-                      }}
-                      className="col-span-2 sm:col-span-4 bg-black/25 border border-white/10 rounded-2xl p-3 text-center cursor-pointer hover:border-emerald-400/30 transition"
-                    >
-                      <p className="text-[11px] text-emerald-100 font-bold">
-                        🌱 এখনো পর্যন্ত কোনো জেলাভিত্তিক সাধারণ অনুদান জমা হয়নি।
-                      </p>
-                      <p className="text-[9.5px] text-emerald-200/80 mt-0.5">
-                        আপনি সাধারণ দান প্রদান করলে সরাসরি আপনার জেলার নামে লাইভ রিয়েলটাইমে যুক্ত হবে।
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </div>
-
               {/* সবুজ দাগ এলাকা: অ্যাকাউন্ট বসিয়ে কয় টাকা দান করতে চাই */}
-              <div className="bg-black/30 border border-white/10 rounded-2.5xl p-3 space-y-2.5">
+              <div className="bg-black/30 border border-white/10 rounded-xl p-2.5 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-black text-emerald-100 flex items-center gap-1.5">
                     <span>💳 অ্যাকাউন্ট ও দানের পরিমাণ</span>
@@ -3566,32 +3420,30 @@ BNB Business Co-operative Welfare Fund
                   </div>
                 </div>
 
-                {/* এক ক্লিকে করযে হাসানা দানের প্রিসেট বাটন (২০, ৩০, ৫০, ১০০, ২০০ টাকা - এক লাইনে ৫টি বাটন) */}
-                <div className="space-y-1 pt-0.5">
-                  <div className="grid grid-cols-5 gap-1.5">
-                    {[20, 30, 50, 100, 200].map((amt) => (
-                      <button
-                        key={amt}
-                        type="button"
-                        onClick={() => {
-                          setDonationAmount(String(amt));
-                          if (errorMsg) setErrorMsg('');
-                        }}
-                        className={`py-1.5 text-xs font-black rounded-xl border transition active:scale-95 cursor-pointer font-mono ${
-                          donationAmount === String(amt)
-                            ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-xs'
-                            : 'bg-white/10 hover:bg-emerald-500/30 text-white border-white/15 hover:border-emerald-300'
-                        }`}
-                      >
-                        ৳{amt}
-                      </button>
-                    ))}
-                  </div>
+                {/* এক ক্লিকে সাধারণ দানের প্রিসেট বাটন */}
+                <div className="grid grid-cols-5 gap-1.5 pt-0.5">
+                  {[20, 30, 50, 100, 200].map((amt) => (
+                    <button
+                      key={amt}
+                      type="button"
+                      onClick={() => {
+                        setDonationAmount(String(amt));
+                        if (errorMsg) setErrorMsg('');
+                      }}
+                      className={`py-1.5 text-xs font-black rounded-lg border transition active:scale-95 cursor-pointer font-mono ${
+                        donationAmount === String(amt)
+                          ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-xs'
+                          : 'bg-white/10 hover:bg-emerald-500/30 text-white border-white/15 hover:border-emerald-300'
+                      }`}
+                    >
+                      ৳{amt}
+                    </button>
+                  ))}
                 </div>
               </div>
 
               {/* নীল দাগ এলাকা: বাম পাশে পরিচয় গোপন + ডান পাশে পিন এবং নিচে নিশ্চিতকরণ */}
-              <div className="bg-black/30 border border-white/10 rounded-2.5xl p-3 space-y-2.5">
+              <div className="bg-black/30 border border-white/10 rounded-xl p-2.5 space-y-2">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {/* বাম পাশে: পরিচয় গোপন রেখে দান */}
                   <label className="flex items-center gap-2.5 bg-black/40 border border-white/15 hover:border-emerald-400/40 rounded-xl px-3 py-2 cursor-pointer transition select-none">
@@ -3612,40 +3464,38 @@ BNB Business Co-operative Welfare Fund
                   </label>
 
                   {/* ডান পাশে: পিন দিতে হবে */}
-                  <div className="space-y-1">
-                    <div className="flex items-center bg-black/40 border border-white/15 focus-within:border-amber-400 rounded-xl px-3 py-1.5 transition">
-                      <div className="min-w-0 flex-1 text-left">
-                        <span className="text-[8.5px] text-emerald-200/80 font-bold block leading-tight">
-                          সিকিউরিটি পিন:
-                        </span>
-                        <input 
-                          type="password"
-                          maxLength={6}
-                          value={securityPin}
-                          onChange={(e) => {
-                            setSecurityPin(e.target.value);
-                            if (errorMsg) setErrorMsg('');
-                          }}
-                          placeholder="••••"
-                          className="w-full bg-transparent text-white font-mono text-left tracking-widest text-sm focus:outline-none placeholder:text-white/30 pt-0.5"
-                        />
-                      </div>
-                      <span className="text-[10px] text-amber-300 shrink-0 font-bold ml-1">
-                        🔒 পিন
+                  <div className="flex items-center bg-black/40 border border-white/15 focus-within:border-amber-400 rounded-xl px-3 py-1.5 transition">
+                    <div className="min-w-0 flex-1 text-left">
+                      <span className="text-[8.5px] text-emerald-200/80 font-bold block leading-tight">
+                        সিকিউরিটি পিন:
                       </span>
+                      <input 
+                        type="password"
+                        maxLength={6}
+                        value={securityPin}
+                        onChange={(e) => {
+                          setSecurityPin(e.target.value);
+                          if (errorMsg) setErrorMsg('');
+                        }}
+                        placeholder="••••"
+                        className="w-full bg-transparent text-white font-mono text-left tracking-widest text-sm focus:outline-none placeholder:text-white/30 pt-0.5"
+                      />
                     </div>
+                    <span className="text-[10px] text-amber-300 shrink-0 font-bold ml-1">
+                      🔒 পিন
+                    </span>
                   </div>
                 </div>
 
                 {/* Error message inside box if any */}
                 {errorMsg && (
-                  <div className="bg-rose-500/25 border border-rose-400 text-rose-100 p-2.5 rounded-xl text-[11px] font-bold flex items-center gap-2 text-left">
+                  <div className="bg-rose-500/25 border border-rose-400 text-rose-100 p-2 rounded-xl text-[11px] font-bold flex items-center gap-2 text-left">
                     <AlertCircle className="w-4 h-4 shrink-0 text-rose-300" />
                     <span>{errorMsg}</span>
                   </div>
                 )}
 
-                {/* নিশ্চিতকরণ বাটন: টিপ দিলে নিশ্চিত হয়ে দান সম্পন্ন হয়ে যাবে এবং নীল ব্যালেন্সে যোগ হবে */}
+                {/* নিশ্চিতকরণ বাটন */}
                 <button
                   type="button"
                   disabled={loading}
@@ -3667,19 +3517,19 @@ BNB Business Co-operative Welfare Fund
 
         {/* ==================== TAB 1: DONATE FORM (Compact Sleek Single Purpose Form) ==================== */}
         {activeTab === 'donate' && (
-          <div className="space-y-3 max-w-lg mx-auto animate-fade-in text-center font-sans">
+          <div className="space-y-2.5 max-w-lg mx-auto animate-fade-in text-center font-sans">
             
             {/* Islamic Hadith Card encouraging Qard Hasana */}
-            <div className="bg-gradient-to-br from-emerald-950 via-teal-900 to-emerald-900 text-white border-2 border-emerald-600/80 p-4 sm:p-5 rounded-2xl text-left space-y-3.5 shadow-lg relative overflow-hidden">
+            <div className="bg-gradient-to-br from-emerald-950 via-teal-900 to-emerald-900 text-white border border-emerald-600/70 p-3.5 rounded-2xl text-left space-y-2.5 shadow-md relative overflow-hidden">
               {/* Header Badge */}
-              <div className="flex items-center justify-between pb-2.5 border-b border-emerald-600/60">
-                <div className="flex items-center gap-2">
-                  <span className="p-1.5 bg-amber-400 text-emerald-950 rounded-xl text-sm font-black shrink-0 shadow-xs">📖</span>
-                  <h3 className="text-sm sm:text-base md:text-lg font-black text-amber-300 font-sans tracking-tight leading-tight">
+              <div className="flex items-center justify-between gap-2 pb-2 border-b border-emerald-600/50">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="p-1.5 bg-amber-400 text-emerald-950 rounded-lg text-xs font-black shrink-0 shadow-xs">📖</span>
+                  <h3 className="text-xs sm:text-sm font-black text-amber-300 font-sans tracking-tight leading-tight truncate">
                     করযে হাসানার বিশেষ ফজিলত ও সওয়াব
                   </h3>
                 </div>
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center shrink-0">
                   <button
                     type="button"
                     onClick={() => {
@@ -3693,80 +3543,40 @@ BNB Business Co-operative Welfare Fund
                       setQardAutoDonationAnonymous(user.qardAutoDonationConfig?.isAnonymous ?? false);
                       setShowQardAutoDonationModal(true);
                     }}
-                    className="px-5 py-3 rounded-2xl font-black text-sm sm:text-base shadow-xl flex items-center gap-2 bg-amber-400 text-slate-950 border-2 border-white/20 transition active:scale-95 cursor-pointer whitespace-nowrap animate-pulse-slow"
+                    className="px-3 py-1.5 rounded-xl font-black text-[11px] shadow-md flex items-center gap-1.5 bg-amber-400 text-slate-950 border border-white/20 transition active:scale-95 cursor-pointer whitespace-nowrap"
                     title="স্বয়ংক্রিয় বা অটো করযে হাসানা দান নির্ধারণ করুন"
                   >
-                    <RefreshCw className={`w-5 h-5 ${user.qardAutoDonationConfig?.enabled ? 'animate-spin' : ''}`} style={{ animationDuration: '4s' }} />
+                    <RefreshCw className={`w-3.5 h-3.5 ${user.qardAutoDonationConfig?.enabled ? 'animate-spin' : ''}`} style={{ animationDuration: '4s' }} />
                     <span>
-                      {user.qardAutoDonationConfig?.enabled ? '(অটো দান: সচল)' : '(অটো দান)'}
+                      {user.qardAutoDonationConfig?.enabled ? 'অটো দান: সচল' : 'অটো দান'}
                     </span>
                   </button>
                 </div>
               </div>
 
               {/* Hadith 1 */}
-              <div className="bg-emerald-900/80 p-3 sm:p-3.5 rounded-xl border border-emerald-600/60 space-y-1.5">
-                <div className="flex items-center gap-1.5 text-amber-300 font-black text-xs sm:text-sm">
+              <div className="bg-emerald-900/75 p-2.5 rounded-xl border border-emerald-600/50 space-y-1">
+                <div className="flex items-center gap-1.5 text-amber-300 font-black text-[11px]">
                   <span>✨ সুনান ইবনে মাজাহ (হাদিস: ২৪৩১/১৮৪৪)</span>
                 </div>
-                <p className="text-xs sm:text-sm text-emerald-50 font-normal leading-relaxed">
-                  রাসূলুল্লাহ (সাল্লাল্লাহু আলাইহি ওয়া সাল্লাম) বলেছেনঃ <span className="text-amber-200 font-black text-xs sm:text-sm md:text-base block sm:inline my-1 sm:my-0">"মিরাজের রাতে আমি জান্নাতের দরজায় লিখিত দেখেছি— 'দানের সওয়াব ১০ গুণ এবং করযে হাসানার (সুদমুক্ত ঋণের) সওয়াব ১৮ গুণ।'"</span> আমি জিবরীল (আঃ)-কে জিজ্ঞেস করলাম, করযে হাসানার সওয়াব দানের চেয়ে বেশি কেন? তিনি বললেন, <span className="text-amber-100 italic font-semibold">'কারণ সাহায্যপ্রার্থী প্রয়োজন না থাকলেও চাইতে পারে, কিন্তু ঋণগ্রহীতা ব্যক্তি একমাত্র চরম প্রয়োজনেই ঋণ চায়।'</span>
+                <p className="text-[11px] text-emerald-50 font-normal leading-relaxed">
+                  রাসূলুল্লাহ (সাল্লাল্লাহু আলাইহি ওয়া সাল্লাম) বলেছেনঃ <span className="text-amber-200 font-black">"মিরাজের রাতে আমি জান্নাতের দরজায় লিখিত দেখেছি— 'দানের সওয়াব ১০ গুণ এবং করযে হাসানার (সুদমুক্ত ঋণের) সওয়াব ১৮ গুণ।'"</span> আমি জিবরীল (আঃ)-কে জিজ্ঞেস করলাম, করযে হাসানার সওয়াব দানের চেয়ে বেশি কেন? তিনি বললেন, <span className="text-amber-100 italic font-semibold">'কারণ সাহায্যপ্রার্থী প্রয়োজন না থাকলেও চাইতে পারে, কিন্তু ঋণগ্রহীতা ব্যক্তি একমাত্র চরম প্রয়োজনেই ঋণ চায়।'</span>
                 </p>
               </div>
 
               {/* Hadith 2 */}
-              <div className="bg-emerald-900/80 p-3 sm:p-3.5 rounded-xl border border-emerald-600/60 space-y-1.5">
-                <div className="flex items-center gap-1.5 text-amber-300 font-black text-xs sm:text-sm">
+              <div className="bg-emerald-900/75 p-2.5 rounded-xl border border-emerald-600/50 space-y-1">
+                <div className="flex items-center gap-1.5 text-amber-300 font-black text-[11px]">
                   <span>✨ সহীহ মুসলিম (হাদিস: ২৬৯৯)</span>
                 </div>
-                <p className="text-xs sm:text-sm text-emerald-50 font-normal leading-relaxed">
-                  রাসূলুল্লাহ (সাল্লাল্লাহু আলাইহি ওয়া সাল্লাম) বলেছেনঃ <span className="text-amber-200 font-black text-xs sm:text-sm md:text-base block sm:inline my-1 sm:my-0">"যে ব্যক্তি কোনো মুসলিমের পার্থিব বিপদ-আপদ দূর করবে, কেয়ামতের দিন আল্লাহ তাআলা তার একটি কঠিন বিপদ দূর করে দেবেন।"</span>
+                <p className="text-[11px] text-emerald-50 font-normal leading-relaxed">
+                  রাসূলুল্লাহ (সাল্লাল্লাহু আলাইহি ওয়া সাল্লাম) বলেছেনঃ <span className="text-amber-200 font-black">"যে ব্যক্তি কোনো মুসলিমের পার্থিব বিপদ-আপদ দূর করবে, কেয়ামতের দিন আল্লাহ তাআলা তার একটি কঠিন বিপদ দূর করে দেবেন।"</span>
                 </p>
-              </div>
-
-              {/* Virtues summary */}
-              <div className="bg-amber-400/20 p-2.5 sm:p-3 rounded-xl border border-amber-400/40 text-xs sm:text-sm text-amber-100 font-bold leading-relaxed flex items-start gap-2">
-                <span className="text-base shrink-0">💡</span>
-                <span><strong>সংক্ষিপ্ত সুবিধাঃ</strong> সাধারণ দান অপেক্ষা ১.৮ গুণ (১৮ গুণ) বেশি সওয়াব, মানুষের আত্মসম্মান রক্ষা করে অসচ্ছলদের সেবা এবং সমাজে সুদমুক্ত অর্থনীতির প্রসার।</span>
               </div>
             </div>
 
             <form onSubmit={handleDonateSubmit} className="space-y-2.5 font-sans">
-              
-              {/* Single Purpose Card: কর্জে হাসানা / সাধারণ দান */}
-              <div className="bg-white border border-slate-200/90 p-2.5 sm:p-3 rounded-xl space-y-1.5 shadow-2xs text-left">
-                <div className="flex items-center justify-between pb-1.5 border-b border-slate-100">
-                  <div className="flex items-center gap-1.5">
-                    <span className="p-1 bg-rose-50 rounded-md text-rose-700 shrink-0">
-                      {donationPurpose === 'general_charity' ? <HandHeart className="w-3.5 h-3.5" /> : <HeartHandshake className="w-3.5 h-3.5" />}
-                    </span>
-                    <span className="text-[10.5px] font-black text-slate-800">
-                      ১. খাতের নামঃ {donationPurpose === 'general_charity' ? 'সাধারণ দান ও সাদাকাহ' : 'কর্জে হাসানা'}
-                    </span>
-                  </div>
-                  <span className="text-[8px] font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                    ✓ খাত নির্ধারিত
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-2 p-2 bg-gradient-to-r from-rose-50/70 to-emerald-50/70 border border-rose-200/80 rounded-lg">
-                  <span className="text-sm p-1.5 bg-white border border-rose-200 rounded-md shrink-0 shadow-2xs">
-                    {donationPurpose === 'general_charity' ? '🕊️' : '🤝'}
-                  </span>
-                  <div className="text-left min-w-0">
-                    <span className="text-xs font-black text-slate-850 block leading-tight">
-                      {donationPurpose === 'general_charity' ? 'সাধারণ দান ও লিল্লা সাদাকাহ তহবিল' : 'কর্জে হাসানা কল্যাণ ফান্ড'}
-                    </span>
-                    <span className="text-[8.5px] block text-slate-500 font-bold leading-tight mt-0.5">
-                      {donationPurpose === 'general_charity'
-                        ? 'নিঃস্ব ও অসহায় মানুষদের মাঝে প্রতি মাসে সরাসরি দান বিতরণ করার জন্য বিশেষ ফান্ড।'
-                        : 'অসহায় ও অভাবগ্রস্তদের সুদমুক্ত আর্থিক ঋণ সহায়তা দেওয়ার উদ্দেশ্যে তৈরি বিশেষ ফান্ড।'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Step 2: Donation Amount selection */}
+              {/* Step 1: Donation Amount selection */}
               <div className="bg-white border border-slate-200/90 p-2.5 sm:p-3 rounded-xl space-y-2 shadow-2xs text-left">
                 <div className="flex items-center justify-between pb-1 border-b border-slate-100">
                   <div className="flex items-center gap-1.5">
@@ -3774,7 +3584,7 @@ BNB Business Co-operative Welfare Fund
                       <Coins className="w-3.5 h-3.5" />
                     </span>
                     <span className="text-[10.5px] font-black text-slate-800">
-                      {donationPurpose === 'general_charity' ? '২. সাধারণ দান ও সাদাকাহ করুন (টাকা):' : '২. কর্জে হাসানাতে দান করুন (টাকা):'}
+                      {donationPurpose === 'general_charity' ? '১. সাধারণ দান ও সাদাকাহ করুন (টাকা):' : '১. কর্জে হাসানাতে দান করুন (টাকা):'}
                     </span>
                   </div>
                   <span className="text-[8.5px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-md">
@@ -3824,13 +3634,13 @@ BNB Business Co-operative Welfare Fund
                 </div>
               </div>
 
-              {/* Step 3: Privacy & Security PIN Confirmation */}
+              {/* Step 2: Privacy & Security PIN Confirmation */}
               <div className="bg-white border border-slate-200/90 p-2.5 sm:p-3 rounded-xl space-y-2 shadow-2xs text-left">
                 <div className="flex items-center gap-1.5 pb-1 border-b border-slate-100">
                   <span className="p-1 bg-rose-50 rounded-md text-rose-700 shrink-0">
                     <Lock className="w-3.5 h-3.5" />
                   </span>
-                  <span className="text-[10.5px] font-black text-slate-800">৩. সুরক্ষা ও গোপনীয়তা সেটিংসঃ</span>
+                  <span className="text-[10.5px] font-black text-slate-800">২. সুরক্ষা ও গোপনীয়তা সেটিংসঃ</span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
@@ -3878,13 +3688,13 @@ BNB Business Co-operative Welfare Fund
               </div>
 
               {/* Submit CTA */}
-              <div className="pt-1">
+              <div className="pt-0.5">
                 <button
                   type="submit"
                   disabled={loading}
                   className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-black text-xs rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
                 >
-                  {loading ? 'প্রসেসিং হচ্ছে...' : (donationPurpose === 'general_charity' ? 'সাধারণ দান ও সাদাকাহ সম্পন্ন করুন' : 'কর্জযে হাসানাতে দান সম্পন্ন করুন')}
+                  {loading ? 'প্রসেসিং হচ্ছে...' : (donationPurpose === 'general_charity' ? 'সাধারণ দান ও সাদাকাহ সম্পন্ন করুন' : 'কর্জে হাসানাতে দান সম্পন্ন করুন')}
                   <Heart className="w-4 h-4 fill-current animate-pulse text-white" />
                 </button>
               </div>
@@ -4265,6 +4075,18 @@ BNB Business Co-operative Welfare Fund
                   <span className="text-xs font-black text-emerald-950">🏢 ১. ইনভেস্টর অটো-ঋণ সেকশন (সেকেন্ড পেজ)</span>
                 </div>
 
+            {/* Permanent Lifetime Block Warning Banner */}
+            {(user.isLifetimeBannedFromQard === true || (user.qardLateCount || 0) >= 1) && (
+              <div className="bg-rose-600 text-white p-4 rounded-2xl border border-rose-800 shadow-md space-y-1">
+                <div className="flex items-center gap-2 font-black text-xs">
+                  <span>🚫 আপনি আজীবনের জন্য কর্জে হাসানা থেকে ব্লককৃত (LIFETIME BANNED)</span>
+                </div>
+                <p className="text-[11px] text-rose-100 font-bold leading-relaxed">
+                  {user.qardBanReason || '১ মাস (৩০ দিন) মেয়াদের মধ্যে পূর্বের কর্জে হাসানা ঋণ পরিশোধ না করায় কর্জে হাসানা ও সমবায় অটো-ঋণ সুবিধা স্থায়ীভাবে বন্ধ করা হয়েছে।'}
+                </p>
+              </div>
+            )}
+
             {/* Active Loan tracking repayment panel if user has outstanding debt */}
             {renderActiveLoanRepaymentCard()}
 
@@ -4302,12 +4124,12 @@ BNB Business Co-operative Welfare Fund
                         {Array.from({ length: 45 }, (_, i) => i + 1).map((day) => {
                           let tag = '';
                           const latestDisb = myDisbursments[0];
-                          const dur = latestDisb?.loanDuration || 1;
-                          const instAmt = Math.min(due, Math.ceil((latestDisb?.amount || due) / dur));
+                          const dur = 1;
+                          const instAmt = due;
                           const lateDays = day > 30 ? (day - 30) : 0;
                           const penAmt = lateDays > 0 ? Math.floor((instAmt / 1000) * 10 * lateDays) : 0;
                           if (day <= 30) tag = ' (30 দিনের মধ্যে: 0৳ জরিমানা - ফ্রি)';
-                          else tag = ` (${lateDays} দিন ওভারডিউ: ৳${penAmt} জরিমানা)`;
+                          else tag = ` (${lateDays} দিন ওভারডিউ: ৳${penAmt} জরিমানা ও আজীবন ব্লক)`;
                           return (
                             <option key={day} value={day}>
                               দিন {day} {tag}
@@ -4319,9 +4141,7 @@ BNB Business Co-operative Welfare Fund
 
                     {/* Live calculations output */}
                     {(() => {
-                      const latestDisb = myDisbursments[0];
-                      const dur = latestDisb?.loanDuration || 1;
-                      const instAmount = Math.min(due, Math.ceil((latestDisb?.amount || due) / dur));
+                      const instAmount = due;
                       const daysLateVal = qardSimulatedDay > 30 ? (qardSimulatedDay - 30) : 0;
                       const penAmountVal = daysLateVal > 0 ? Math.floor((instAmount / 1000) * 10 * daysLateVal) : 0;
                       const totalVal = instAmount + penAmountVal;
@@ -4361,9 +4181,8 @@ BNB Business Co-operative Welfare Fund
 
                     <button
                       onClick={() => {
-                        const latestDisb = myDisbursments[0];
-                        const dur = latestDisb?.loanDuration || 1;
-                        const instAmount = Math.min(due, Math.ceil((latestDisb?.amount || due) / dur));
+                        const dur = 1;
+                        const instAmount = due;
                         handleExecuteQardAutoDebit(due, instAmount, dur);
                       }}
                       disabled={simulatingAutoDebit}
@@ -4612,9 +4431,21 @@ BNB Business Co-operative Welfare Fund
                   <span className="text-xs font-black text-emerald-950">📝 ২. সাধারণ সদস্য ম্যানুয়াল আবেদন (সেকেন্ড পেজ)</span>
                 </div>
 
+                {/* Permanent Lifetime Block Warning Banner */}
+                {(user.isLifetimeBannedFromQard === true || (user.qardLateCount || 0) >= 1) && (
+                  <div className="bg-rose-600 text-white p-4 rounded-2xl border border-rose-800 shadow-md space-y-1">
+                    <div className="flex items-center gap-2 font-black text-xs">
+                      <span>🚫 আপনি আজীবনের জন্য কর্জে হাসানা থেকে ব্লককৃত (LIFETIME BANNED)</span>
+                    </div>
+                    <p className="text-[11px] text-rose-100 font-bold leading-relaxed">
+                      {user.qardBanReason || '১ মাস (৩০ দিন) মেয়াদের মধ্যে পূর্বের কর্জে হাসানা ঋণ পরিশোধ না করায় কর্জে হাসানা থেকে স্থায়ীভাবে ব্লক করা হয়েছে।'}
+                    </p>
+                  </div>
+                )}
+
                 {/* Apply Application Form block */}
                 <form onSubmit={handleLoanApply} className="bg-white border border-slate-150 p-5 rounded-3xl space-y-4 shadow-3xs text-left">
-              <h4 className="text-sm font-black text-slate-850 border-b border-slate-100 pb-2">নতুন সুদমুক্ত করযে হাসানা ঋণ রিকোয়েস্ট</h4>
+              <h4 className="text-sm font-black text-slate-850 border-b border-slate-100 pb-2">নতুন সুদমুক্ত করযে হাসানা ঋণ রিকোয়েস্ট (সর্বোচ্চ ১ মাস)</h4>
 
               {/* Profile Completion Checklist Banner */}
               {(() => {
@@ -4714,7 +4545,7 @@ BNB Business Co-operative Welfare Fund
                     যেই তারিখে টাকা গ্রহণ করবেন, ঠিক পরের মাসের একই তারিখে সম্পূর্ণ টাকা ফেরত দিতে হবে (যেমনঃ 10 অক্টোবর টাকা নিলে 10 নভেম্বরের মধ্যে ফেরত দিতে হবে)।
                   </p>
                   <p className="text-[9.5px] text-rose-800 font-black pt-0.5">
-                    🔔 মেয়াদ শেষ হওয়ার 2 দিন পূর্বে রিমাইন্ডার যাবে। 30 দিন পার হলে 31তম দিন থেকে প্রতিদিন প্রতি 1,000 টাকায় 10 টাকা বিলম্ব ফি যুক্ত হবে।
+                    🚫 সতর্কতা: ১ মাস (৩০ দিন) মেয়াদের মধ্যে পরিশোধ না করলে আজীবনের জন্য কর্জে হাসানা থেকে ব্লক হয়ে যাবেন এবং ৩১তম দিন থেকে প্রতিদিন প্রতি ১,০০০ টাকায় ১০ টাকা বিলম্ব ফি যুক্ত হবে।
                   </p>
                 </div>
               </div>
@@ -4782,7 +4613,7 @@ BNB Business Co-operative Welfare Fund
         )}
 
         {/* ==================== TAB 5: ADMIN SUB SECTION ==================== */}
-        {activeTab === 'admin' && user.role === 'admin' && (
+        {isStandaloneAdminRoute() && activeTab === 'admin' && user.role === 'admin' && (
           <div className="space-y-4 text-left animate-fade-in">
             {/* Header statistics info */}
             <div className="bg-gradient-to-br from-amber-50 to-orange-50/40 border border-amber-200 p-5 rounded-3xl relative overflow-hidden">
@@ -5018,6 +4849,11 @@ BNB Business Co-operative Welfare Fund
             e.preventDefault();
             setGoldErrorMsg('');
             setGoldSuccessMsg('');
+
+            if (user.isLifetimeBannedFromQard === true || (user.qardLateCount || 0) >= 1) {
+              setGoldErrorMsg('🚫 ১ মাস (৩০ দিন) মেয়াদের মধ্যে পূর্বের ঋণ পরিশোধ না করায় আপনি আজীবনের জন্য করযে হাসানা ও গোল্ড লোন থেকে ব্লককৃত।');
+              return;
+            }
 
             if (!goldJewelryType.trim()) {
               setGoldErrorMsg('অনুগ্রহ করে স্বর্ণের বিবরণ বা গহনার নাম লিখুন');
@@ -6781,11 +6617,11 @@ BNB Business Co-operative Welfare Fund
                 role: 'সদস্য',
                 rawAmount: loanAmt,
                 amount: loanAmt.toLocaleString('en-US'),
-                installments: isComplete ? '3/3' : (t.loanDuration ? `1/${t.loanDuration}` : '1/3'),
+                installments: isComplete ? '১/১ (পরিশোধিত)' : '১/১ (১ মাস)',
                 dueAmount: remaining.toLocaleString('en-US'),
                 rawDueAmount: remaining,
                 date: txDate.toLocaleDateString('bn-BD', { day: 'numeric', month: 'short', year: 'numeric' }),
-                nextInstallment: t.loanDuration === 1 ? '30 দিন' : '90 দিন',
+                nextInstallment: '৩০ দিন (১ মাস)',
                 isComplete,
                 image: memberPhoto,
                 initialLetter
@@ -6965,56 +6801,56 @@ BNB Business Co-operative Welfare Fund
       <AnimatePresence>
         {showAutoDonationModal && (
           <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
-            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            <div className="h-3 shrink-0 bg-[#004a2c] w-full"></div>
             <motion.div
               initial={{ y: "100%" }}
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden shadow-2xl"
+              className="flex-1 bg-white rounded-t-2xl flex flex-col overflow-hidden shadow-2xl"
             >
-              {/* Header - Yellow/Prominent */}
-              <div className="bg-[#004a2c] text-white px-6 py-5 flex items-center justify-between shadow-lg relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 -rotate-45 translate-x-16 -translate-y-16 rounded-full"></div>
-                <div className="flex items-center gap-4 relative z-10">
-                  <div className="w-12 h-12 bg-amber-400 rounded-2xl flex items-center justify-center shadow-lg animate-pulse-slow">
-                    <RefreshCw className="w-7 h-7 text-slate-900 animate-spin" style={{ animationDuration: '8s' }} />
+              {/* Header */}
+              <div className="bg-[#004a2c] text-white px-4 py-2.5 flex items-center justify-between shadow-md relative overflow-hidden shrink-0">
+                <div className="absolute top-0 right-0 w-24 h-24 bg-white/5 -rotate-45 translate-x-12 -translate-y-12 rounded-full"></div>
+                <div className="flex items-center gap-2.5 relative z-10 min-w-0">
+                  <div className="w-8 h-8 bg-amber-400 rounded-xl flex items-center justify-center shadow-sm shrink-0">
+                    <RefreshCw className="w-4 h-4 text-slate-900 animate-spin" style={{ animationDuration: '8s' }} />
                   </div>
-                  <div>
-                    <h3 className="text-lg font-black text-amber-300 flex items-center gap-2 leading-tight">
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-black text-amber-300 flex items-center gap-1.5 leading-tight">
                       <span>অটো দান সেটিংস</span>
-                      <span className="text-[10px] font-black bg-white text-emerald-800 px-2 py-0.5 rounded-full uppercase tracking-tighter">
+                      <span className="text-[9px] font-black bg-white text-emerald-800 px-1.5 py-0.5 rounded-full uppercase tracking-tighter">
                         PRO
                       </span>
                     </h3>
-                    <p className="text-[11px] text-emerald-50 font-bold uppercase tracking-wider">নির্ধারিত তারিখে আপনার ওয়ালেট থেকে অটো দান হবে</p>
+                    <p className="text-[10px] text-emerald-50/90 font-medium truncate">নির্ধারিত তারিখে আপনার ওয়ালেট থেকে অটো দান হবে</p>
                   </div>
                 </div>
                 <button 
                   onClick={() => setShowAutoDonationModal(false)}
-                  className="w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/20 rounded-2xl transition-all active:scale-90 relative z-10"
+                  className="w-8 h-8 flex items-center justify-center bg-white/10 hover:bg-white/20 rounded-xl transition-all active:scale-90 relative z-10 shrink-0"
                 >
-                  <X className="w-6 h-6 text-white" />
+                  <X className="w-4 h-4 text-white" />
                 </button>
               </div>
 
               {/* Scrollable Body Content */}
-              <div className="flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 space-y-6">
-                {/* Master Activation Toggle Switch - White/Green theme */}
-                <div className="bg-white border-2 border-emerald-100 rounded-3xl p-5 flex items-center justify-between gap-4 shadow-sm">
-                  <div className="flex items-center gap-4">
-                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl shrink-0 border-2 transition ${
+              <div className="flex-1 overflow-y-auto bg-slate-50 p-3 space-y-2.5">
+                {/* Master Activation Toggle Switch */}
+                <div className="bg-white border border-emerald-100 rounded-2xl px-3 py-2.5 flex items-center justify-between gap-2.5 shadow-xs">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-base shrink-0 border transition ${
                       autoDonationEnabled
-                        ? 'bg-emerald-50 border-emerald-500 text-emerald-600'
+                        ? 'bg-emerald-50 border-emerald-400 text-emerald-600'
                         : 'bg-slate-50 border-slate-200 text-slate-400'
                     }`}>
                       {autoDonationEnabled ? '⚡' : '⏸️'}
                     </div>
                     <div className="min-w-0">
-                      <h4 className="text-base sm:text-lg font-black text-slate-800">
+                      <h4 className="text-xs font-black text-slate-800 leading-tight">
                         স্বয়ংক্রিয় সাধারণ দান সচল রাখুন
                       </h4>
-                      <p className="text-[11px] sm:text-xs text-slate-500 font-medium leading-tight mt-1">
+                      <p className="text-[10px] text-slate-500 font-medium leading-tight mt-0.5">
                         {autoDonationEnabled
                           ? 'সচল — নির্ধারিত তারিখে ওয়ালেট থেকে দান তহবিলে টাকা জমা হবে'
                           : 'বন্ধ — কোনো স্বয়ংক্রিয় অর্থ কর্তন করা হবে না'}
@@ -7025,15 +6861,15 @@ BNB Business Co-operative Welfare Fund
                   <button
                     type="button"
                     onClick={() => setAutoDonationEnabled(!autoDonationEnabled)}
-                    className={`w-16 h-8.5 rounded-full p-1 transition-colors duration-200 ease-in-out cursor-pointer relative shrink-0 border-2 ${
+                    className={`w-11 h-6 rounded-full p-0.5 transition-colors duration-200 ease-in-out cursor-pointer relative shrink-0 ${
                       autoDonationEnabled
-                        ? 'bg-emerald-600 border-emerald-600 shadow-md'
-                        : 'bg-slate-300 border-slate-300'
+                        ? 'bg-emerald-600 shadow-sm'
+                        : 'bg-slate-300'
                     }`}
                   >
                     <div
-                      className={`w-6.5 h-6.5 rounded-full bg-white shadow-md transform transition-transform duration-200 ease-in-out ${
-                        autoDonationEnabled ? 'translate-x-7.5' : 'translate-x-0'
+                      className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform duration-200 ease-in-out ${
+                        autoDonationEnabled ? 'translate-x-5' : 'translate-x-0'
                       }`}
                     />
                   </button>
@@ -7041,49 +6877,49 @@ BNB Business Co-operative Welfare Fund
 
                 {/* Status Notice */}
                 {autoDonationNotice && (
-                  <div className={`p-4 rounded-2xl text-sm font-bold border-2 flex items-center gap-3 ${
+                  <div className={`px-3 py-2 rounded-xl text-xs font-bold border flex items-center gap-2 ${
                     autoDonationNotice.includes('সফল')
                       ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                       : 'bg-rose-50 text-rose-700 border-rose-200'
                   }`}>
                     {autoDonationNotice.includes('সফল') ? (
-                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                     ) : (
-                      <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
                     )}
                     <span>{autoDonationNotice}</span>
                   </div>
                 )}
 
                 {/* Frequency Selector Modes */}
-                <div className="space-y-3">
-                  <label className="text-[13px] font-black text-emerald-800 uppercase tracking-widest flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[10px]">১</span>
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-black text-emerald-800 flex items-center gap-1.5">
+                    <span className="w-4 h-4 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[9px]">১</span>
                     অনুদানের ফ্রিকোয়েন্সি নির্বাচন করুন
                   </label>
-                  <div className="grid grid-cols-2 gap-2 bg-emerald-50/50 p-2 rounded-2.5xl border border-emerald-100">
+                  <div className="grid grid-cols-2 gap-1.5 bg-emerald-50/70 p-1 rounded-xl border border-emerald-100">
                     <button
                       type="button"
                       onClick={() => setAutoDonationFrequency('monthly')}
-                      className={`py-3 px-2 text-xs font-black rounded-2xl transition cursor-pointer text-center flex flex-col items-center gap-1 ${
+                      className={`py-2 px-2 text-xs font-black rounded-lg transition cursor-pointer flex items-center justify-center gap-1.5 ${
                         autoDonationFrequency === 'monthly'
-                          ? 'bg-emerald-600 text-white shadow-lg scale-[1.02]'
+                          ? 'bg-emerald-600 text-white shadow-sm'
                           : 'text-slate-600 hover:text-emerald-700 hover:bg-emerald-100/50'
                       }`}
                     >
-                      <Calendar className="w-5 h-5" />
+                      <Calendar className="w-3.5 h-3.5" />
                       প্রতি মাসে
                     </button>
                     <button
                       type="button"
                       onClick={() => setAutoDonationFrequency('custom_monthly')}
-                      className={`py-3 px-2 text-xs font-black rounded-2xl transition cursor-pointer text-center flex flex-col items-center gap-1 ${
+                      className={`py-2 px-2 text-xs font-black rounded-lg transition cursor-pointer flex items-center justify-center gap-1.5 ${
                         autoDonationFrequency === 'custom_monthly'
-                          ? 'bg-emerald-600 text-white shadow-lg scale-[1.02]'
+                          ? 'bg-emerald-600 text-white shadow-sm'
                           : 'text-slate-600 hover:text-emerald-700 hover:bg-emerald-100/50'
                       }`}
                     >
-                      <Sparkles className="w-5 h-5" />
+                      <Sparkles className="w-3.5 h-3.5" />
                       ১২ মাস কাস্টম
                     </button>
                   </div>
@@ -7091,14 +6927,14 @@ BNB Business Co-operative Welfare Fund
 
                 {/* Sub-Option A: প্রতি মাসে (Monthly) */}
                 {autoDonationFrequency === 'monthly' && (
-                  <div className="bg-white border border-emerald-100 rounded-3xl p-5 space-y-5 shadow-sm">
-                    <div className="flex items-center justify-between gap-3 border-b border-slate-50 pb-4">
-                      <span className="text-sm font-black text-slate-800">প্রতি মাসের কত তারিখে কাটা হবে?</span>
-                      <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-2xl">
+                  <div className="bg-white border border-emerald-100 rounded-2xl p-3 space-y-2.5 shadow-xs">
+                    <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
+                      <span className="text-xs font-black text-slate-800">প্রতি মাসের কত তারিখে কাটা হবে?</span>
+                      <div className="flex items-center bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-xl shrink-0">
                         <select
                           value={autoDonationDay}
                           onChange={(e) => setAutoDonationDay(Number(e.target.value))}
-                          className="bg-transparent text-emerald-700 font-mono font-black text-sm focus:outline-none cursor-pointer"
+                          className="bg-transparent text-emerald-700 font-mono font-black text-xs focus:outline-none cursor-pointer"
                         >
                           {Array.from({ length: 28 }, (_, i) => i + 1).map((day) => (
                             <option key={day} value={day} className="bg-white text-slate-900">
@@ -7109,29 +6945,29 @@ BNB Business Co-operative Welfare Fund
                       </div>
                     </div>
 
-                    <div className="space-y-3">
-                      <span className="text-xs font-bold text-slate-500 block uppercase tracking-wider">মাসিক অনুদানের পরিমাণ (টাকা):</span>
-                      <div className="flex items-center bg-slate-50 border-2 border-slate-100 focus-within:border-emerald-500 focus-within:bg-white rounded-2.5xl px-4 py-3.5 transition">
-                        <span className="text-emerald-600 font-black text-xl mr-2">৳</span>
+                    <div className="space-y-2">
+                      <span className="text-[11px] font-bold text-slate-500 block">মাসিক অনুদানের পরিমাণ (টাকা):</span>
+                      <div className="flex items-center bg-slate-50 border border-slate-200 focus-within:border-emerald-500 focus-within:bg-white rounded-xl px-3 py-2 transition">
+                        <span className="text-emerald-600 font-black text-base mr-1.5">৳</span>
                         <input
                           type="number"
                           min={5}
                           value={autoDonationAmount || ''}
                           onChange={(e) => setAutoDonationAmount(Math.max(1, Number(e.target.value)))}
-                          className="w-full bg-transparent text-slate-900 font-mono font-black text-2xl focus:outline-none"
+                          className="w-full bg-transparent text-slate-900 font-mono font-black text-base focus:outline-none"
                           placeholder="পরিমাণ লিখুন"
                         />
                       </div>
-                      <div className="grid grid-cols-5 gap-2 pt-1">
+                      <div className="grid grid-cols-5 gap-1.5">
                         {[20, 30, 50, 100, 200].map((amt) => (
                           <button
                             key={amt}
                             type="button"
                             onClick={() => setAutoDonationAmount(amt)}
-                            className={`py-2.5 text-xs sm:text-sm font-black rounded-xl border-2 font-mono transition active:scale-95 cursor-pointer ${
+                            className={`py-1.5 text-[11px] font-black rounded-lg border font-mono transition active:scale-95 cursor-pointer ${
                               autoDonationAmount === amt
-                                ? 'bg-amber-400 text-slate-950 border-amber-400 shadow-md scale-[1.05]'
-                                : 'bg-white text-slate-600 border-slate-100 hover:border-emerald-200'
+                                ? 'bg-amber-400 text-slate-950 border-amber-400 shadow-xs'
+                                : 'bg-white text-slate-600 border-slate-200 hover:border-emerald-300'
                             }`}
                           >
                             ৳{amt}
@@ -7144,19 +6980,19 @@ BNB Business Co-operative Welfare Fund
 
                 {/* Sub-Option C: ১২ মাস কাস্টম পরিমাণ (Custom Month Amounts) */}
                 {autoDonationFrequency === 'custom_monthly' && (
-                  <div className="bg-white border border-emerald-100 rounded-3xl p-5 space-y-5 shadow-sm">
-                    <div className="flex items-center justify-between gap-3 border-b border-slate-50 pb-4">
+                  <div className="bg-white border border-emerald-100 rounded-2xl p-3 space-y-2.5 shadow-xs">
+                    <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
                       <div className="min-w-0">
-                        <span className="text-sm font-black text-slate-800 block">১২ মাসের ভিন্ন ভিন্ন পরিমাণ</span>
-                        <span className="text-[11px] text-slate-500 font-medium block truncate">
+                        <span className="text-xs font-black text-slate-800 block">১২ মাসের ভিন্ন ভিন্ন পরিমাণ</span>
+                        <span className="text-[10px] text-slate-500 font-medium block truncate">
                           প্রতিটি মাসের জন্য কাস্টম দান সেট করুন
                         </span>
                       </div>
-                      <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-2xl shrink-0">
+                      <div className="flex items-center bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-xl shrink-0">
                         <select
                           value={autoDonationDay}
                           onChange={(e) => setAutoDonationDay(Number(e.target.value))}
-                          className="bg-transparent text-emerald-700 font-mono font-black text-sm focus:outline-none cursor-pointer"
+                          className="bg-transparent text-emerald-700 font-mono font-black text-xs focus:outline-none cursor-pointer"
                         >
                           {Array.from({ length: 28 }, (_, i) => i + 1).map((day) => (
                             <option key={day} value={day} className="bg-white text-slate-900">
@@ -7168,7 +7004,7 @@ BNB Business Co-operative Welfare Fund
                     </div>
 
                     {/* 12 Months Grid - UPDATED TO 3 COLUMNS ALWAYS */}
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-3 gap-1.5">
                       {[
                         { id: '1', name: 'জানু.' },
                         { id: '2', name: 'ফেব্রু.' },
@@ -7183,12 +7019,12 @@ BNB Business Co-operative Welfare Fund
                         { id: '11', name: 'নভে.' },
                         { id: '12', name: 'ডিসে.' },
                       ].map((m) => (
-                        <div key={m.id} className="bg-emerald-50/30 border border-emerald-100 rounded-2xl p-2.5 space-y-1.5 transition hover:bg-emerald-50">
-                          <span className="text-[10px] font-black text-emerald-800 block truncate text-center uppercase tracking-tighter">
+                        <div key={m.id} className="bg-emerald-50/30 border border-emerald-100 rounded-xl p-1.5 space-y-1 transition hover:bg-emerald-50">
+                          <span className="text-[10px] font-black text-emerald-800 block truncate text-center">
                             {m.name}
                           </span>
-                          <div className="flex items-center bg-white border border-emerald-200 focus-within:border-amber-400 rounded-xl px-1.5 py-1.5 shadow-xs transition">
-                            <span className="text-[11px] text-emerald-600 font-bold mr-0.5">৳</span>
+                          <div className="flex items-center bg-white border border-emerald-200 focus-within:border-amber-400 rounded-lg px-1.5 py-1 transition">
+                            <span className="text-[10px] text-emerald-600 font-bold mr-0.5">৳</span>
                             <input
                               type="number"
                               min={0}
@@ -7200,7 +7036,7 @@ BNB Business Co-operative Welfare Fund
                                   [m.id]: val
                                 }));
                               }}
-                              className="w-full bg-transparent text-slate-900 font-mono font-black text-xs focus:outline-none text-center"
+                              className="w-full bg-transparent text-slate-900 font-mono font-black text-[11px] focus:outline-none text-center"
                               placeholder="৫০"
                             />
                           </div>
@@ -7211,31 +7047,31 @@ BNB Business Co-operative Welfare Fund
                 )}
 
                 {/* Privacy & Anonymous Checkbox */}
-                <label className="flex items-center gap-3 bg-white border border-slate-100 hover:border-emerald-200 rounded-3xl px-5 py-4 cursor-pointer transition select-none group shadow-sm">
+                <label className="flex items-center gap-2.5 bg-white border border-slate-100 hover:border-emerald-200 rounded-2xl px-3 py-2.5 cursor-pointer transition select-none group shadow-xs">
                   <input
                     type="checkbox"
                     checked={autoDonationAnonymous}
                     onChange={(e) => setAutoDonationAnonymous(e.target.checked)}
-                    className="w-5 h-5 accent-emerald-600 rounded-lg cursor-pointer shrink-0"
+                    className="w-4 h-4 accent-emerald-600 rounded cursor-pointer shrink-0"
                   />
                   <div className="min-w-0 text-left">
-                    <span className="text-sm font-black text-slate-800 block leading-tight group-hover:text-emerald-700 transition">
+                    <span className="text-xs font-black text-slate-800 block leading-tight group-hover:text-emerald-700 transition">
                       স্বয়ংক্রিয় দানেও পরিচয় গোপন রাখুন
                     </span>
-                    <span className="text-[10px] text-slate-500 block leading-tight mt-1.5 font-medium">
+                    <span className="text-[10px] text-slate-500 block leading-tight mt-0.5 font-medium">
                       অনলাইন খতিয়ান ও তালিকায় আপনার নাম গোপন থাকবে
                     </span>
                   </div>
                 </label>
 
                 {/* Helpful Reminder Note */}
-                <div className="bg-amber-50 border border-amber-200 rounded-3xl p-5 flex items-start gap-4 shadow-inner">
-                  <div className="w-10 h-10 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center shrink-0 shadow-sm">
-                    <ShieldCheck className="w-6 h-6" />
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-2.5 flex items-start gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-amber-400 text-slate-950 flex items-center justify-center shrink-0">
+                    <ShieldCheck className="w-4 h-4" />
                   </div>
-                  <div className="flex-1">
-                    <strong className="text-amber-900 font-black text-sm block mb-1">নিরাপত্তা ও নীতিমালা:</strong>
-                    <p className="text-[11px] text-amber-800/80 leading-relaxed font-semibold">
+                  <div className="flex-1 min-w-0">
+                    <strong className="text-amber-900 font-black text-xs block leading-tight mb-0.5">নিরাপত্তা ও নীতিমালা:</strong>
+                    <p className="text-[10px] text-amber-800/85 leading-snug font-semibold">
                       নির্ধারিত দিনে আপনার প্রধান ব্যালেন্স থেকে অনুদান কর্তন হবে। ব্যালেন্স অপর্যাপ্ত থাকলে কোনো জরিমানা হবে না এবং পরবর্তী মাসে সিডিউলটি পুনরায় সচল থাকবে।
                     </p>
                   </div>
@@ -7243,35 +7079,16 @@ BNB Business Co-operative Welfare Fund
               </div>
 
               {/* Modal Footer Controls */}
-              <div className="bg-white border-t border-slate-100 p-4 sm:p-6 flex items-center justify-between gap-4 shrink-0 shadow-[0_-4px_20px_rgba(0,0,0,0.03)]">
+              <div className="bg-white border-t border-slate-100 px-4 py-2.5 flex items-center justify-center shrink-0 shadow-[0_-2px_10px_rgba(0,0,0,0.03)]">
                 <button
                   type="button"
                   disabled={autoDonationSaving}
-                  onClick={() => handleSaveAutoDonation(true)}
-                  className="px-6 py-4 bg-amber-50 hover:bg-amber-100 active:scale-95 text-amber-700 border-2 border-amber-200 font-black text-sm rounded-2xl transition cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                  onClick={() => handleSaveAutoDonation(false)}
+                  className="px-7 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-95 text-white font-black text-xs rounded-xl transition cursor-pointer shadow-md flex items-center justify-center gap-1.5 disabled:opacity-50"
                 >
-                  <Zap className="w-4 h-4 fill-amber-500" />
-                  <span>{autoDonationSaving ? 'চলছে...' : 'টেস্ট রান ⚡'}</span>
+                  <Check className="w-4 h-4 text-white stroke-[3]" />
+                  <span>{autoDonationSaving ? 'সংরক্ষণ হচ্ছে...' : 'সেভ করুন'}</span>
                 </button>
-
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setShowAutoDonationModal(false)}
-                    className="px-6 py-4 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-600 font-black text-sm rounded-2xl transition cursor-pointer"
-                  >
-                    বন্ধ করুন
-                  </button>
-                  <button
-                    type="button"
-                    disabled={autoDonationSaving}
-                    onClick={() => handleSaveAutoDonation(false)}
-                    className="px-8 py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-95 text-white font-black text-sm rounded-2xl transition cursor-pointer shadow-lg flex items-center justify-center gap-2 disabled:opacity-50"
-                  >
-                    <Check className="w-5 h-5 text-white stroke-[3]" />
-                    <span>{autoDonationSaving ? 'সংরক্ষণ হচ্ছে...' : 'সিডিউল সংরক্ষণ করুন'}</span>
-                  </button>
-                </div>
               </div>
             </motion.div>
           </div>
@@ -7282,56 +7099,56 @@ BNB Business Co-operative Welfare Fund
       <AnimatePresence>
         {showQardAutoDonationModal && (
           <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/60 backdrop-blur-sm">
-            <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+            <div className="h-3 shrink-0 bg-[#004a2c] w-full"></div>
             <motion.div
               initial={{ y: "100%" }}
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden shadow-2xl"
+              className="flex-1 bg-white rounded-t-2xl flex flex-col overflow-hidden shadow-2xl"
             >
-              {/* Header - Yellow/Prominent */}
-              <div className="bg-[#004a2c] text-white px-6 py-5 flex items-center justify-between shadow-lg relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 -rotate-45 translate-x-16 -translate-y-16 rounded-full"></div>
-                <div className="flex items-center gap-4 relative z-10">
-                  <div className="w-12 h-12 bg-amber-400 rounded-2xl flex items-center justify-center shadow-lg animate-pulse-slow">
-                    <RefreshCw className="w-7 h-7 text-slate-900 animate-spin" style={{ animationDuration: '8s' }} />
+              {/* Header */}
+              <div className="bg-[#004a2c] text-white px-4 py-2.5 flex items-center justify-between shadow-md relative overflow-hidden shrink-0">
+                <div className="absolute top-0 right-0 w-24 h-24 bg-white/5 -rotate-45 translate-x-12 -translate-y-12 rounded-full"></div>
+                <div className="flex items-center gap-2.5 relative z-10 min-w-0">
+                  <div className="w-8 h-8 bg-amber-400 rounded-xl flex items-center justify-center shadow-sm shrink-0">
+                    <RefreshCw className="w-4 h-4 text-slate-900 animate-spin" style={{ animationDuration: '8s' }} />
                   </div>
-                  <div>
-                    <h3 className="text-lg font-black text-amber-300 flex items-center gap-2 leading-tight">
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-black text-amber-300 flex items-center gap-1.5 leading-tight">
                       <span>অটো করযে হাসানা</span>
-                      <span className="text-[10px] font-black bg-white text-emerald-800 px-2 py-0.5 rounded-full uppercase tracking-tighter">
+                      <span className="text-[9px] font-black bg-white text-emerald-800 px-1.5 py-0.5 rounded-full uppercase tracking-tighter">
                         QARD
                       </span>
                     </h3>
-                    <p className="text-[11px] text-emerald-50 font-bold uppercase tracking-wider">নির্ধারিত তারিখে করযে হাসানা ফান্ডে অটো জমা হবে</p>
+                    <p className="text-[10px] text-emerald-50/90 font-medium truncate">নির্ধারিত তারিখে করযে হাসানা ফান্ডে অটো জমা হবে</p>
                   </div>
                 </div>
                 <button 
                   onClick={() => setShowQardAutoDonationModal(false)}
-                  className="w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/20 rounded-2xl transition-all active:scale-90 relative z-10"
+                  className="w-8 h-8 flex items-center justify-center bg-white/10 hover:bg-white/20 rounded-xl transition-all active:scale-90 relative z-10 shrink-0"
                 >
-                  <X className="w-6 h-6 text-white" />
+                  <X className="w-4 h-4 text-white" />
                 </button>
               </div>
 
               {/* Scrollable Body Content */}
-              <div className="flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 space-y-6">
+              <div className="flex-1 overflow-y-auto bg-slate-50 p-3 space-y-2.5">
                 {/* Master Activation Toggle Switch */}
-                <div className="bg-white border-2 border-emerald-100 rounded-3xl p-5 flex items-center justify-between gap-4 shadow-sm">
-                  <div className="flex items-center gap-4">
-                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl shrink-0 border-2 transition ${
+                <div className="bg-white border border-emerald-100 rounded-2xl px-3 py-2.5 flex items-center justify-between gap-2.5 shadow-xs">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-base shrink-0 border transition ${
                       qardAutoDonationEnabled
-                        ? 'bg-emerald-50 border-emerald-500 text-emerald-600'
+                        ? 'bg-emerald-50 border-emerald-400 text-emerald-600'
                         : 'bg-slate-50 border-slate-200 text-slate-400'
                     }`}>
                       {qardAutoDonationEnabled ? '⚡' : '⏸️'}
                     </div>
                     <div className="min-w-0">
-                      <h4 className="text-base sm:text-lg font-black text-slate-800">
+                      <h4 className="text-xs font-black text-slate-800 leading-tight">
                         স্বয়ংক্রিয় করযে হাসানা দান সচল রাখুন
                       </h4>
-                      <p className="text-[11px] sm:text-xs text-slate-500 font-medium leading-tight mt-1">
+                      <p className="text-[10px] text-slate-500 font-medium leading-tight mt-0.5">
                         {qardAutoDonationEnabled
                           ? 'সচল — নির্ধারিত তারিখে ওয়ালেট থেকে করযে হাসানা ফান্ডে টাকা জমা হবে'
                           : 'বন্ধ — কোনো স্বয়ংক্রিয় অর্থ কর্তন করা হবে না'}
@@ -7342,15 +7159,15 @@ BNB Business Co-operative Welfare Fund
                   <button
                     type="button"
                     onClick={() => setQardAutoDonationEnabled(!qardAutoDonationEnabled)}
-                    className={`w-16 h-8.5 rounded-full p-1 transition-colors duration-200 ease-in-out cursor-pointer relative shrink-0 border-2 ${
+                    className={`w-11 h-6 rounded-full p-0.5 transition-colors duration-200 ease-in-out cursor-pointer relative shrink-0 ${
                       qardAutoDonationEnabled
-                        ? 'bg-emerald-600 border-emerald-600 shadow-md'
-                        : 'bg-slate-300 border-slate-300'
+                        ? 'bg-emerald-600 shadow-sm'
+                        : 'bg-slate-300'
                     }`}
                   >
                     <div
-                      className={`w-6.5 h-6.5 rounded-full bg-white shadow-md transform transition-transform duration-200 ease-in-out ${
-                        qardAutoDonationEnabled ? 'translate-x-7.5' : 'translate-x-0'
+                      className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform duration-200 ease-in-out ${
+                        qardAutoDonationEnabled ? 'translate-x-5' : 'translate-x-0'
                       }`}
                     />
                   </button>
@@ -7358,49 +7175,49 @@ BNB Business Co-operative Welfare Fund
 
                 {/* Status Notice */}
                 {qardAutoDonationNotice && (
-                  <div className={`p-4 rounded-2xl text-sm font-bold border-2 flex items-center gap-3 ${
+                  <div className={`px-3 py-2 rounded-xl text-xs font-bold border flex items-center gap-2 ${
                     qardAutoDonationNotice.includes('সফল')
                       ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                       : 'bg-rose-50 text-rose-700 border-rose-200'
                   }`}>
                     {qardAutoDonationNotice.includes('সফল') ? (
-                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                     ) : (
-                      <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
                     )}
                     <span>{qardAutoDonationNotice}</span>
                   </div>
                 )}
 
                 {/* Frequency Selector Modes */}
-                <div className="space-y-3">
-                  <label className="text-[13px] font-black text-emerald-800 uppercase tracking-widest flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[10px]">১</span>
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-black text-emerald-800 flex items-center gap-1.5">
+                    <span className="w-4 h-4 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[9px]">১</span>
                     অনুদানের ফ্রিকোয়েন্সি নির্বাচন করুন
                   </label>
-                  <div className="grid grid-cols-2 gap-2 bg-emerald-50/50 p-2 rounded-2.5xl border border-emerald-100">
+                  <div className="grid grid-cols-2 gap-1.5 bg-emerald-50/70 p-1 rounded-xl border border-emerald-100">
                     <button
                       type="button"
                       onClick={() => setQardAutoDonationFrequency('monthly')}
-                      className={`py-3 px-2 text-xs font-black rounded-2xl transition cursor-pointer text-center flex flex-col items-center gap-1 ${
+                      className={`py-2 px-2 text-xs font-black rounded-lg transition cursor-pointer flex items-center justify-center gap-1.5 ${
                         qardAutoDonationFrequency === 'monthly'
-                          ? 'bg-emerald-600 text-white shadow-lg scale-[1.02]'
+                          ? 'bg-emerald-600 text-white shadow-sm'
                           : 'text-slate-600 hover:text-emerald-700 hover:bg-emerald-100/50'
                       }`}
                     >
-                      <Calendar className="w-5 h-5" />
+                      <Calendar className="w-3.5 h-3.5" />
                       প্রতি মাসে
                     </button>
                     <button
                       type="button"
                       onClick={() => setQardAutoDonationFrequency('custom_monthly')}
-                      className={`py-3 px-2 text-xs font-black rounded-2xl transition cursor-pointer text-center flex flex-col items-center gap-1 ${
+                      className={`py-2 px-2 text-xs font-black rounded-lg transition cursor-pointer flex items-center justify-center gap-1.5 ${
                         qardAutoDonationFrequency === 'custom_monthly'
-                          ? 'bg-emerald-600 text-white shadow-lg scale-[1.02]'
+                          ? 'bg-emerald-600 text-white shadow-sm'
                           : 'text-slate-600 hover:text-emerald-700 hover:bg-emerald-100/50'
                       }`}
                     >
-                      <Sparkles className="w-5 h-5" />
+                      <Sparkles className="w-3.5 h-3.5" />
                       ১২ মাস কাস্টম
                     </button>
                   </div>
@@ -7408,14 +7225,14 @@ BNB Business Co-operative Welfare Fund
 
                 {/* Sub-Option A: প্রতি মাসে (Monthly) */}
                 {qardAutoDonationFrequency === 'monthly' && (
-                  <div className="bg-white border border-emerald-100 rounded-3xl p-5 space-y-5 shadow-sm">
-                    <div className="flex items-center justify-between gap-3 border-b border-slate-50 pb-4">
-                      <span className="text-sm font-black text-slate-800">প্রতি মাসের কত তারিখে কাটা হবে?</span>
-                      <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-2xl">
+                  <div className="bg-white border border-emerald-100 rounded-2xl p-3 space-y-2.5 shadow-xs">
+                    <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
+                      <span className="text-xs font-black text-slate-800">প্রতি মাসের কত তারিখে কাটা হবে?</span>
+                      <div className="flex items-center bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-xl shrink-0">
                         <select
                           value={qardAutoDonationDay}
                           onChange={(e) => setQardAutoDonationDay(Number(e.target.value))}
-                          className="bg-transparent text-emerald-700 font-mono font-black text-sm focus:outline-none cursor-pointer"
+                          className="bg-transparent text-emerald-700 font-mono font-black text-xs focus:outline-none cursor-pointer"
                         >
                           {Array.from({ length: 28 }, (_, i) => i + 1).map((day) => (
                             <option key={day} value={day} className="bg-white text-slate-900">
@@ -7426,29 +7243,29 @@ BNB Business Co-operative Welfare Fund
                       </div>
                     </div>
 
-                    <div className="space-y-3">
-                      <span className="text-xs font-bold text-slate-500 block uppercase tracking-wider">মাসিক অনুদানের পরিমাণ (টাকা):</span>
-                      <div className="flex items-center bg-slate-50 border-2 border-slate-100 focus-within:border-emerald-500 focus-within:bg-white rounded-2.5xl px-4 py-3.5 transition">
-                        <span className="text-emerald-600 font-black text-xl mr-2">৳</span>
+                    <div className="space-y-2">
+                      <span className="text-[11px] font-bold text-slate-500 block">মাসিক অনুদানের পরিমাণ (টাকা):</span>
+                      <div className="flex items-center bg-slate-50 border border-slate-200 focus-within:border-emerald-500 focus-within:bg-white rounded-xl px-3 py-2 transition">
+                        <span className="text-emerald-600 font-black text-base mr-1.5">৳</span>
                         <input
                           type="number"
                           min={5}
                           value={qardAutoDonationAmount || ''}
                           onChange={(e) => setQardAutoDonationAmount(Math.max(1, Number(e.target.value)))}
-                          className="w-full bg-transparent text-slate-900 font-mono font-black text-2xl focus:outline-none"
+                          className="w-full bg-transparent text-slate-900 font-mono font-black text-base focus:outline-none"
                           placeholder="পরিমাণ লিখুন"
                         />
                       </div>
-                      <div className="grid grid-cols-5 gap-2 pt-1">
+                      <div className="grid grid-cols-5 gap-1.5">
                         {[20, 30, 50, 100, 200].map((amt) => (
                           <button
                             key={amt}
                             type="button"
                             onClick={() => setQardAutoDonationAmount(amt)}
-                            className={`py-2.5 text-xs sm:text-sm font-black rounded-xl border-2 font-mono transition active:scale-95 cursor-pointer ${
+                            className={`py-1.5 text-[11px] font-black rounded-lg border font-mono transition active:scale-95 cursor-pointer ${
                               qardAutoDonationAmount === amt
-                                ? 'bg-amber-400 text-slate-950 border-amber-400 shadow-md scale-[1.05]'
-                                : 'bg-white text-slate-600 border-slate-100 hover:border-emerald-200'
+                                ? 'bg-amber-400 text-slate-950 border-amber-400 shadow-xs'
+                                : 'bg-white text-slate-600 border-slate-200 hover:border-emerald-300'
                             }`}
                           >
                             ৳{amt}
@@ -7461,19 +7278,19 @@ BNB Business Co-operative Welfare Fund
 
                 {/* Sub-Option C: ১২ মাস কাস্টম পরিমাণ (Custom Month Amounts) */}
                 {qardAutoDonationFrequency === 'custom_monthly' && (
-                  <div className="bg-white border border-emerald-100 rounded-3xl p-5 space-y-5 shadow-sm">
-                    <div className="flex items-center justify-between gap-3 border-b border-slate-50 pb-4">
+                  <div className="bg-white border border-emerald-100 rounded-2xl p-3 space-y-2.5 shadow-xs">
+                    <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
                       <div className="min-w-0">
-                        <span className="text-sm font-black text-slate-800 block">১২ মাসের ভিন্ন ভিন্ন পরিমাণ</span>
-                        <span className="text-[11px] text-slate-500 font-medium block truncate">
+                        <span className="text-xs font-black text-slate-800 block">১২ মাসের ভিন্ন ভিন্ন পরিমাণ</span>
+                        <span className="text-[10px] text-slate-500 font-medium block truncate">
                           প্রতিটি মাসের জন্য কাস্টম করযে হাসানা দান সেট করুন
                         </span>
                       </div>
-                      <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-2xl shrink-0">
+                      <div className="flex items-center bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-xl shrink-0">
                         <select
                           value={qardAutoDonationDay}
                           onChange={(e) => setQardAutoDonationDay(Number(e.target.value))}
-                          className="bg-transparent text-emerald-700 font-mono font-black text-sm focus:outline-none cursor-pointer"
+                          className="bg-transparent text-emerald-700 font-mono font-black text-xs focus:outline-none cursor-pointer"
                         >
                           {Array.from({ length: 28 }, (_, i) => i + 1).map((day) => (
                             <option key={day} value={day} className="bg-white text-slate-900">
@@ -7485,7 +7302,7 @@ BNB Business Co-operative Welfare Fund
                     </div>
 
                     {/* 12 Months Grid */}
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-3 gap-1.5">
                       {[
                         { id: '1', name: 'জানু.' },
                         { id: '2', name: 'ফেব্রু.' },
@@ -7500,12 +7317,12 @@ BNB Business Co-operative Welfare Fund
                         { id: '11', name: 'নভে.' },
                         { id: '12', name: 'ডিসে.' },
                       ].map((m) => (
-                        <div key={m.id} className="bg-emerald-50/30 border border-emerald-100 rounded-2xl p-2.5 space-y-1.5 transition hover:bg-emerald-50">
-                          <span className="text-[10px] font-black text-emerald-800 block truncate text-center uppercase tracking-tighter">
+                        <div key={m.id} className="bg-emerald-50/30 border border-emerald-100 rounded-xl p-1.5 space-y-1 transition hover:bg-emerald-50">
+                          <span className="text-[10px] font-black text-emerald-800 block truncate text-center">
                             {m.name}
                           </span>
-                          <div className="flex items-center bg-white border border-emerald-200 focus-within:border-amber-400 rounded-xl px-1.5 py-1.5 shadow-xs transition">
-                            <span className="text-[11px] text-emerald-600 font-bold mr-0.5">৳</span>
+                          <div className="flex items-center bg-white border border-emerald-200 focus-within:border-amber-400 rounded-lg px-1.5 py-1 transition">
+                            <span className="text-[10px] text-emerald-600 font-bold mr-0.5">৳</span>
                             <input
                               type="number"
                               min={0}
@@ -7517,7 +7334,7 @@ BNB Business Co-operative Welfare Fund
                                   [m.id]: val
                                 }));
                               }}
-                              className="w-full bg-transparent text-slate-900 font-mono font-black text-xs focus:outline-none text-center"
+                              className="w-full bg-transparent text-slate-900 font-mono font-black text-[11px] focus:outline-none text-center"
                               placeholder="৫০"
                             />
                           </div>
@@ -7528,31 +7345,31 @@ BNB Business Co-operative Welfare Fund
                 )}
 
                 {/* Privacy & Anonymous Checkbox */}
-                <label className="flex items-center gap-3 bg-white border border-slate-100 hover:border-emerald-200 rounded-3xl px-5 py-4 cursor-pointer transition select-none group shadow-sm">
+                <label className="flex items-center gap-2.5 bg-white border border-slate-100 hover:border-emerald-200 rounded-2xl px-3 py-2.5 cursor-pointer transition select-none group shadow-xs">
                   <input
                     type="checkbox"
                     checked={qardAutoDonationAnonymous}
                     onChange={(e) => setQardAutoDonationAnonymous(e.target.checked)}
-                    className="w-5 h-5 accent-emerald-600 rounded-lg cursor-pointer shrink-0"
+                    className="w-4 h-4 accent-emerald-600 rounded cursor-pointer shrink-0"
                   />
                   <div className="min-w-0 text-left">
-                    <span className="text-sm font-black text-slate-800 block leading-tight group-hover:text-emerald-700 transition">
+                    <span className="text-xs font-black text-slate-800 block leading-tight group-hover:text-emerald-700 transition">
                       স্বয়ংক্রিয় করযে হাসানাতেও পরিচয় গোপন রাখুন
                     </span>
-                    <span className="text-[10px] text-slate-500 block leading-tight mt-1.5 font-medium">
+                    <span className="text-[10px] text-slate-500 block leading-tight mt-0.5 font-medium">
                       অনলাইন খতিয়ান ও তালিকায় আপনার নাম গোপন থাকবে
                     </span>
                   </div>
                 </label>
 
                 {/* Helpful Reminder Note */}
-                <div className="bg-amber-50 border border-amber-200 rounded-3xl p-5 flex items-start gap-4 shadow-inner">
-                  <div className="w-10 h-10 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center shrink-0 shadow-sm">
-                    <ShieldCheck className="w-6 h-6" />
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-2.5 flex items-start gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-amber-400 text-slate-950 flex items-center justify-center shrink-0">
+                    <ShieldCheck className="w-4 h-4" />
                   </div>
-                  <div className="flex-1">
-                    <strong className="text-amber-900 font-black text-sm block mb-1">নিরাপত্তা ও নীতিমালা:</strong>
-                    <p className="text-[11px] text-amber-800/80 leading-relaxed font-semibold">
+                  <div className="flex-1 min-w-0">
+                    <strong className="text-amber-900 font-black text-xs block leading-tight mb-0.5">নিরাপত্তা ও নীতিমালা:</strong>
+                    <p className="text-[10px] text-amber-800/85 leading-snug font-semibold">
                       নির্ধারিত দিনে আপনার প্রধান ব্যালেন্স থেকে করযে হাসানা দান কর্তন হবে। ব্যালেন্স অপর্যাপ্ত থাকলে কোনো জরিমানা হবে না এবং পরবর্তী মাসে সিডিউলটি পুনরায় সচল থাকবে।
                     </p>
                   </div>
@@ -7560,35 +7377,16 @@ BNB Business Co-operative Welfare Fund
               </div>
 
               {/* Modal Footer Controls */}
-              <div className="bg-white border-t border-slate-100 p-4 sm:p-6 flex items-center justify-between gap-4 shrink-0 shadow-[0_-4px_20px_rgba(0,0,0,0.03)]">
+              <div className="bg-white border-t border-slate-100 px-4 py-2.5 flex items-center justify-center shrink-0 shadow-[0_-2px_10px_rgba(0,0,0,0.03)]">
                 <button
                   type="button"
                   disabled={qardAutoDonationSaving}
-                  onClick={() => handleSaveQardAutoDonation(true)}
-                  className="px-6 py-4 bg-amber-50 hover:bg-amber-100 active:scale-95 text-amber-700 border-2 border-amber-200 font-black text-sm rounded-2xl transition cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                  onClick={() => handleSaveQardAutoDonation(false)}
+                  className="px-7 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-95 text-white font-black text-xs rounded-xl transition cursor-pointer shadow-md flex items-center justify-center gap-1.5 disabled:opacity-50"
                 >
-                  <Zap className="w-4 h-4 fill-amber-500" />
-                  <span>{qardAutoDonationSaving ? 'চলছে...' : 'টেস্ট রান ⚡'}</span>
+                  <Check className="w-4 h-4 text-white stroke-[3]" />
+                  <span>{qardAutoDonationSaving ? 'সংরক্ষণ হচ্ছে...' : 'সেভ করুন'}</span>
                 </button>
-
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setShowQardAutoDonationModal(false)}
-                    className="px-6 py-4 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-600 font-black text-sm rounded-2xl transition cursor-pointer"
-                  >
-                    বন্ধ করুন
-                  </button>
-                  <button
-                    type="button"
-                    disabled={qardAutoDonationSaving}
-                    onClick={() => handleSaveQardAutoDonation(false)}
-                    className="px-8 py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-95 text-white font-black text-sm rounded-2xl transition cursor-pointer shadow-lg flex items-center justify-center gap-2 disabled:opacity-50"
-                  >
-                    <Check className="w-5 h-5 text-white stroke-[3]" />
-                    <span>{qardAutoDonationSaving ? 'সংরক্ষণ হচ্ছে...' : 'সিডিউল সংরক্ষণ করুন'}</span>
-                  </button>
-                </div>
               </div>
             </motion.div>
           </div>
@@ -8012,7 +7810,7 @@ BNB Business Co-operative Welfare Fund
                   );
                 })()}
 
-                {/* SUB TAB 4: LATE PAYERS & BLACKLISTED DEFAULTERS (বিলম্বকারী ও ২-বার ব্যর্থতায় স্থায়ী আজীবন নিষিদ্ধ) */}
+                {/* SUB TAB 4: LATE PAYERS & BLACKLISTED DEFAULTERS (১ মাসে না দিলে আজীবন ব্লক) */}
                 {repaySubTab === 'late_defaulters' && (() => {
                   const latePayersMap: Record<string, { userId: string; name: string; phone: string; lateCount: number; totalFine: number; lastFineDate: string; isBanned: boolean; photo?: string }> = {};
 
@@ -8033,14 +7831,30 @@ BNB Business Co-operative Welfare Fund
                           lateCount: 0,
                           totalFine: 0,
                           lastFineDate: t.createdAt,
-                          isBanned: false,
+                          isBanned: true,
                           photo: mPhoto
                         };
                       }
                       latePayersMap[uid].lateCount += 1;
                       latePayersMap[uid].totalFine += (t.amount || 0);
-                      if (latePayersMap[uid].lateCount >= 2) {
-                        latePayersMap[uid].isBanned = true;
+                      latePayersMap[uid].isBanned = true;
+                    }
+                  });
+
+                  Object.values(usersMap).forEach((uInfo: any) => {
+                    if (uInfo && (uInfo.isLifetimeBannedFromQard === true || (uInfo.qardLateCount || 0) >= 1)) {
+                      const uid = uInfo.uid || uInfo.id;
+                      if (uid && !latePayersMap[uid]) {
+                        latePayersMap[uid] = {
+                          userId: uid,
+                          name: uInfo.name || 'সদস্য',
+                          phone: uInfo.phone || '',
+                          lateCount: Math.max(1, uInfo.qardLateCount || 1),
+                          totalFine: uInfo.totalQardFine || 0,
+                          lastFineDate: uInfo.qardBannedAt || uInfo.createdAt || '',
+                          isBanned: true,
+                          photo: uInfo.photoURL || uInfo.photo || ''
+                        };
                       }
                     }
                   });
@@ -8060,10 +7874,10 @@ BNB Business Co-operative Welfare Fund
                       <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-2xl text-[11px] text-rose-950 font-bold leading-relaxed space-y-1">
                         <div className="flex items-center gap-1.5 text-rose-800 font-black text-xs">
                           <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                          <span>২-বার বিলম্ব এবং আজীবন নিষিদ্ধকরণ নিয়মাবলী:</span>
+                          <span>১ মাসের মধ্যে পরিশোধ না করলে আজীবন ব্লক নিয়মাবলী:</span>
                         </div>
                         <p className="text-slate-700">
-                          প্রথমবার ৩০ দিন মেয়াদ পার করে দেরিতে পরিশোধ করলে ১টি বিলম্ব জরিমানা ও সতর্কবার্তা যুক্ত হয়। কিন্তু ২য় বার সময়মতো পরিশোধে ব্যর্থ হলে (বিলম্ব কাউন্ট ২) উক্ত ব্যক্তি আজীবনের জন্য করযে হাসানা ফান্ড বা সমবায় সমিতি থেকে নতুন কোনো ঋণ নেওয়ার যোগ্যতা স্থায়ীভাবে হারাবে (LIFETIME BANNED)।
+                          কর্জে হাসানা ঋণ সর্বোচ্চ ১ মাস (৩০ দিন) মেয়াদের জন্য প্রদান করা হয়। নির্ধারিত ১ মাস (৩০ দিন) মেয়াদের মধ্যে ঋণ পরিশোধ না করলে উক্ত সদস্য আজীবনের জন্য করযে হাসানা ফান্ড থেকে স্থায়ীভাবে ব্লক (LIFETIME BANNED) হয়ে যাবেন এবং আর কখনোই ঋণ নিতে পারবেন না।
                         </p>
                       </div>
 
@@ -8072,7 +7886,7 @@ BNB Business Co-operative Welfare Fund
                         <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                         <input
                           type="text"
-                          placeholder="বিলম্বকারী বা নিষিদ্ধ সদস্যদের নাম/ফোন লিখে খুঁজুন..."
+                          placeholder="বিলম্বকারী বা ব্লককৃত সদস্যদের নাম/ফোন লিখে খুঁজুন..."
                           value={defaultersSearchQuery}
                           onChange={(e) => setDefaultersSearchQuery(e.target.value)}
                           className="w-full pl-8 pr-7 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-2xl text-slate-800 placeholder-slate-400 focus:outline-none focus:border-rose-500 font-sans font-bold"
@@ -8092,11 +7906,11 @@ BNB Business Co-operative Welfare Fund
                       <div className="space-y-2">
                         {filteredDefaulters.length === 0 ? (
                           <div className="p-8 text-center text-slate-400 bg-white border border-slate-200 rounded-2xl text-xs font-bold">
-                            বর্তমানে কোনো বিলম্বকারী বা ব্ল্যাকলিস্টেড সদস্যের তথ্য পাওয়া যায়নি।
+                            বর্তমানে কোনো আজীবন ব্লককৃত বা বিলম্বকারী সদস্য পাওয়া যায়নি।
                           </div>
                         ) : (
                           filteredDefaulters.map((item, idx) => (
-                            <div key={idx} className={`p-3 bg-white border rounded-2xl flex items-center justify-between gap-3 shadow-4xs ${item.isBanned ? 'border-rose-300 bg-rose-50/30' : 'border-slate-200'}`}>
+                            <div key={idx} className="p-3 bg-rose-50/30 border border-rose-300 rounded-2xl flex items-center justify-between gap-3 shadow-4xs">
                               <div className="flex items-center gap-2.5 min-w-0">
                                 {item.photo ? (
                                   <img
@@ -8122,15 +7936,9 @@ BNB Business Co-operative Welfare Fund
                                 <span className="text-[10px] font-black text-slate-700 block">
                                   বিলম্ব কাউন্ট: {item.lateCount} বার
                                 </span>
-                                {item.isBanned || item.lateCount >= 2 ? (
-                                  <span className="text-[9px] font-black text-white bg-rose-700 border border-rose-800 px-2 py-0.5 rounded-md inline-flex items-center gap-1 shadow-3xs">
-                                    🚫 আজীবন নিষিদ্ধ (LIFETIME BANNED)
-                                  </span>
-                                ) : (
-                                  <span className="text-[9px] font-black text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-md inline-block">
-                                    ⚠️ ১ম বার বিলম্ব (সতর্কবার্তা)
-                                  </span>
-                                )}
+                                <span className="text-[9px] font-black text-white bg-rose-700 border border-rose-800 px-2 py-0.5 rounded-md inline-flex items-center gap-1 shadow-3xs">
+                                  🚫 আজীবন ব্লক (LIFETIME BANNED)
+                                </span>
                               </div>
                             </div>
                           ))

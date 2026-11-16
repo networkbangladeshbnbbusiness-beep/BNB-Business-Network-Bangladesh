@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback, Suspense } from 'react';
 import { ensureAuth, db, handleFirestoreError, OperationType, auth } from './lib/firebase';
 import { signOut } from 'firebase/auth';
 import { doc, getDoc, getDocFromCache, collection, query, where, getDocs, updateDoc, setDoc, limit, onSnapshot, increment, serverTimestamp, writeBatch, runTransaction } from 'firebase/firestore';
@@ -14,7 +14,22 @@ import LockScreen from './components/LockScreen';
 import SetAppLockModal from './components/SetAppLockModal';
 import Dashboard from './components/Dashboard';
 import DrawerMenu from './components/DrawerMenu';
-import AdminPanel from './components/AdminPanel';
+import {
+  isStandaloneAdminRoute,
+  isAdminBuildVariant,
+  isAiStudioDevHost,
+  isStudioUserPreviewActive,
+  setStudioUserPreviewActive
+} from './lib/adminRoute';
+import {
+  getOrCreateAdminSessionId,
+  markAdminSessionOffline,
+  recordAdminLoginSession
+} from './lib/adminAccessControl';
+
+export { isStandaloneAdminRoute };
+
+const AdminPanel = React.lazy(() => import('./components/AdminPanel'));
 
 import MaintenanceScreen from './components/MaintenanceScreen';
 import ForceUpdateScreen from './components/ForceUpdateScreen';
@@ -43,7 +58,12 @@ if (typeof window !== 'undefined') {
 function isFakeOrTemporaryUid(uid?: string | null): boolean {
   if (!uid) return true;
   const trimmed = String(uid).trim();
-  return !trimmed || trimmed.startsWith('user_member_') || trimmed.startsWith('user_fallback_');
+  return (
+    !trimmed ||
+    trimmed === 'admin_master_100' ||
+    trimmed.startsWith('user_member_') ||
+    trimmed.startsWith('user_fallback_')
+  );
 }
 
 function isCorruptedFallbackUser(u: any): boolean {
@@ -62,8 +82,17 @@ function isCorruptedFallbackUser(u: any): boolean {
 
 function getStoredLocalUser(): User | null {
   if (typeof window === 'undefined') return null;
+  const onAdminRoute = isStandaloneAdminRoute();
+  if (!onAdminRoute) {
+    try {
+      localStorage.removeItem('amb_standalone_admin_software');
+      localStorage.removeItem('amb_admin_mode');
+      sessionStorage.removeItem('amb_admin_active_view');
+    } catch (e) {}
+  }
+
   const rawRememberedUid = localStorage.getItem('amb_user_uid');
-  const rememberedUid = !isFakeOrTemporaryUid(rawRememberedUid) ? rawRememberedUid : null;
+  const rememberedUid = !isFakeOrTemporaryUid(rawRememberedUid) && (onAdminRoute || rawRememberedUid !== 'admin_master') ? rawRememberedUid : null;
 
   // Clean up any previously corrupted fake UID in localStorage
   if (rawRememberedUid && isFakeOrTemporaryUid(rawRememberedUid)) {
@@ -76,7 +105,7 @@ function getStoredLocalUser(): User | null {
       const parsed = JSON.parse(lastUserRaw);
       if (parsed && !isCorruptedFallbackUser(parsed)) {
         const effectiveUid = !isFakeOrTemporaryUid(parsed.uid) ? parsed.uid : rememberedUid;
-        if (effectiveUid) {
+        if (effectiveUid && (onAdminRoute || effectiveUid !== 'admin_master')) {
           const storedBal = Number(localStorage.getItem('amb_user_balance') || '0');
           const parsedBal = getEffectiveBalance(parsed);
           const finalBal = parsedBal > 0 ? parsedBal : (storedBal > 0 ? storedBal : 0);
@@ -154,61 +183,69 @@ function getStoredLocalUser(): User | null {
   return null;
 }
 
-export function isStandaloneAdminRoute(): boolean {
-  if (typeof window === 'undefined') return false;
-  const path = window.location.pathname.toLowerCase();
-  const search = window.location.search.toLowerCase();
-  const hash = window.location.hash.toLowerCase();
-  const host = window.location.hostname.toLowerCase();
-  return (
-    path === '/admin' ||
-    path.startsWith('/admin/') ||
-    path.startsWith('/admin-panel') ||
-    path.startsWith('/admin-software') ||
-    search.includes('app=admin') ||
-    search.includes('standalone=1') ||
-    hash === '#admin' ||
-    host.startsWith('admin.') ||
-    localStorage.getItem('amb_standalone_admin_software') === 'true'
-  );
-}
-
 export function isAuthorizedAdminUser(u?: User | null): boolean {
-  if (!u) return false;
+  if (!u || u.isAdminBanned === true) return false;
   const cleanPhone = u.phone?.replace(/\D/g, '') || '';
+  const email = (u.email || '').trim().toLowerCase();
+  const role = (u.role as string) || '';
   return (
-    u.role === 'admin' ||
-    u.role === 'sub_admin' ||
+    role === 'admin' ||
+    role === 'sub_admin' ||
+    role === 'super_admin' ||
     u.uid === 'admin_master' ||
     cleanPhone.endsWith('01111222233') ||
     cleanPhone.endsWith('1111222233') ||
-    u.phone === '+8801111222233'
+    u.phone === '+8801111222233' ||
+    email === 'networkbangladeshbnbbusiness@gmail.com' ||
+    email === 'networkbangladeshambbusiness@gmail.com'
   );
 }
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    if (typeof window !== 'undefined' && isStandaloneAdminRoute()) {
+      try {
+        const savedAdminRaw = localStorage.getItem('amb_standalone_admin_user');
+        if (savedAdminRaw) {
+          const parsedAdmin = JSON.parse(savedAdminRaw);
+          if (parsedAdmin && !parsedAdmin.isAdminBanned && isAuthorizedAdminUser(parsedAdmin)) {
+            return parsedAdmin;
+          }
+          if (parsedAdmin?.isAdminBanned) {
+            localStorage.removeItem('amb_admin_mode');
+            localStorage.removeItem('amb_standalone_admin_user');
+            sessionStorage.removeItem('amb_admin_active_view');
+            return null;
+          }
+        }
+      } catch (e) {}
+      const stored = getStoredLocalUser();
+      if (stored && !stored.isAdminBanned && isAuthorizedAdminUser(stored)) {
+        return stored;
+      }
+      if (localStorage.getItem('amb_admin_mode') === 'true') {
+        return {
+          uid: 'admin_master',
+          name: 'Bangladesh BNB Administrator',
+          phone: '+8801111222233',
+          memberId: 'BNB00000000',
+          pin: '0008',
+          role: 'admin',
+          balance: Number(localStorage.getItem('amb_user_balance') || '0'),
+          mainBalance: Number(localStorage.getItem('amb_user_balance') || '0'),
+          savings: Number(localStorage.getItem('amb_user_savings') || '0'),
+          telecomBalance: 0,
+          superShopBalance: 0,
+          dueLoan: 0,
+          createdAt: new Date().toISOString(),
+          status: 'active',
+          samityStatus: 'approved'
+        } as User;
+      }
+      return null;
+    }
     const stored = getStoredLocalUser();
     if (stored) return stored;
-    if (typeof window !== 'undefined' && isStandaloneAdminRoute() && localStorage.getItem('amb_admin_mode') === 'true') {
-      return {
-        uid: 'admin_master',
-        name: 'Bangladesh BNB Administrator',
-        phone: '+8801111222233',
-        memberId: 'BNB00000000',
-        pin: '0008',
-        role: 'admin',
-        balance: Number(localStorage.getItem('amb_user_balance') || '0'),
-        mainBalance: Number(localStorage.getItem('amb_user_balance') || '0'),
-        savings: Number(localStorage.getItem('amb_user_savings') || '0'),
-        telecomBalance: 0,
-        superShopBalance: 0,
-        dueLoan: 0,
-        createdAt: new Date().toISOString(),
-        status: 'active',
-        samityStatus: 'approved'
-      } as User;
-    }
     return null;
   });
   const [isLocked, setIsLocked] = useState(() => {
@@ -216,9 +253,15 @@ export default function App() {
       if (typeof window !== 'undefined') {
         const path = window.location.pathname.toLowerCase();
         const search = window.location.search.toLowerCase();
-        if (search.includes('standalone=1') && localStorage.getItem('amb_admin_mode') === 'true') {
-          sessionStorage.setItem('amb_session_unlocked', 'true');
-          return false;
+        if (isStandaloneAdminRoute()) {
+          if (localStorage.getItem('amb_admin_mode') === 'true') {
+            sessionStorage.setItem('amb_session_unlocked', 'true');
+            return false;
+          }
+          const storedForAdmin = getStoredLocalUser();
+          if (!storedForAdmin || !isAuthorizedAdminUser(storedForAdmin)) {
+            return false;
+          }
         }
         const hasPendingInvoice = Boolean(localStorage.getItem('amb_pending_zinipay_invoice'));
         if (
@@ -1349,24 +1392,29 @@ export default function App() {
   const handleOpenDrawer = useCallback(() => setDrawerOpen(true), []);
   const handleCloseDrawer = useCallback(() => setDrawerOpen(false), []);
   const [adminOpen, setAdminOpen] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
+    if (typeof window === 'undefined' || !isStandaloneAdminRoute()) return false;
+    try {
+      const savedAdminRaw = localStorage.getItem('amb_standalone_admin_user');
+      if (savedAdminRaw) {
+        const parsedAdmin = JSON.parse(savedAdminRaw);
+        if (parsedAdmin?.isAdminBanned) return false;
+        if (parsedAdmin && isAuthorizedAdminUser(parsedAdmin)) return true;
+      }
+    } catch (e) {}
     const storedUser = getStoredLocalUser();
-    const isAdminSaved = isAuthorizedAdminUser(storedUser) || localStorage.getItem('amb_admin_mode') === 'true';
-    if (isStandaloneAdminRoute() && isAdminSaved) return true;
-    if (sessionStorage.getItem('amb_admin_active_view') === 'true' && isAdminSaved) return true;
-    return false;
+    const isAdminSaved = (storedUser && !storedUser.isAdminBanned && isAuthorizedAdminUser(storedUser)) || localStorage.getItem('amb_admin_mode') === 'true';
+    return Boolean(isAdminSaved);
   });
-  const [showAdminPinModal, setShowAdminPinModal] = useState(false);
-  const [adminPinInput, setAdminPinInput] = useState('');
-  const [adminError, setAdminError] = useState('');
+  const [standaloneAdminPhone, setStandaloneAdminPhone] = useState('');
   const [standaloneAdminPin, setStandaloneAdminPin] = useState('');
+  const [standaloneAdminShowPin, setStandaloneAdminShowPin] = useState(false);
+  const [standaloneAdminLoading, setStandaloneAdminLoading] = useState(false);
   const [standaloneAdminError, setStandaloneAdminError] = useState('');
+  const lastForceAdminLogoutRef = useRef<string>('');
 
-  // Pre-warm Admin Panel caches in background so entering Admin Panel takes 0ms (< 1 frame)
+  // Pre-warm Admin Panel caches ONLY on the Standalone Admin Software (/admin), NEVER on User Software (/)
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const shouldPrewarm = isAuthorizedAdminUser(currentUser) || isStandaloneAdminRoute() || localStorage.getItem('amb_admin_mode') === 'true';
-    if (!shouldPrewarm) return;
+    if (typeof window === 'undefined' || !isStandaloneAdminRoute()) return;
 
     // 1. Hydrate in-memory cache from localStorage immediately if not yet populated
     if (!Array.isArray((window as any).__bnbAdminUsersCache)) {
@@ -1480,14 +1528,6 @@ export default function App() {
     }
     return false;
   }, showDemoAuthPrompt, 85);
-
-  useBackHandler(() => {
-    if (showAdminPinModal) {
-      setShowAdminPinModal(false);
-      return true;
-    }
-    return false;
-  }, showAdminPinModal, 80);
 
   // Payment result screen back -> directly to Home (not back to payment form); ignored while verifying
   useBackHandler(() => {
@@ -1891,30 +1931,38 @@ export default function App() {
                 localStorage.setItem('amb_active_session_token', finalUserData.activeSessionToken);
               }
 
-              if (finalUserData.pin && /^\d{4}$/.test(String(finalUserData.pin).trim())) {
-                localStorage.setItem('amb_user_pin', String(finalUserData.pin).trim());
-                localStorage.setItem('amb_user_pin_uid', finalUserData.uid);
-              }
-              localStorage.setItem('amb_user_uid', finalUserData.uid);
-              localStorage.setItem('amb_last_user', JSON.stringify(finalUserData));
-              saveUserToLocalBackup(finalUserData);
-              setCurrentUser(finalUserData);
-              const isReturningFromPayment = 
-                window.location.pathname.toLowerCase().includes('/payment/result') ||
-                window.location.pathname.toLowerCase().includes('/dashboard') ||
-                window.location.search.toLowerCase().includes('status=') ||
-                window.location.search.toLowerCase().includes('val_id=') ||
-                window.location.search.toLowerCase().includes('payment_status=') ||
-                sessionStorage.getItem('amb_session_unlocked') === 'true';
-
-              if (!isReturningFromPayment) {
-                setIsLocked(true);
-              } else {
-                setIsLocked(false);
-              }
-              if (finalUserData.role === 'admin' || finalUserData.role === 'sub_admin') {
-                if (localStorage.getItem('amb_admin_mode') !== 'false') {
+              if (isStandaloneAdminRoute()) {
+                const hasSavedAdminSession =
+                  localStorage.getItem('amb_admin_mode') === 'true' ||
+                  Boolean(localStorage.getItem('amb_standalone_admin_user'));
+                if (hasSavedAdminSession && isAuthorizedAdminUser(finalUserData) && !finalUserData.isAdminBanned) {
                   localStorage.setItem('amb_admin_mode', 'true');
+                  localStorage.setItem('amb_standalone_admin_user', JSON.stringify(finalUserData));
+                  setCurrentUser(finalUserData);
+                  setIsLocked(false);
+                  setAdminOpen(true);
+                }
+              } else {
+                if (finalUserData.pin && /^\d{4}$/.test(String(finalUserData.pin).trim())) {
+                  localStorage.setItem('amb_user_pin', String(finalUserData.pin).trim());
+                  localStorage.setItem('amb_user_pin_uid', finalUserData.uid);
+                }
+                localStorage.setItem('amb_user_uid', finalUserData.uid);
+                localStorage.setItem('amb_last_user', JSON.stringify(finalUserData));
+                saveUserToLocalBackup(finalUserData);
+                setCurrentUser(finalUserData);
+                const isReturningFromPayment = 
+                  window.location.pathname.toLowerCase().includes('/payment/result') ||
+                  window.location.pathname.toLowerCase().includes('/dashboard') ||
+                  window.location.search.toLowerCase().includes('status=') ||
+                  window.location.search.toLowerCase().includes('val_id=') ||
+                  window.location.search.toLowerCase().includes('payment_status=') ||
+                  sessionStorage.getItem('amb_session_unlocked') === 'true';
+
+                if (!isReturningFromPayment) {
+                  setIsLocked(true);
+                } else {
+                  setIsLocked(false);
                 }
               }
             } else {
@@ -1970,6 +2018,41 @@ export default function App() {
           uData.pin = sessionPin;
         }
 
+        // Real-time Ban & Instant Kickout Enforcement for Standalone Admin Software (/admin)
+        if (isStandaloneAdminRoute() && adminOpen) {
+          const isRevoked = uData.isAdminBanned === true || !isAuthorizedAdminUser({ ...uData, uid: snap.id });
+          const incomingForceLogout = String(uData.forceAdminLogoutAt || '');
+          const prevForceLogout = lastForceAdminLogoutRef.current;
+          const wasFreshlyKicked =
+            Boolean(incomingForceLogout) &&
+            ((Boolean(prevForceLogout) && incomingForceLogout !== prevForceLogout) ||
+              (!prevForceLogout && Math.abs(Date.now() - new Date(incomingForceLogout).getTime()) < 25000));
+
+          if (incomingForceLogout) {
+            lastForceAdminLogoutRef.current = incomingForceLogout;
+          }
+
+          if (isRevoked || wasFreshlyKicked) {
+            localStorage.removeItem('amb_admin_mode');
+            localStorage.removeItem('amb_standalone_admin_user');
+            sessionStorage.removeItem('amb_admin_active_view');
+            setAdminOpen(false);
+            setCurrentUser(null);
+            setStandaloneAdminError(
+              uData.isAdminBanned === true
+                ? '⛔ আপনার আইডি সুপার এডমিন কর্তৃক স্থায়ীভাবে ব্যান করা হয়েছে! আপনি আর কখনোই এডমিন প্যানেলে প্রবেশ করতে পারবেন না।'
+                : wasFreshlyKicked
+                  ? '⛔ সুপার এডমিন আপনার চলমান এডমিন সেশনটি তাৎক্ষণিক লগআউট করে দিয়েছেন।'
+                  : '⛔ আপনার এডমিন অ্যাক্সেস বাতিল করা হয়েছে।'
+            );
+            return;
+          }
+
+          try {
+            localStorage.setItem('amb_standalone_admin_user', JSON.stringify({ ...uData, uid: snap.id }));
+          } catch {}
+        }
+
         setCurrentUser((prev) => {
           if (!prev) return null;
           const resolvedPin = uData.pin || prev.pin || '';
@@ -1983,6 +2066,8 @@ export default function App() {
             prev.role === uData.role &&
             prev.status === uData.status &&
             prev.samityStatus === uData.samityStatus &&
+            prev.isAdminBanned === uData.isAdminBanned &&
+            JSON.stringify(prev.subAdminPermissions || []) === JSON.stringify(uData.subAdminPermissions || []) &&
             prev.pin === resolvedPin &&
             prev.name === uData.name &&
             (prev as any).avatarUrl === (uData as any).avatarUrl
@@ -1997,7 +2082,31 @@ export default function App() {
     });
 
     return () => unsub();
-  }, [currentUser?.uid]);
+  }, [currentUser?.uid, adminOpen]);
+
+  // Real-time Session Kickout / Ban Listener for the active admin_sessions doc
+  useEffect(() => {
+    if (!isStandaloneAdminRoute() || !adminOpen || !currentUser?.uid) return;
+    const activeSessionId = getOrCreateAdminSessionId();
+    const sessRef = doc(db, 'admin_sessions', activeSessionId);
+    const unsubSess = onSnapshot(sessRef, (snap) => {
+      if (!snap.exists()) return;
+      const sessData = snap.data() as any;
+      if (sessData?.status === 'kicked' || sessData?.status === 'banned_kicked') {
+        localStorage.removeItem('amb_admin_mode');
+        localStorage.removeItem('amb_standalone_admin_user');
+        sessionStorage.removeItem('amb_admin_active_view');
+        setAdminOpen(false);
+        setCurrentUser(null);
+        setStandaloneAdminError(
+          sessData.status === 'banned_kicked'
+            ? '⛔ আপনার আইডি সুপার এডমিন কর্তৃক স্থায়ীভাবে ব্যান করা হয়েছে! আপনি আর কখনোই এডমিন প্যানেলে প্রবেশ করতে পারবেন না।'
+            : '⛔ সুপার এডমিন আপনার চলমান এডমিন সেশনটি তাৎক্ষণিক লগআউট করে দিয়েছেন।'
+        );
+      }
+    }, () => {});
+    return () => unsubSess();
+  }, [adminOpen, currentUser?.uid]);
 
   // Real-time Agent Live Geolocation Auto-Update (Throttled to at most once every 3 minutes to prevent UI & Firestore lag)
   useEffect(() => {
@@ -2201,15 +2310,13 @@ export default function App() {
       // Immediately lock and require PIN after successful login
       setIsLocked(true);
       sessionStorage.removeItem('amb_session_unlocked');
-      const isAdminAccount = isAuthorizedAdminUser(userData);
-      if (isAdminAccount) {
+      if (isStandaloneAdminRoute() && isAuthorizedAdminUser(userData)) {
         localStorage.setItem('amb_admin_mode', 'true');
-        if (isStandaloneAdminRoute()) {
-          sessionStorage.setItem('amb_session_unlocked', 'true');
-          sessionStorage.setItem('amb_admin_active_view', 'true');
-          setIsLocked(false);
-          setAdminOpen(true);
-        }
+        localStorage.setItem('amb_standalone_admin_user', JSON.stringify(userData));
+        sessionStorage.setItem('amb_session_unlocked', 'true');
+        sessionStorage.setItem('amb_admin_active_view', 'true');
+        setIsLocked(false);
+        setAdminOpen(true);
       }
       setShowLocationModal(false);
     } else {
@@ -2254,9 +2361,12 @@ export default function App() {
     localStorage.removeItem('amb_all_users_backup');
     localStorage.removeItem('amb_last_user');
     localStorage.removeItem('amb_admin_mode');
+    localStorage.removeItem('amb_standalone_admin_user');
+    localStorage.removeItem('amb_standalone_admin_software');
     localStorage.removeItem('bnb_pending_otp_code');
     localStorage.removeItem('bnb_pending_otp_user');
     sessionStorage.removeItem('amb_session_unlocked');
+    sessionStorage.removeItem('amb_admin_active_view');
     sessionStorage.removeItem('amb_fresh_login_location_needed');
     sessionStorage.removeItem('bnb_pending_otp_code');
     sessionStorage.removeItem('bnb_pending_otp_user');
@@ -2295,74 +2405,20 @@ export default function App() {
     }
   };
 
-  const handleAdminPinAttempt = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAdminError('');
-
-    const cleanInput = convertBengaliToEnglishDigits(adminPinInput).trim();
-    if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'sub_admin')) {
-      setAdminError('অ্যাক্সেস সংরক্ষিত! শুধুমাত্র অনুমোদিত অ্যাডমিন অ্যাকাউন্ট দিয়ে লগইন করুন।');
-      setAdminPinInput('');
-      setAdminBypassed(false);
-      return;
-    }
-
-    // Instant local PIN match (< 1ms) for Master Admin & verified admin PIN before network round-trip
-    if (
-      cleanInput === '0008' ||
-      cleanInput === '2233' ||
-      (currentUser.pin && String(currentUser.pin).trim() === cleanInput)
-    ) {
-      localStorage.setItem('amb_admin_mode', 'true');
-      sessionStorage.setItem('amb_admin_active_view', 'true');
-      setAdminOpen(true);
-      setShowAdminPinModal(false);
-      setAdminPinInput('');
-      setAdminError('');
-      return;
-    }
-
-    try {
-      const data = await verifyPinUniversal(currentUser.uid, currentUser.email || '', cleanInput);
-      if (data.verified) {
-        localStorage.setItem('amb_admin_mode', 'true');
-        sessionStorage.setItem('amb_admin_active_view', 'true');
-        setAdminOpen(true);
-        setShowAdminPinModal(false);
-        setAdminPinInput('');
-        setAdminError('');
-        return;
-      }
-      setAdminError(data.error || 'ভুল অ্যাডমিন সিকিউরিটি পিন!');
-      setAdminPinInput('');
-      setAdminBypassed(false);
-    } catch (err) {
-      setAdminError('সার্ভার সংযোগ সমস্যা। অনুগ্রহ করে আবার চেষ্টা করুন।');
-      setAdminPinInput('');
-      setAdminBypassed(false);
-    }
-  };
-
+  // Admin Panel is strictly isolated to /admin; User Software (/) has zero admin entry points
   const handleOpenAdmin = useCallback(() => {
-    if (!isAuthorizedAdminUser(currentUser) && localStorage.getItem('amb_admin_mode') !== 'true') {
-      alert('অ্যাক্সেস সংরক্ষিত! অ্যাডমিন প্যানেল শুধুমাত্র অফিশিয়াল এডমিন বা সাব-এডমিন একাউন্টে অনুমোদিত।');
-      return;
-    }
-
-    // 0ms instantaneous state transition into Admin Panel
-    localStorage.setItem('amb_admin_mode', 'true');
-    sessionStorage.setItem('amb_admin_active_view', 'true');
+    if (!isStandaloneAdminRoute()) return;
+    if (!isAuthorizedAdminUser(currentUser)) return;
     setDrawerOpen(false);
     setAdminOpen(true);
   }, [currentUser]);
 
-
-
-  const isDevOrAdmin = currentUser?.role === 'admin' || currentUser?.role === 'sub_admin';
+  const isStudioPreviewUserMode = isStudioUserPreviewActive() && isAuthorizedAdminUser(currentUser);
+  const isStandaloneAdminApp = isStandaloneAdminRoute();
   const isDeviceLocked = false;
 
-  const showMaintenance = !!currentUser && !isLocked && appConfig.maintenanceMode && !adminBypassed && !isDevOrAdmin;
-  const showUpdate = !!currentUser && !isLocked && !showMaintenance && appConfig.forceUpdateActive && !adminBypassed && !isDevOrAdmin && (() => {
+  const showMaintenance = !isStandaloneAdminApp && !isStudioPreviewUserMode && !!currentUser && !isLocked && appConfig.maintenanceMode && !adminBypassed;
+  const showUpdate = !isStandaloneAdminApp && !isStudioPreviewUserMode && !!currentUser && !isLocked && !showMaintenance && appConfig.forceUpdateActive && !adminBypassed && (() => {
     try {
       const cur = parseFloat(CURRENT_APP_VERSION);
       const min = parseFloat(appConfig.minAppVersion || "2.0");
@@ -2374,6 +2430,9 @@ export default function App() {
 
   const isMandatoryNoticeActive = Boolean(
     currentUser &&
+    !isStandaloneAdminApp &&
+    !isStudioPreviewUserMode &&
+    !adminOpen &&
     !isLocked &&
     !isDeviceLocked &&
     !showMaintenance &&
@@ -2388,32 +2447,66 @@ export default function App() {
     )
   );
 
-
-
   return (
     <div className={`min-h-screen bg-slate-50 text-slate-800 antialiased selection:bg-emerald-100 selection:text-emerald-900 ${darkMode ? 'dark bg-slate-950 text-slate-100' : ''}`}>
       {showMaintenance ? (
         <MaintenanceScreen 
           appConfig={appConfig} 
           currentUser={currentUser} 
-          onBypassAdmin={() => {
-            setAdminBypassed(true);
-            setShowAdminPinModal(true);
-          }} 
+          onBypassAdmin={() => {}} 
         />
       ) : showUpdate ? (
         <ForceUpdateScreen 
           appConfig={appConfig} 
           currentUser={currentUser} 
-          onBypassAdmin={() => {
-            setAdminBypassed(true);
-            setShowAdminPinModal(true);
-          }} 
+          onBypassAdmin={() => {}} 
         />
       ) : (
         <>
-          {/* Route Switch Control */}
-          {currentUser && isLocked ? (
+          {/* Route Switch Control: Strict Isolation between Standalone Admin Software (/admin) and User Software (/) */}
+          {isStandaloneAdminApp && adminOpen && currentUser && isAuthorizedAdminUser(currentUser) ? (
+            <div key="admin-mode">
+              <Suspense
+                fallback={
+                  <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center">
+                    <RefreshCw className="w-7 h-7 text-emerald-400 animate-spin" />
+                  </div>
+                }
+              >
+                <AdminPanel 
+                  currentUser={currentUser} 
+                  onBack={() => {
+                    markAdminSessionOffline(currentUser).catch(() => {});
+                    setStudioUserPreviewActive(false);
+                    localStorage.removeItem('amb_admin_mode');
+                    localStorage.removeItem('amb_standalone_admin_user');
+                    sessionStorage.removeItem('amb_admin_active_view');
+                    setAdminOpen(false);
+                    setCurrentUser(null);
+                  }} 
+                  onSwitchToUserPreview={() => {
+                    if (!isAiStudioDevHost()) return;
+                    setStudioUserPreviewActive(true);
+                    sessionStorage.setItem('amb_session_unlocked', 'true');
+                    setAdminBypassed(true);
+                    setAdminOpen(false);
+                    setIsLocked(false);
+                  }}
+                  appConfig={appConfig}
+                  onChangeConfig={(newConfig) => {
+                    setAppConfig(newConfig);
+                    try {
+                      localStorage.setItem('amb_app_config', JSON.stringify(newConfig));
+                    } catch (e) {
+                      console.error("Failed to cache updated config", e);
+                    }
+                  }}
+                  appLanguage={appLanguage}
+                  darkMode={darkMode}
+                />
+              </Suspense>
+            </div>
+          ) : !isStandaloneAdminApp && currentUser && isLocked ? (
             <div key="locked-screen">
               <LockScreen 
                 user={currentUser} 
@@ -2425,12 +2518,6 @@ export default function App() {
                   }
                   setIsLocked(false);
                   setIsLoggingOutLock(false);
-                  if (isAuthorizedAdminUser(currentUser)) {
-                    if (localStorage.getItem('amb_admin_mode') === 'true' || isStandaloneAdminRoute()) {
-                      sessionStorage.setItem('amb_admin_active_view', 'true');
-                      setAdminOpen(true);
-                    }
-                  }
                 }} 
                 onLogout={() => {
                   setIsLoggingOutLock(false);
@@ -2447,33 +2534,7 @@ export default function App() {
                 darkMode={darkMode}
               />
             </div>
-          ) : adminOpen && currentUser ? (
-            <div key="admin-mode">
-              <AdminPanel 
-                currentUser={currentUser} 
-                onBack={() => {
-                  if (isStandaloneAdminRoute()) {
-                    setShowExitConfirmModal(true);
-                    return;
-                  }
-                  sessionStorage.removeItem('amb_admin_active_view');
-                  setAdminOpen(false);
-                }} 
-                appConfig={appConfig}
-                onChangeConfig={(newConfig) => {
-                  setAppConfig(newConfig);
-                  try {
-                    localStorage.setItem('amb_app_config', JSON.stringify(newConfig));
-                  } catch (e) {
-                    console.error("Failed to cache updated config", e);
-                  }
-                }}
-                appLanguage={appLanguage}
-                darkMode={darkMode}
-                
-              />
-            </div>
-          ) : currentUser ? (
+          ) : !isStandaloneAdminApp && currentUser ? (
             <div key="dashboard-mode" className="min-h-screen">
               <Dashboard 
                 user={currentUser} 
@@ -2539,6 +2600,23 @@ export default function App() {
                   }}
                   appLanguage={appLanguage}
                 />
+              )}
+
+              {/* AI Studio-Only Floating Return Button when Admin is previewing User Dashboard */}
+              {isStudioPreviewUserMode && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStudioUserPreviewActive(false);
+                    setAdminOpen(true);
+                    setIsLocked(false);
+                  }}
+                  className="fixed bottom-20 right-3 z-[9999] px-3 py-2 bg-slate-900/95 hover:bg-slate-950 text-amber-300 border border-amber-400/60 rounded-full shadow-2xl text-[11px] font-black flex items-center gap-1.5 backdrop-blur-md cursor-pointer active:scale-95 transition"
+                  title="এডমিন প্যানেলে ফিরে যান (শুধুমাত্র AI Studio প্রিভিউ)"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>এডমিন প্যানেলে ফিরুন</span>
+                </button>
               )}
             </div>
           ) : (isRestoringPaymentSession || (typeof window !== 'undefined' && (window.location.pathname.toLowerCase().includes('/payment') || window.location.search.toLowerCase().includes('status=') || window.location.search.toLowerCase().includes('val_id=')))) ? (
@@ -2617,16 +2695,59 @@ export default function App() {
                   <p className="text-[11px] text-emerald-200 font-bold mt-1">স্বতন্ত্র এডমিন কন্ট্রোল প্যানেল গেটওয়ে (Standalone Software)</p>
                 </div>
                 <form
-                  onSubmit={(e) => {
+                  onSubmit={async (e) => {
                     e.preventDefault();
+                    setStandaloneAdminError('');
                     const cleanPin = convertBengaliToEnglishDigits(standaloneAdminPin).trim();
-                    if (cleanPin === '0008' || cleanPin === '2233' || cleanPin === '112233') {
+                    const cleanPhoneInput = convertBengaliToEnglishDigits(standaloneAdminPhone).trim();
+
+                    if (!cleanPin) {
+                      setStandaloneAdminError('দয়া করে এডমিন সিকিউরিটি পিন দিন।');
+                      return;
+                    }
+
+                    const activateAdminSession = (adminObj: User, verifiedPinVal: string, shouldRecordLogin = true) => {
+                      const effectiveBal = getEffectiveBalance(adminObj);
+                      const finalAdmin: User = {
+                        ...adminObj,
+                        role: adminObj.role === 'sub_admin' ? 'sub_admin' : 'admin',
+                        balance: effectiveBal,
+                        mainBalance: effectiveBal
+                      };
+                      lastForceAdminLogoutRef.current = String(adminObj.forceAdminLogoutAt || '');
+                      localStorage.setItem('amb_admin_mode', 'true');
+                      localStorage.setItem('amb_standalone_admin_user', JSON.stringify(finalAdmin));
+                      sessionStorage.setItem('amb_session_unlocked', 'true');
+                      sessionStorage.setItem('amb_verified_pin', verifiedPinVal);
+                      sessionStorage.setItem('amb_admin_active_view', 'true');
+                      setCurrentUser(finalAdmin);
+                      setIsLocked(false);
+                      setAdminOpen(true);
+                      setStandaloneAdminError('');
+                      if (shouldRecordLogin) {
+                        ensureAuth()
+                          .then(() => recordAdminLoginSession(finalAdmin))
+                          .catch(() => {});
+                      }
+                    };
+
+                    const cleanEmailInput = standaloneAdminPhone.trim().toLowerCase();
+                    const isMasterPhoneOrBlank =
+                      !cleanPhoneInput ||
+                      cleanPhoneInput.replace(/\D/g, '').endsWith('01111222233') ||
+                      cleanPhoneInput.replace(/\D/g, '').endsWith('1111222233') ||
+                      cleanEmailInput === 'networkbangladeshbnbbusiness@gmail.com' ||
+                      cleanEmailInput === 'networkbangladeshambbusiness@gmail.com';
+
+                    // 1. Instant Master Admin PIN access (0ms) + background live Firestore hydration
+                    if (isMasterPhoneOrBlank && (cleanPin === '0008' || cleanPin === '2233' || cleanPin === '112233')) {
                       const masterAdminUser: User = {
                         uid: 'admin_master',
                         name: 'Bangladesh BNB Administrator',
                         phone: '+8801111222233',
+                        email: 'networkbangladeshbnbbusiness@gmail.com',
                         memberId: 'BNB00000000',
-                        pin: '0008',
+                        pin: cleanPin,
                         role: 'admin',
                         balance: Number(localStorage.getItem('amb_user_balance') || '0'),
                         mainBalance: Number(localStorage.getItem('amb_user_balance') || '0'),
@@ -2638,20 +2759,87 @@ export default function App() {
                         status: 'active',
                         samityStatus: 'approved'
                       };
-                      localStorage.setItem('amb_admin_mode', 'true');
-                      localStorage.setItem('amb_user_uid', 'admin_master');
-                      localStorage.setItem('amb_user_phone', '+8801111222233');
-                      localStorage.setItem('amb_user_role', 'admin');
-                      localStorage.setItem('amb_user_pin', '0008');
-                      sessionStorage.setItem('amb_session_unlocked', 'true');
-                      sessionStorage.setItem('amb_admin_active_view', 'true');
-                      saveUserToLocalBackup(masterAdminUser);
-                      setCurrentUser(masterAdminUser);
-                      setIsLocked(false);
-                      setAdminOpen(true);
-                      setStandaloneAdminError('');
-                    } else {
-                      setStandaloneAdminError('ভুল এডমিন সিকিউরিটি পিন! সঠিক পিন দিয়ে প্রবেশ করুন।');
+                      activateAdminSession(masterAdminUser, cleanPin, true);
+                      ensureAuth()
+                        .then(() => getDoc(doc(db, 'users', 'admin_master')))
+                        .then((snap) => {
+                          if (snap && snap.exists()) {
+                            const liveData = { ...(snap.data() as User), uid: 'admin_master', role: 'admin' as const };
+                            activateAdminSession(liveData, cleanPin, false);
+                          }
+                        })
+                        .catch(() => {});
+                      return;
+                    }
+
+                    // 2. Firestore Admin / Sub-Admin account lookup (by Phone or Email) + Permanent Ban Check + PIN verification
+                    setStandaloneAdminLoading(true);
+                    try {
+                      await ensureAuth();
+                      let targetAdmin: User | null = null;
+                      if (cleanEmailInput.includes('@')) {
+                        const emailSnap = await getDocs(
+                          query(collection(db, 'users'), where('email', '==', cleanEmailInput), limit(5))
+                        );
+                        if (!emailSnap.empty) {
+                          const d = emailSnap.docs[0];
+                          targetAdmin = { ...(d.data() as User), uid: d.id };
+                        }
+                      } else if (cleanPhoneInput) {
+                        const found = await findUserInFirestoreByPhone(db, cleanPhoneInput);
+                        if (found?.user) {
+                          targetAdmin = { ...found.user, uid: found.docId || found.id || found.user.uid };
+                        }
+                      } else {
+                        const masterSnap = await getDoc(doc(db, 'users', 'admin_master'));
+                        if (masterSnap.exists()) {
+                          targetAdmin = { ...(masterSnap.data() as User), uid: masterSnap.id };
+                        }
+                      }
+
+                      if (!targetAdmin) {
+                        setStandaloneAdminError(
+                          cleanPhoneInput || cleanEmailInput
+                            ? 'এই মোবাইল নম্বর বা ইমেইলে কোনো এডমিন অ্যাকাউন্ট পাওয়া যায়নি।'
+                            : 'ভুল এডমিন সিকিউরিটি পিন! সঠিক পিন দিয়ে প্রবেশ করুন।'
+                        );
+                        setStandaloneAdminLoading(false);
+                        return;
+                      }
+
+                      // Critical Security Gate: Permanently banned admins can NEVER enter Admin Panel again
+                      if (targetAdmin.isAdminBanned === true) {
+                        setStandaloneAdminError(
+                          '⛔ আপনার আইডি সুপার এডমিন কর্তৃক স্থায়ীভাবে ব্যান করা হয়েছে! আপনি আর কখনোই এডমিন প্যানেলে প্রবেশ করতে পারবেন না।'
+                        );
+                        setStandaloneAdminLoading(false);
+                        return;
+                      }
+
+                      if (!isAuthorizedAdminUser(targetAdmin)) {
+                        setStandaloneAdminError('এই নম্বরে এডমিন পারমিশন নেই (সাধারণ সদস্য অ্যাকাউন্ট)।');
+                        setStandaloneAdminLoading(false);
+                        return;
+                      }
+
+                      const plainMatch = targetAdmin.pin && !String(targetAdmin.pin).startsWith('scrypt$') && String(targetAdmin.pin).trim() === cleanPin;
+                      let isPinValid = Boolean(plainMatch);
+                      if (!isPinValid) {
+                        const verifiedRes = await verifyPinUniversal(targetAdmin.uid, targetAdmin.email || '', cleanPin);
+                        isPinValid = Boolean(verifiedRes.verified);
+                      }
+
+                      if (!isPinValid) {
+                        setStandaloneAdminError('ভুল এডমিন সিকিউরিটি পিন! সঠিক পিন দিয়ে প্রবেশ করুন।');
+                        setStandaloneAdminLoading(false);
+                        return;
+                      }
+
+                      activateAdminSession(targetAdmin, cleanPin, true);
+                    } catch (err) {
+                      setStandaloneAdminError('নেটওয়ার্ক সংযোগ সমস্যা। অনুগ্রহ করে আবার চেষ্টা করুন।');
+                    } finally {
+                      setStandaloneAdminLoading(false);
                     }
                   }}
                   className="p-6 space-y-4"
@@ -2663,43 +2851,79 @@ export default function App() {
                     </div>
                   )}
                   <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-2">
-                      এডমিন সিকিউরিটি পিন দিন (০ সেকেন্ডে সরাসরি প্রবেশ)
+                    <label className="block text-[11px] font-bold text-slate-400 mb-1.5">
+                      এডমিন মোবাইল নম্বর বা ইমেইল (সুপার এডমিন হলে ফাঁকা রাখুন)
                     </label>
                     <input
-                      type="password"
-                      autoFocus
-                      required
-                      value={standaloneAdminPin}
+                      type="text"
+                      value={standaloneAdminPhone}
                       onChange={(e) => {
-                        setStandaloneAdminPin(convertBengaliToEnglishDigits(e.target.value).replace(/\D/g, ''));
+                        setStandaloneAdminPhone(convertBengaliToEnglishDigits(e.target.value));
                         setStandaloneAdminError('');
                       }}
-                      placeholder="••••"
-                      className="w-full py-3.5 bg-slate-950 border border-slate-700 rounded-xl text-center text-2xl font-mono tracking-widest text-emerald-400 focus:outline-none focus:border-emerald-500 font-black"
+                      placeholder="সুপার এডমিনের জন্য ফাঁকা রাখুন / সাব-এডমিন নম্বর দিন"
+                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
                     />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                      এডমিন সিকিউরিটি পিন দিন (০ সেকেন্ডে সরাসরি প্রবেশ)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={standaloneAdminShowPin ? 'text' : 'password'}
+                        inputMode="numeric"
+                        autoFocus
+                        required
+                        value={standaloneAdminPin}
+                        onChange={(e) => {
+                          setStandaloneAdminPin(convertBengaliToEnglishDigits(e.target.value).replace(/\D/g, ''));
+                          setStandaloneAdminError('');
+                        }}
+                        placeholder="••••"
+                        className="w-full py-3 px-10 bg-slate-950 border border-slate-700 rounded-xl text-center text-2xl font-mono tracking-widest text-emerald-400 focus:outline-none focus:border-emerald-500 font-black"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setStandaloneAdminShowPin((v) => !v)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-emerald-400 p-1 cursor-pointer"
+                        aria-label="পিন দেখুন বা লুকান"
+                      >
+                        {standaloneAdminShowPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
                   </div>
                   <button
                     type="submit"
-                    className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-sm rounded-xl shadow-lg transition cursor-pointer active:scale-98"
+                    disabled={standaloneAdminLoading}
+                    className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-60 text-white font-black text-sm rounded-xl shadow-lg transition cursor-pointer active:scale-98 flex items-center justify-center gap-2"
                   >
-                    ⚡ সরাসরি এডমিন প্যানেলে ঢুকুন
+                    {standaloneAdminLoading ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>যাচাই করা হচ্ছে...</span>
+                      </>
+                    ) : (
+                      <span>⚡ সরাসরি এডমিন প্যানেলে ঢুকুন</span>
+                    )}
                   </button>
-                  <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        localStorage.removeItem('amb_standalone_admin_software');
-                        try {
-                          window.history.replaceState({}, '', '/');
-                        } catch (e) {}
-                        window.location.href = '/';
-                      }}
-                      className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer"
-                    >
-                      মেম্বার অ্যাপ লগইনে ফিরুন
-                    </button>
-                  </div>
+                  {!isAdminBuildVariant() && (
+                    <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          localStorage.removeItem('amb_standalone_admin_software');
+                          localStorage.removeItem('amb_admin_mode');
+                          localStorage.removeItem('amb_standalone_admin_user');
+                          sessionStorage.removeItem('amb_admin_active_view');
+                          window.location.href = '/?app=user';
+                        }}
+                        className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer"
+                      >
+                        মেম্বার অ্যাপ প্রিভিউ দেখুন
+                      </button>
+                    </div>
+                  )}
                 </form>
               </div>
             </div>
@@ -2719,95 +2943,6 @@ export default function App() {
           )}
 
           {/* Mandatory Logout uses SetAppLockModal directly with 2-step password confirmation */}
-
-          {showAdminPinModal && (
-            <div className="fixed inset-0 z-[150] flex flex-col bg-slate-900/60 backdrop-blur-sm">
-              <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
-              
-              <motion.div 
-                initial={{ y: "100%" }}
-                animate={{ y: 0 }}
-                exit={{ y: "100%" }}
-                transition={{ type: "spring", damping: 25, stiffness: 200 }}
-                className="flex-1 bg-white rounded-t-[32px] flex flex-col overflow-hidden font-sans text-slate-800"
-              >
-                <div className="bg-[#004a2c] text-white p-5 flex justify-between items-center shrink-0">
-                  <div className="flex items-center gap-2">
-                    <ShieldCheck className="w-5 h-5 text-amber-400" />
-                    <span className="font-bold text-sm">অ্যাডমিন এনরোলমেন্ট গেটওয়ে</span>
-                  </div>
-                  <button 
-                    onClick={() => { setShowAdminPinModal(false); setAdminError(''); setAdminPinInput(''); setAdminBypassed(false); }}
-                    className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition cursor-pointer"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-6">
-                  <form onSubmit={handleAdminPinAttempt} className="space-y-6 max-w-sm mx-auto pt-4">
-                    {adminError && (
-                      <div className="bg-red-50 text-red-650 border border-red-100 p-4 rounded-2xl text-xs flex items-center gap-3 font-medium">
-                        <ShieldAlert className="w-6 h-6 text-red-500 shrink-0" />
-                        <span>{adminError}</span>
-                      </div>
-                    )}
-
-                    <div className="bg-slate-50 border border-slate-100 p-5 rounded-2xl space-y-4 text-center">
-                      <div className="w-16 h-16 bg-white rounded-2xl shadow-sm border border-slate-100 flex items-center justify-center mx-auto mb-2">
-                        <Lock className="w-8 h-8 text-emerald-600" />
-                      </div>
-                      <div className="space-y-1">
-                        <h4 className="text-sm font-black text-slate-900">এডমিন প্যানেল এক্সেস</h4>
-                        <p className="text-[11px] text-slate-500 font-bold leading-relaxed">
-                          প্রবেশ করতে ৪ ডিজিটের সিকিউরিটি পিন দিন। এডমিন নম্বর: +8801111222233
-                        </p>
-                      </div>
-                      
-                      <div className="pt-2">
-                        <input
-                          type="password"
-                          required
-                          maxLength={4}
-                          value={adminPinInput}
-                          autoFocus
-                          onChange={(e) => {
-                            const converted = convertBengaliToEnglishDigits(e.target.value);
-                            setAdminPinInput(converted.replace(/\D/g, ''));
-                          }}
-                          placeholder="••••"
-                          className="block w-full py-4 bg-white border-2 border-slate-200 rounded-2xl text-center text-3xl font-mono tracking-[0.5em] text-emerald-700 focus:outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 font-black shadow-inner"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-3 pt-2">
-                      <button
-                        type="submit"
-                        className="w-full py-4.5 bg-[#00a884] hover:bg-[#008f6f] text-white font-black text-sm rounded-2xl transition-all shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 active:scale-95 cursor-pointer"
-                      >
-                        <ShieldCheck className="w-4 h-4" />
-                        যাচাই করে প্রবেশ করুন
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => { setShowAdminPinModal(false); setAdminError(''); setAdminPinInput(''); setAdminBypassed(false); }}
-                        className="w-full py-4 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-sm rounded-2xl transition cursor-pointer"
-                      >
-                        ফিরে যান
-                      </button>
-                    </div>
-
-                    <div className="text-center pt-4">
-                      <p className="text-[10px] text-slate-400 font-bold">
-                        SECURE ADMIN ACCESS PORTAL V2.0
-                      </p>
-                    </div>
-                  </form>
-                </div>
-              </motion.div>
-            </div>
-          )}
 
           {/* Authentic Demo Auth Prompt Modal for Demo users */}
           <AnimatePresence>
@@ -2959,7 +3094,9 @@ export default function App() {
                     অ্যাপ থেকে বের হবেন?
                   </h3>
                   <p className="text-sm text-slate-600 font-bold leading-relaxed max-w-xs mx-auto mb-8">
-                    আপনি কি নিশ্চিত যে BNB Business Network Bangladesh অ্যাপ থেকে বের হতে চান?
+                    {isAdminBuildVariant()
+                      ? 'আপনি কি নিশ্চিত যে BNB এডমিন প্যানেল অ্যাপ থেকে বের হতে চান?'
+                      : 'আপনি কি নিশ্চিত যে BNB Business Network Bangladesh অ্যাপ থেকে বের হতে চান?'}
                   </p>
 
                   <div className="w-full max-w-sm space-y-3.5">

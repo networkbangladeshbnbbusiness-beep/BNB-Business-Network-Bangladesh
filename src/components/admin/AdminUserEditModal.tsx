@@ -211,6 +211,7 @@ function AdminUserEditModalContent(props: any) {
   const {
     editingUser,
     setEditingUser,
+    isSuperAdmin,
     setAdjType,
     setAdjAmount,
     setAdjReason,
@@ -854,13 +855,19 @@ function AdminUserEditModalContent(props: any) {
               <label className="block text-[10px] font-bold text-slate-400 mb-0.5">অ্যাকাউন্ট রোল / পদবী</label>
               <select
                 value={editRole || 'user'}
+                disabled={!isSuperAdmin}
                 onChange={(e) => setEditRole(e.target.value as 'user' | 'admin' | 'sub_admin')}
-                className="w-full px-2 py-0.5 bg-slate-950 border border-slate-700 rounded text-xs font-bold text-slate-200 focus:outline-none cursor-pointer"
+                className="w-full px-2 py-0.5 bg-slate-950 border border-slate-700 rounded text-xs font-bold text-slate-200 focus:outline-none cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 <option value="user">👤 সাধারণ মেম্বার (User)</option>
                 <option value="sub_admin">🛡️ সাব-এডমিন (Sub-Admin)</option>
-                <option value="admin">👑 সুপার এডমিন (Super Admin)</option>
+                <option value="admin">👑 এডমিন (Admin)</option>
               </select>
+              {editingUser?.isAdminBanned && (
+                <div className="mt-1 text-[9.5px] font-black text-rose-400">
+                  ⛔ এই আইডিটি এডমিন প্যানেল থেকে স্থায়ীভাবে ব্যানকৃত
+                </div>
+              )}
             </div>
           </div>
         </div>

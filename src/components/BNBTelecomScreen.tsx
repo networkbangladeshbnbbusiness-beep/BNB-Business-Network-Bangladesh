@@ -35,7 +35,6 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useBackHandler } from '../lib/navigationManager';
-import TelecomAdmin from './TelecomAdmin';
 import MoneyExchangeModule from './MoneyExchangeModule';
 import { BNBPaymentReceiptModal, PaymentReceiptData } from './BNBPaymentReceiptModal';
 
@@ -650,22 +649,6 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
 
           {/* Grouped Header Actions */}
           <div className="flex items-center gap-1.5">
-            {/* Admin Switcher for Admins & Sub-Admins */}
-            {(user.role === 'admin' || user.role === 'sub_admin') && (
-              <button
-                onClick={() => setActiveSubView(activeSubView === 'admin' ? 'main' : 'admin')}
-                className={`flex items-center gap-1 px-2 xs:px-2.5 py-1 xs:py-1.5 rounded-xl text-[10px] font-black transition cursor-pointer shrink-0 shadow-3xs active:scale-95 ${
-                  activeSubView === 'admin'
-                    ? 'bg-amber-500 text-white border border-amber-600'
-                    : 'bg-gradient-to-r from-purple-900 to-indigo-900 text-amber-300 border border-purple-700 hover:brightness-110'
-                }`}
-                title="টেলিকম এডমিন কন্ট্রোল"
-              >
-                <ShieldCheck className="w-3.5 h-3.5 text-amber-300" />
-                <span className="font-sans hidden sm:inline">{activeSubView === 'admin' ? 'ইউজার মোড' : 'এডমিন'}</span>
-              </button>
-            )}
-
             {/* Main Balance */}
             <div 
               onClick={syncLiveProfile}
@@ -704,15 +687,7 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
       </header>
 
       {/* Main Stream list */}
-      {activeSubView === 'admin' && (user.role === 'admin' || user.role === 'sub_admin') ? (
-        <div className="flex-1 overflow-y-auto px-4 py-6 w-full max-w-4xl mx-auto">
-          <TelecomAdmin 
-            appConfig={appConfig || {} as any} 
-            user={user} 
-            onClose={() => setActiveSubView('main')} 
-          />
-        </div>
-      ) : (
+      {(
         <>
           <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 pb-8 max-w-md w-full mx-auto">
         

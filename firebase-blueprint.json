@@ -272,6 +272,24 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["sessionId", "userId", "otpCode", "expiresAt", "status", "createdAt"]
+    },
+    "SectionAudit": {
+      "title": "SectionAudit",
+      "description": "Per-section admin financial audit and dedicated expense/profit/loss ledger entries across the 12 core admin sections",
+      "type": "object",
+      "properties": {
+        "sectionKey": { "type": "string", "description": "Active admin section identifier (samity, safedeals_admin, qard_admin, bank_admin, telecom, ration_admin, salary_admin, safi_admin, auto_recharge_admin, bill_pay_admin, agent_admin, notices)" },
+        "entryType": { "type": "string", "enum": ["expense", "profit", "loss", "revenue"] },
+        "title": { "type": "string" },
+        "amount": { "type": "number" },
+        "category": { "type": "string" },
+        "note": { "type": "string" },
+        "entryDate": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sectionKey", "entryType", "title", "amount", "entryDate", "createdAt"]
     }
   },
   "firestore": {
@@ -338,6 +356,10 @@
     "users/{userId}/fcmTokens/{tokenId}": {
       "schema": "FcmToken",
       "description": "Stores user device FCM tokens"
+    },
+    "section_audits/{auditId}": {
+      "schema": "SectionAudit",
+      "description": "Stores per-section admin expense, profit, loss, and revenue audit entries"
     }
   }
 }

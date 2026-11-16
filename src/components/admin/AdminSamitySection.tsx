@@ -36,6 +36,12 @@ import BNBSalaryAdmin from '../BNBSalaryAdmin';
 import { HistoryRetentionSettings } from '../HistoryRetentionSettings';
 import SamityInvestmentsView from '../SamityInvestmentsView';
 import { runWalletEndToEndTests, TestResultItem } from '../../lib/walletTests';
+import {
+  getSamityMemberTier,
+  isRegisteredSamityInvestor,
+  isSamitySwitchOff,
+  isSamitySwitchOn
+} from '../../lib/samityCategory';
 import { 
   ExternalLink,
   ShieldCheck, 
@@ -448,7 +454,7 @@ export function AdminSamitySection(props: any) {
 
   const handleOpenReviewModal = (user: User) => {
     setSelectedAppForReview(user);
-    const initialRole = (user.memberCategory === 'owner' || user.memberCategory === 'shareholder' || user.memberCategory === 'investor' || user.memberCategory === 'regular')
+    const initialRole = (user.memberCategory === 'owner' || user.memberCategory === 'shareholder' || user.memberCategory === 'investor' || user.memberCategory === 'supporter' || user.memberCategory === 'regular')
       ? user.memberCategory 
       : 'shareholder';
     setSelectedRoleForApp(initialRole as any);
@@ -468,13 +474,22 @@ export function AdminSamitySection(props: any) {
     try {
       const finalMemberId = targetMemberId.trim() || applicant.memberId || ('BNB-' + Math.floor(100000 + Math.random() * 900000));
       const nowIso = new Date().toISOString();
-      const installmentAmt = Number((applicant as any).samityApplicationInstallmentAmount || applicant.monthlySavingsTarget) || (targetRole === 'owner' ? 5000 : targetRole === 'shareholder' ? 3000 : targetRole === 'investor' ? 2000 : 1000);
+      const installmentAmt = targetRole === 'owner'
+        ? 5000
+        : targetRole === 'shareholder'
+          ? 3000
+          : targetRole === 'investor'
+            ? 2000
+            : targetRole === 'supporter'
+              ? 1000
+              : (Number((applicant as any).samityApplicationInstallmentAmount || applicant.monthlySavingsTarget) || 1000);
 
       const userRef = doc(db, 'users', targetUid);
       const userSnap = await getDoc(userRef);
       const freshUserData = userSnap.exists() ? userSnap.data() : applicant;
+      const alreadyCredited = Boolean(freshUserData.samityFirstInstallmentCredited);
       const currentSavings = Number(freshUserData.savings || freshUserData.dpsBalance) || 0;
-      const newSavings = currentSavings + installmentAmt;
+      const newSavings = alreadyCredited ? currentSavings : currentSavings + installmentAmt;
 
       if (typeof props.setUsers === 'function') {
         props.setUsers((prev: User[]) => prev.map(u => (u.uid === targetUid || u.id === targetUid) ? {
@@ -484,9 +499,11 @@ export function AdminSamitySection(props: any) {
           isSamityMember: true,
           samityStatus: 'approved',
           samityAppliedAt: null,
+          samityFirstInstallmentCredited: true,
           status: 'active',
           memberCategory: targetRole,
           samityRole: targetRole,
+          monthlySavingsTarget: installmentAmt,
           memberId: finalMemberId,
           savings: newSavings,
           dpsBalance: newSavings
@@ -501,9 +518,11 @@ export function AdminSamitySection(props: any) {
         isSamityMember: true,
         samityStatus: 'approved',
         samityAppliedAt: null,
+        samityFirstInstallmentCredited: true,
         status: 'active',
         memberCategory: targetRole,
         samityRole: targetRole,
+        monthlySavingsTarget: installmentAmt,
         memberId: finalMemberId,
         savings: newSavings,
         dpsBalance: newSavings,
@@ -586,8 +605,11 @@ export function AdminSamitySection(props: any) {
       const userRef = doc(db, 'users', targetUid);
       const userSnap = await getDoc(userRef);
       const freshUserData = userSnap.exists() ? userSnap.data() : applicant;
+      const alreadyCredited = Boolean(freshUserData.samityFirstInstallmentCredited);
+      const heldInstallment = Number(freshUserData.samityApplicationInstallmentAmount) || 0;
+      const refundAmt = !alreadyCredited && heldInstallment > 0 ? heldInstallment : 0;
       const currentMainBal = Number(freshUserData.balance !== undefined ? freshUserData.balance : freshUserData.mainBalance) || 0;
-      const refundedMainBal = currentMainBal + installmentAmt;
+      const refundedMainBal = currentMainBal + refundAmt;
 
       if (typeof props.setUsers === 'function') {
         props.setUsers((prev: User[]) => prev.map(u => (u.uid === targetUid || u.id === targetUid) ? {
@@ -595,6 +617,7 @@ export function AdminSamitySection(props: any) {
           samityStatus: 'rejected',
           samityApproved: false,
           samityAppliedAt: null,
+          samityApplicationInstallmentAmount: 0,
           samityRejectionReason: finalReason,
           balance: refundedMainBal,
           mainBalance: refundedMainBal
@@ -607,6 +630,7 @@ export function AdminSamitySection(props: any) {
         samityStatus: 'rejected',
         samityApproved: false,
         samityAppliedAt: null,
+        samityApplicationInstallmentAmount: 0,
         status: 'rejected',
         samityRejectionReason: finalReason,
         balance: refundedMainBal,
@@ -1095,7 +1119,7 @@ export function AdminSamitySection(props: any) {
             )}
 
             {samityActiveSubTab === 'member_directory' && (
-              <div className="space-y-3 animate-fade-in text-slate-800 font-sans text-left pb-96 sm:pb-[480px]">
+              <div className="space-y-2.5 animate-fade-in text-slate-800 font-sans text-left pb-16">
                 
                 {/* IF A HUB TAB IS SELECTED -> OPEN FULL SEPARATE DEDICATED PAGE */}
                 {hubTab !== null ? (
@@ -1488,100 +1512,7 @@ export function AdminSamitySection(props: any) {
                 ) : (
                   /* WHEN NO HUB TAB IS SELECTED -> SHOW MAIN SAMITY MASTER OVERVIEW DASHBOARD */
                   <div className="space-y-2.5 animate-fade-in">
-                    {/* ========================================================================= */}
-                    {/* 🏛️ 4-SECTION MASTER CONTROL HUB TOP BAR */}
-                    {/* ========================================================================= */}
-                    <div className="bg-gradient-to-r from-[#00a884] via-emerald-700 to-teal-800 border-2 border-emerald-600 rounded-3xl p-3 sm:p-4 text-white shadow-md space-y-3">
-                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-white/20 pb-2.5">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-lg">🏛️</span>
-                            <h3 className="text-xs sm:text-sm font-black text-amber-200 tracking-wide uppercase">
-                              BNB ইনভেস্টর কোম্পানি ও সমবায় সমিতি মাস্টার ম্যানেজমেন্ট
-                            </h3>
-                          </div>
-                          <p className="text-[10px] text-emerald-100 mt-0.5">
-                            আমাদের ইনভেস্ট প্রজেক্ট পোস্ট, সমবায় নিয়মাবলী, জরিমানা ও সময়সীমা এবং লভ্যাংশ নীতি সম্পূর্ণ ম্যানুয়ালি কন্ট্রোল করুন।
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* 4 Interactive Hub Navigation Tabs - STRICT SINGLE LINE (4 Columns) */}
-                      <div className="grid grid-cols-4 gap-1 p-1 bg-emerald-950/40 rounded-2xl border border-white/20">
-                        <button
-                          type="button"
-                          onClick={() => setHubTab('investments')}
-                          className="px-1 sm:px-2.5 py-1.5 sm:py-2 rounded-xl text-[9.5px] sm:text-[11px] font-black transition flex items-center justify-center gap-1 sm:gap-1.5 cursor-pointer whitespace-nowrap min-w-0 text-white hover:bg-white/20 active:scale-95"
-                        >
-                          <span className="text-xs shrink-0">📈</span>
-                          <span className="truncate">১. আমাদের ইনভেস্ট</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => setHubTab('policy_rules')}
-                          className="px-1 sm:px-2.5 py-1.5 sm:py-2 rounded-xl text-[9.5px] sm:text-[11px] font-black transition flex items-center justify-center gap-1 sm:gap-1.5 cursor-pointer whitespace-nowrap min-w-0 text-white hover:bg-white/20 active:scale-95"
-                        >
-                          <span className="text-xs shrink-0">📜</span>
-                          <span className="truncate">২. নিয়মাবলী</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => setHubTab('fine_schedule')}
-                          className="px-1 sm:px-2.5 py-1.5 sm:py-2 rounded-xl text-[9.5px] sm:text-[11px] font-black transition flex items-center justify-center gap-1 sm:gap-1.5 cursor-pointer whitespace-nowrap min-w-0 text-white hover:bg-white/20 active:scale-95"
-                        >
-                          <span className="text-xs shrink-0">⏰</span>
-                          <span className="truncate">৩. জরিমানা/তারিখ</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => setHubTab('dividend_policy')}
-                          className="px-1 sm:px-2.5 py-1.5 sm:py-2 rounded-xl text-[9.5px] sm:text-[11px] font-black transition flex items-center justify-center gap-1 sm:gap-1.5 cursor-pointer whitespace-nowrap min-w-0 text-white hover:bg-white/20 active:scale-95"
-                        >
-                          <span className="text-xs shrink-0">📊</span>
-                          <span className="truncate">৪. লভ্যাংশ/মুনাফা</span>
-                        </button>
-                      </div>
-                    </div>
-
-            {/* 2. ⚙️ গ্লোবাল সদস্য তথ্য নিজস্ব আপডেট সুইচ (Member Profile Self-Edit Switch) - Slim Bar */}
-            <div className="bg-gradient-to-r from-amber-50 via-orange-50 to-emerald-50 border border-amber-200/90 px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1.5 text-left">
-              <div className="space-y-0.5 min-w-0">
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-sm">⚙️</span>
-                  <h3 className="text-[11px] sm:text-xs font-black text-slate-900">
-                    সদস্যদের নিজ প্রোফাইল তথ্য সংশোধন পাওয়ার সুইচ
-                  </h3>
-                  <span className={`px-2 py-0.2 rounded-full text-[9px] font-black uppercase tracking-wide border ${
-                    cfgAllowProfileSelfEdit 
-                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300' 
-                      : 'bg-rose-100 text-rose-800 border-rose-300'
-                  }`}>
-                    {cfgAllowProfileSelfEdit ? '🟢 অন (ON)' : '🔴 অফ (OFF)'}
-                  </span>
-                </div>
-                <p className="text-[9.5px] sm:text-[10px] text-slate-600 truncate">
-                  {cfgAllowProfileSelfEdit 
-                    ? 'অন থাকায় সদস্যরা প্রোফাইল থেকে নাম, এনআইডি, ঠিকানা, ছবি ও নমিনি নিজেরা পরিবর্তন করতে পারবে।'
-                    : 'অফ থাকায় সদস্যরা নিজেরা কোনো তথ্য এডিট করতে পারবে না (শুধুমাত্র এডমিন এডিট করতে পারবে)।'}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => handleToggleProfileSelfEdit(!cfgAllowProfileSelfEdit)}
-                className={`w-full sm:w-auto px-3 py-1 rounded-lg text-[10.5px] font-black transition cursor-pointer shrink-0 shadow-2xs flex items-center justify-center gap-1 ${
-                  cfgAllowProfileSelfEdit
-                    ? 'bg-rose-600 hover:bg-rose-700 active:scale-95 text-white'
-                    : 'bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white'
-                }`}
-              >
-                <span>{cfgAllowProfileSelfEdit ? '🔒 অফ করুন (Disable)' : '🔓 অন করুন (Enable)'}</span>
-              </button>
-            </div>
-
-            {/* 3. 🌟 Member Statistics & Control Hub (১০টি সেকশন - ২টি লাইনে ৫টি করে) */}
+            {/* 1. 🌟 Member Statistics & Control Hub (১০টি সেকশন - ২টি লাইনে ৫টি করে) */}
             {(() => {
               const isSubAdminUser = (u: any) => Boolean(
                 u.role === 'sub_admin' ||
@@ -1590,61 +1521,22 @@ export function AdminSamitySection(props: any) {
                 u.isSubAdmin === true
               );
 
-              const isOwnerUser = (u: any) => Boolean(
-                u.memberCategory === 'owner' ||
-                Number(u.monthlySavingsTarget) === 5000 ||
-                u.memberGroup === 'owner'
-              );
-
-              const isShareholderUser = (u: any) => Boolean(
-                (u.memberCategory === 'shareholder' || Number(u.monthlySavingsTarget) === 3000 || u.memberGroup === 'shareholder') &&
-                !isOwnerUser(u)
-              );
-
-              const isInvestorUser = (u: any) => Boolean(
-                (u.memberCategory === 'investor' || Number(u.monthlySavingsTarget) === 2000 || u.memberGroup === 'investor' || u.isInvestor === true || (Array.isArray(u.investments) && u.investments.length > 0)) &&
-                !isOwnerUser(u) &&
-                !isShareholderUser(u)
-              );
-
-              const isSupporterUser = (u: any) => Boolean(
-                (u.memberCategory === 'supporter' || Number(u.monthlySavingsTarget) === 1000 || u.memberGroup === 'supporter') &&
-                !isOwnerUser(u) &&
-                !isShareholderUser(u) &&
-                !isInvestorUser(u)
-              );
+              const isOwnerUser = (u: any) => getSamityMemberTier(u) === 'owner';
+              const isShareholderUser = (u: any) => getSamityMemberTier(u) === 'shareholder';
+              const isInvestorUser = (u: any) => getSamityMemberTier(u) === 'investor';
+              const isSupporterUser = (u: any) => getSamityMemberTier(u) === 'supporter';
 
               const isGeneralUser = (u: any) => Boolean(
-                !isOwnerUser(u) &&
-                !isShareholderUser(u) &&
-                !isInvestorUser(u) &&
-                !isSupporterUser(u) &&
+                getSamityMemberTier(u) === 'regular' &&
                 u.role !== 'admin' &&
                 u.role !== 'sub_admin'
               );
 
-              const isSamityMemberUser = (u: any) => Boolean(
-                u.samityApproved === true ||
-                u.samityStatus === 'approved' ||
-                u.isSamityMember === true ||
-                (Number(u.savings) > 0) ||
-                isOwnerUser(u) ||
-                isShareholderUser(u) ||
-                isInvestorUser(u) ||
-                isSupporterUser(u)
-              );
+              const isSamityMemberUser = (u: any) => isRegisteredSamityInvestor(u);
 
-              const isSwitchOffUser = (u: any) => Boolean(
-                u.samityAutoSavingsActive === false ||
-                u.samityDeactivateStatus === 'self_opted_out' ||
-                u.samitySwitchStatus === 'OFF'
-              );
+              const isSwitchOffUser = (u: any) => isSamitySwitchOff(u);
 
-              const isSwitchOnUser = (u: any) => Boolean(
-                (u.samityAutoSavingsActive === true || u.samitySwitchStatus === 'ON' || u.samityDeactivateStatus === 'active') &&
-                isSamityMemberUser(u) &&
-                !isSwitchOffUser(u)
-              );
+              const isSwitchOnUser = (u: any) => isSamitySwitchOn(u);
 
               const currentMonthNumber = new Date().getMonth() + 1;
 
@@ -2139,20 +2031,101 @@ export function AdminSamitySection(props: any) {
                 </form>
               </div>
             )}
+
+            {/* ========================================================================= */}
+            {/* 🏛️ COMPACT 4-SECTION MASTER MANAGEMENT & PROFILE EDIT SWITCH (MOVED BELOW) */}
+            {/* ========================================================================= */}
+            <div className="bg-gradient-to-r from-[#00a884] via-emerald-700 to-teal-800 border border-emerald-600 rounded-2xl p-2.5 sm:p-3 text-white shadow-sm space-y-2">
+              <div className="flex items-center justify-between gap-2 border-b border-white/15 pb-1.5">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-sm shrink-0">🏛️</span>
+                  <h3 className="text-[11px] sm:text-xs font-black text-amber-200 tracking-wide truncate">
+                    BNB ইনভেস্টর কোম্পানি ও সমবায় সমিতি মাস্টার ম্যানেজমেন্ট
+                  </h3>
+                </div>
+                <span className="text-[9px] font-bold text-emerald-100/90 shrink-0 hidden sm:inline">
+                  মাস্টার কন্ট্রোল হাব
+                </span>
+              </div>
+
+              {/* 4 Interactive Hub Navigation Tabs - STRICT SINGLE LINE (4 Columns) */}
+              <div className="grid grid-cols-4 gap-1 p-1 bg-emerald-950/40 rounded-xl border border-white/15">
+                <button
+                  type="button"
+                  onClick={() => setHubTab('investments')}
+                  className="px-1 sm:px-2 py-1.5 rounded-lg text-[9.5px] sm:text-[11px] font-black transition flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap min-w-0 text-white hover:bg-white/20 active:scale-95"
+                >
+                  <span className="text-xs shrink-0">📈</span>
+                  <span className="truncate">১. আমাদের ইনভেস্ট</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setHubTab('policy_rules')}
+                  className="px-1 sm:px-2 py-1.5 rounded-lg text-[9.5px] sm:text-[11px] font-black transition flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap min-w-0 text-white hover:bg-white/20 active:scale-95"
+                >
+                  <span className="text-xs shrink-0">📜</span>
+                  <span className="truncate">২. নিয়মাবলী</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setHubTab('fine_schedule')}
+                  className="px-1 sm:px-2 py-1.5 rounded-lg text-[9.5px] sm:text-[11px] font-black transition flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap min-w-0 text-white hover:bg-white/20 active:scale-95"
+                >
+                  <span className="text-xs shrink-0">⏰</span>
+                  <span className="truncate">৩. জরিমানা/তারিখ</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setHubTab('dividend_policy')}
+                  className="px-1 sm:px-2 py-1.5 rounded-lg text-[9.5px] sm:text-[11px] font-black transition flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap min-w-0 text-white hover:bg-white/20 active:scale-95"
+                >
+                  <span className="text-xs shrink-0">📊</span>
+                  <span className="truncate">৪. লভ্যাংশ/মুনাফা</span>
+                </button>
+              </div>
+            </div>
+
+            {/* ⚙️ সদস্যদের তথ্য এডিট অন/অফ সুইচ - Compact Single Row */}
+            <div className="bg-gradient-to-r from-amber-50 via-orange-50 to-emerald-50 border border-amber-200/90 px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl shadow-2xs flex items-center justify-between gap-2 text-left">
+              <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+                <span className="text-sm shrink-0">⚙️</span>
+                <h3 className="text-[11px] sm:text-xs font-black text-slate-900 truncate">
+                  সদস্যদের নিজ তথ্য এডিট সুইচ
+                </h3>
+                <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wide border shrink-0 ${
+                  cfgAllowProfileSelfEdit
+                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                    : 'bg-rose-100 text-rose-800 border-rose-300'
+                }`}>
+                  {cfgAllowProfileSelfEdit ? '🟢 অন (ON)' : '🔴 অফ (OFF)'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleToggleProfileSelfEdit(!cfgAllowProfileSelfEdit)}
+                className={`px-2.5 sm:px-3 py-1 rounded-lg text-[10px] sm:text-[10.5px] font-black transition cursor-pointer shrink-0 shadow-2xs flex items-center justify-center gap-1 ${
+                  cfgAllowProfileSelfEdit
+                    ? 'bg-rose-600 hover:bg-rose-700 active:scale-95 text-white'
+                    : 'bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white'
+                }`}
+              >
+                <span>{cfgAllowProfileSelfEdit ? '🔒 অফ করুন' : '🔓 অন করুন'}</span>
+              </button>
+            </div>
+
             {/* Filter and Search Section for Directory */}
             {(() => {
-              const isSamityMemberUser = (u: any) => Boolean(
-                u.samityApproved === true ||
-                u.samityStatus === 'approved' ||
-                u.isSamityMember === true
-              );
+              const isSamityMemberUser = (u: any) => isRegisteredSamityInvestor(u);
 
               const samityRegisteredCount = users.filter(isSamityMemberUser).length;
               const generalAppCount = users.filter(u => !isSamityMemberUser(u) && u.samityStatus !== 'pending' && u.approved !== false).length;
               const samityPendingCount = users.filter(u => u.samityStatus === 'pending' || u.approved === false).length;
 
               return (
-                <div className="bg-white border border-slate-150 rounded-3xl p-4.5 space-y-4 pb-96 sm:pb-[480px]">
+                <div className="bg-white border border-slate-150 rounded-3xl p-3.5 sm:p-4.5 space-y-3.5 pb-12">
 
                   <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5">
                     <div className="w-full sm:flex-1 relative">
@@ -2205,61 +2178,22 @@ export function AdminSamitySection(props: any) {
                         u.isSubAdmin === true
                       );
 
-                      const isOwnerUser = (u: any) => Boolean(
-                        u.memberCategory === 'owner' ||
-                        Number(u.monthlySavingsTarget) === 5000 ||
-                        u.memberGroup === 'owner'
-                      );
-
-                      const isShareholderUser = (u: any) => Boolean(
-                        (u.memberCategory === 'shareholder' || Number(u.monthlySavingsTarget) === 3000 || u.memberGroup === 'shareholder') &&
-                        !isOwnerUser(u)
-                      );
-
-                      const isInvestorUser = (u: any) => Boolean(
-                        (u.memberCategory === 'investor' || Number(u.monthlySavingsTarget) === 2000 || u.memberGroup === 'investor' || u.isInvestor === true || (Array.isArray(u.investments) && u.investments.length > 0)) &&
-                        !isOwnerUser(u) &&
-                        !isShareholderUser(u)
-                      );
-
-                      const isSupporterUser = (u: any) => Boolean(
-                        (u.memberCategory === 'supporter' || Number(u.monthlySavingsTarget) === 1000 || u.memberGroup === 'supporter') &&
-                        !isOwnerUser(u) &&
-                        !isShareholderUser(u) &&
-                        !isInvestorUser(u)
-                      );
+                      const isOwnerUser = (u: any) => getSamityMemberTier(u) === 'owner';
+                      const isShareholderUser = (u: any) => getSamityMemberTier(u) === 'shareholder';
+                      const isInvestorUser = (u: any) => getSamityMemberTier(u) === 'investor';
+                      const isSupporterUser = (u: any) => getSamityMemberTier(u) === 'supporter';
 
                       const isGeneralUser = (u: any) => Boolean(
-                        !isOwnerUser(u) &&
-                        !isShareholderUser(u) &&
-                        !isInvestorUser(u) &&
-                        !isSupporterUser(u) &&
+                        getSamityMemberTier(u) === 'regular' &&
                         u.role !== 'admin' &&
                         u.role !== 'sub_admin'
                       );
 
-                      const isSamityMemberUser = (u: any) => Boolean(
-                        u.samityApproved === true ||
-                        u.samityStatus === 'approved' ||
-                        u.isSamityMember === true ||
-                        (Number(u.savings) > 0) ||
-                        isOwnerUser(u) ||
-                        isShareholderUser(u) ||
-                        isInvestorUser(u) ||
-                        isSupporterUser(u)
-                      );
+                      const isSamityMemberUser = (u: any) => isRegisteredSamityInvestor(u);
 
-                      const isSwitchOffUser = (u: any) => Boolean(
-                        u.samityAutoSavingsActive === false ||
-                        u.samityDeactivateStatus === 'self_opted_out' ||
-                        u.samitySwitchStatus === 'OFF'
-                      );
+                      const isSwitchOffUser = (u: any) => isSamitySwitchOff(u);
 
-                      const isSwitchOnUser = (u: any) => Boolean(
-                        (u.samityAutoSavingsActive === true || u.samitySwitchStatus === 'ON' || u.samityDeactivateStatus === 'active') &&
-                        isSamityMemberUser(u) &&
-                        !isSwitchOffUser(u)
-                      );
+                      const isSwitchOnUser = (u: any) => isSamitySwitchOn(u);
 
                       const currentMonthNumber = new Date().getMonth() + 1;
 
@@ -2513,24 +2447,39 @@ export function AdminSamitySection(props: any) {
                                           </span>
                                         )}
 
-                                        {/* 🔴🟡⚪ সদস্য ক্যাটাগরি ব্যাজ */}
-                                        {u.memberCategory === 'owner' ? (
-                                          <span className="text-[8.5px] font-black bg-rose-600 text-white border border-rose-700 px-1.5 py-0.2 rounded inline-flex items-center gap-0.5 shadow-2xs">
-                                            🔴 ওনার (৳৫,০০০/মাস)
-                                          </span>
-                                        ) : u.memberCategory === 'shareholder' ? (
-                                          <span className="text-[8.5px] font-black bg-blue-600 text-white border border-blue-700 px-1.5 py-0.2 rounded inline-flex items-center gap-0.5 shadow-2xs">
-                                            🔵 শেয়ার হোল্ডার (৳৩,০০০/মাস)
-                                          </span>
-                                        ) : u.memberCategory === 'investor' ? (
-                                          <span className="text-[8.5px] font-black bg-emerald-600 text-white border border-emerald-700 px-1.5 py-0.2 rounded inline-flex items-center gap-0.5 shadow-2xs">
-                                            🟢 ইনভেস্টার (৳২,০০০/মাস)
-                                          </span>
-                                        ) : u.memberCategory === 'supporter' ? (
-                                          <span className="text-[8.5px] font-black bg-amber-500 text-slate-950 border border-amber-600 px-1.5 py-0.2 rounded inline-flex items-center gap-0.5 shadow-2xs">
-                                            🟡 সাপোর্টার (৳১,০০০/মাস)
-                                          </span>
-                                        ) : null}
+                                        {/* 🔴🔵🟢🟡 সদস্য ক্যাটাগরি ব্যাজ (শুধুমাত্র ফরম ফিলাপ ও রেজিস্টার্ড সমিতি সদস্যদের জন্য) */}
+                                        {(() => {
+                                          const verifiedTier = getSamityMemberTier(u);
+                                          if (verifiedTier === 'owner') {
+                                            return (
+                                              <span className="text-[8.5px] font-black bg-rose-600 text-white border border-rose-700 px-1.5 py-0.2 rounded inline-flex items-center gap-0.5 shadow-2xs">
+                                                🔴 ওনার (৳৫,০০০/মাস)
+                                              </span>
+                                            );
+                                          }
+                                          if (verifiedTier === 'shareholder') {
+                                            return (
+                                              <span className="text-[8.5px] font-black bg-blue-600 text-white border border-blue-700 px-1.5 py-0.2 rounded inline-flex items-center gap-0.5 shadow-2xs">
+                                                🔵 শেয়ার হোল্ডার (৳৩,০০০/মাস)
+                                              </span>
+                                            );
+                                          }
+                                          if (verifiedTier === 'investor') {
+                                            return (
+                                              <span className="text-[8.5px] font-black bg-emerald-600 text-white border border-emerald-700 px-1.5 py-0.2 rounded inline-flex items-center gap-0.5 shadow-2xs">
+                                                🟢 ইনভেস্টার (৳২,০০০/মাস)
+                                              </span>
+                                            );
+                                          }
+                                          if (verifiedTier === 'supporter') {
+                                            return (
+                                              <span className="text-[8.5px] font-black bg-amber-500 text-slate-950 border border-amber-600 px-1.5 py-0.2 rounded inline-flex items-center gap-0.5 shadow-2xs">
+                                                🟡 সাপোর্টার (৳১,০০০/মাস)
+                                              </span>
+                                            );
+                                          }
+                                          return null;
+                                        })()}
 
                                         {/* 🔘 সুইচ অবস্থা ও নমিনি ব্যাজ */}
                                         <span className={`text-[8px] font-black px-1.5 py-0.2 rounded border shadow-2xs ${
@@ -2928,12 +2877,33 @@ export function AdminSamitySection(props: any) {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-slate-700">
                 <p><strong className="text-slate-900">পিতার নাম:</strong> {selectedAppForReview.fatherName || 'প্রদান করা হয়নি'}</p>
                 <p><strong className="text-slate-900">মাতার নাম:</strong> {selectedAppForReview.motherName || 'প্রদান করা হয়নি'}</p>
-                <p><strong className="text-slate-900">NID / Passport:</strong> <span className="font-mono font-bold text-slate-900">{selectedAppForReview.nid || 'প্রদান করা হয়নি'}</span></p>
+                <p>
+                  <strong className="text-slate-900">
+                    {selectedAppForReview.birthReg && !selectedAppForReview.nid ? 'জন্ম নিবন্ধন:' : 'NID / জন্ম নিবন্ধন:'}
+                  </strong>{' '}
+                  <span className="font-mono font-bold text-slate-900">
+                    {selectedAppForReview.nid || selectedAppForReview.nidNumber || selectedAppForReview.birthReg || 'প্রদান করা হয়নি'}
+                  </span>
+                </p>
                 <p><strong className="text-slate-900">জন্ম তারিখ:</strong> {selectedAppForReview.dob || 'প্রদান করা হয়নি'}</p>
                 <p><strong className="text-slate-900">ঠিকানা:</strong> {[selectedAppForReview.postOffice, selectedAppForReview.thana, selectedAppForReview.district, selectedAppForReview.division].filter(Boolean).join(', ') || 'প্রদান করা হয়নি'}</p>
                 <p><strong className="text-slate-900">দেশ:</strong> {selectedAppForReview.country || 'Bangladesh'}</p>
-                <p><strong className="text-slate-900">নমিনির নাম:</strong> {selectedAppForReview.nomineeName || 'প্রদান করা হয়নি'} ({selectedAppForReview.nomineeRelation || '-'})</p>
-                <p><strong className="text-slate-900">নমিনির ফোন:</strong> <span className="font-mono">{selectedAppForReview.nomineePhone || '-'}</span></p>
+                <div className="sm:col-span-2 pt-1 border-t border-slate-200/70">
+                  <strong className="text-slate-900 block mb-1">নমিনি তথ্য:</strong>
+                  {Array.isArray(selectedAppForReview.nominees) && selectedAppForReview.nominees.length > 0 ? (
+                    <div className="space-y-1">
+                      {selectedAppForReview.nominees.map((nom, idx) => (
+                        <p key={nom.id || idx} className="text-xs">
+                          <span className="font-bold">{idx + 1}. {nom.name}</span> ({nom.relation || '-'}) — <span className="font-mono">{nom.phone || '-'}</span>
+                        </p>
+                      ))}
+                    </div>
+                  ) : (
+                    <p>
+                      {selectedAppForReview.nomineeName || 'প্রদান করা হয়নি'} ({selectedAppForReview.nomineeRelation || '-'}) — <span className="font-mono">{selectedAppForReview.nomineePhone || '-'}</span>
+                    </p>
+                  )}
+                </div>
               </div>
             </div>
 

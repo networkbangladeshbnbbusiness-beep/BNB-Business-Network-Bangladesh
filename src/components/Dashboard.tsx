@@ -2930,8 +2930,12 @@ const getTxt = (key: string, fallback: string) => {
                 userId: liveUser.uid,
                 userName: liveUser.name,
                 memberId: liveUser.memberId,
-                phone: liveUser.phone || liveUser.phoneNumber || "",
-                senderNumber: liveUser.phone || liveUser.phoneNumber || "",
+                phone: searchedMember.phone || (searchedMember as any).phoneNumber || "",
+                receiverUid: searchedMember.uid,
+                receiverId: searchedMember.memberId,
+                receiverName: searchedMember.name,
+                receiverPhone: searchedMember.phone || (searchedMember as any).phoneNumber || "",
+                senderNumber: liveUser.phone || (liveUser as any).phoneNumber || "",
                 type: 'balance_transfer',
                 typeLabel: 'টেলিকম ব্যালেন্স পাঠানো',
                 amount: amt,
@@ -2949,6 +2953,13 @@ const getTxt = (key: string, fallback: string) => {
                 userId: searchedMember.uid,
                 userName: searchedMember.name,
                 memberId: searchedMember.memberId,
+                userPhone: searchedMember.phone || (searchedMember as any).phoneNumber || "",
+                phone: liveUser.phone || (liveUser as any).phoneNumber || "",
+                senderUid: liveUser.uid,
+                senderId: liveUser.memberId || "",
+                senderName: liveUser.name || "",
+                senderPhone: liveUser.phone || (liveUser as any).phoneNumber || "",
+                senderNumber: liveUser.phone || (liveUser as any).phoneNumber || "",
                 type: 'deposit',
                 typeLabel: 'টেলিকম ব্যালেন্স লাভ',
                 amount: amt,
@@ -3178,6 +3189,8 @@ const getTxt = (key: string, fallback: string) => {
                 userId: liveUser.uid,
                 userName: liveUser.name,
                 memberId: liveUser.memberId,
+                phone: searchedMember.phone || (searchedMember as any).phoneNumber || "",
+                receiverPhone: searchedMember.phone || (searchedMember as any).phoneNumber || "",
                 type: 'balance_transfer',
                 typeLabel: isSamityVirtualTarget ? 'সমিতি একাউন্টে ফান্ড পাঠানো' : 'মেইন ব্যালেন্সে টাকা পাঠানো',
                 amount: amt,
@@ -3201,8 +3214,13 @@ const getTxt = (key: string, fallback: string) => {
                 userId: searchedMember.uid,
                 userName: searchedMember.name,
                 memberId: searchedMember.memberId,
-                phone: searchedMember.phone || "",
-                senderNumber: liveUser.phone || liveUser.phoneNumber || "",
+                userPhone: searchedMember.phone || (searchedMember as any).phoneNumber || "",
+                phone: liveUser.phone || (liveUser as any).phoneNumber || "",
+                senderUid: liveUser.uid,
+                senderId: liveUser.memberId || "",
+                senderName: liveUser.name || "",
+                senderPhone: liveUser.phone || (liveUser as any).phoneNumber || "",
+                senderNumber: liveUser.phone || (liveUser as any).phoneNumber || "",
                 type: isSamityVirtualTarget ? 'coop_savings_deposit' : 'deposit',
                 typeLabel: isSamityVirtualTarget ? 'সমিতি একাউন্টে সঞ্চয় জমা' : 'মেইন ব্যালেন্স প্রাপ্তি',
                 amount: amt,
@@ -4132,16 +4150,6 @@ const getTxt = (key: string, fallback: string) => {
                 </button>
               );
             })()}
-
-            {(user?.role === 'admin' || user?.role === 'sub_admin') && (
-              <button 
-                type="button"
-                onClick={onTriggerAdmin}
-                className="px-2 py-1 bg-amber-400 text-slate-950 font-black rounded text-[9px] uppercase cursor-pointer"
-              >
-                ADMIN
-              </button>
-            )}
           </div>
         </div>
 
@@ -5219,7 +5227,7 @@ const getTxt = (key: string, fallback: string) => {
         {/* 4. Profile View & Smart Debit Card / Transfer Tab */}
         {activeTab === 'profile' && (
           <div className="space-y-4 font-sans text-left pb-12">
-            <ProfileView user={liveUser} onUpdate={syncLiveProfile} onTriggerAdmin={onTriggerAdmin} appConfig={appConfig} />
+            <ProfileView user={liveUser} onUpdate={syncLiveProfile} appConfig={appConfig} />
 
             {/* Smart Virtual Debit Card & Live Transfer Panel (Disabled from Profile view per user request) */}
             {false && (
@@ -5733,7 +5741,6 @@ const getTxt = (key: string, fallback: string) => {
           setChatInputText={setChatInputText}
           isChatTyping={isChatTyping}
           setActiveTab={setActiveTab}
-          onTriggerAdmin={onTriggerAdmin}
         />
       </div>
 
@@ -5860,10 +5867,10 @@ const getTxt = (key: string, fallback: string) => {
             fee: Number(selectedReceiptTx.fee) || 0,
             totalAmount: Number(selectedReceiptTx.totalDeducted || selectedReceiptTx.amount) || 0,
             status: (getNormalizedStatus(selectedReceiptTx) as any),
-            beneficiaryName: selectedReceiptTx.receiverName || (selectedReceiptTx as any).partyName || (selectedReceiptTx as any).userName,
-            beneficiaryAccount: selectedReceiptTx.receiverId || (selectedReceiptTx as any).memberId,
-            senderPhone: selectedReceiptTx.senderPhone || (selectedReceiptTx as any).senderInfo || selectedReceiptTx.phone,
-            phone: selectedReceiptTx.phone,
+            beneficiaryName: (selectedReceiptTx as any).partyName || selectedReceiptTx.receiverName || (selectedReceiptTx as any).senderName || (selectedReceiptTx as any).userName,
+            beneficiaryAccount: (selectedReceiptTx as any).partyMemberId || selectedReceiptTx.receiverId || (selectedReceiptTx as any).senderId || (selectedReceiptTx as any).memberId,
+            senderPhone: (selectedReceiptTx as any).partyPhone || selectedReceiptTx.senderPhone || (selectedReceiptTx as any).senderNumber || (selectedReceiptTx as any).senderInfo || selectedReceiptTx.phone,
+            phone: (selectedReceiptTx as any).partyPhone || selectedReceiptTx.phone,
             paymentMethod: selectedReceiptTx.paymentMethod || 'BNB Wallet',
             createdAt: selectedReceiptTx.createdAt,
             description: selectedReceiptTx.description,

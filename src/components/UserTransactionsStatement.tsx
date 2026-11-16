@@ -96,22 +96,33 @@ export const UserTransactionsStatement: React.FC<UserTransactionsStatementProps>
   // Map of users for fast lookups by UID, Phone, normalizedPhone, or MemberId
   const userMap = useMemo(() => {
     const map = new Map<string, User>();
+    const setPhoneKeys = (rawPhone: any, u: User) => {
+      if (!rawPhone) return;
+      const str = String(rawPhone).trim();
+      if (!str) return;
+      map.set(str, u);
+      const digits = str.replace(/\D/g, '');
+      if (digits) {
+        map.set(digits, u);
+        if (digits.startsWith('880') && digits.length >= 13) {
+          map.set(`0${digits.slice(3)}`, u);
+        } else if (digits.startsWith('0') && digits.length === 11) {
+          map.set(`88${digits}`, u);
+        }
+      }
+    };
     if (Array.isArray(allUsers)) {
       allUsers.forEach((u) => {
         if (u.uid) map.set(u.uid, u);
         if (u.id) map.set(u.id, u);
-        if (u.phone) {
-          map.set(u.phone, u);
-          map.set(u.phone.replace(/\D/g, ''), u);
-        }
-        if ((u as any).phoneNumber) {
-          map.set((u as any).phoneNumber, u);
-          map.set((u as any).phoneNumber.replace(/\D/g, ''), u);
-        }
-        if (u.normalizedPhone) map.set(u.normalizedPhone, u);
+        setPhoneKeys(u.phone, u);
+        setPhoneKeys((u as any).phoneNumber, u);
+        setPhoneKeys(u.normalizedPhone, u);
         if (u.memberId) {
-          map.set(u.memberId, u);
-          map.set(u.memberId.toString(), u);
+          const mid = String(u.memberId).trim();
+          map.set(mid, u);
+          map.set(mid.toUpperCase(), u);
+          map.set(mid.toLowerCase(), u);
         }
       });
     }
@@ -213,6 +224,36 @@ export const UserTransactionsStatement: React.FC<UserTransactionsStatementProps>
       const desc = tx.description || '';
       const method = (tx.paymentMethod || '').toLowerCase();
 
+      const lookupUser = (rawKey?: string, excludeSelf = false): User | undefined => {
+        if (!rawKey) return undefined;
+        const key = String(rawKey).trim();
+        if (!key) return undefined;
+        const digits = key.replace(/\D/g, '');
+        const candidates = [
+          userMap.get(key),
+          userMap.get(key.toUpperCase()),
+          digits ? userMap.get(digits) : undefined,
+          digits.startsWith('880') && digits.length >= 13 ? userMap.get(`0${digits.slice(3)}`) : undefined,
+          digits.startsWith('0') && digits.length === 11 ? userMap.get(`88${digits}`) : undefined
+        ];
+        for (const cand of candidates) {
+          if (cand && (!excludeSelf || cand.uid !== user.uid)) {
+            return cand;
+          }
+        }
+        return undefined;
+      };
+
+      const isSelfPhone = (rawPhone?: string): boolean => {
+        if (!rawPhone) return false;
+        const digits = String(rawPhone).replace(/\D/g, '').replace(/^88(?=0)/, '');
+        if (!digits) return false;
+        const selfPhones = [user.phone, (user as any).phoneNumber, (tx as any).userPhone]
+          .filter(Boolean)
+          .map((p) => String(p).replace(/\D/g, '').replace(/^88(?=0)/, ''));
+        return selfPhones.includes(digits);
+      };
+
       // Case 1: Send Money (Money Out)
       if (type === 'balance_transfer' || type === 'transfer') {
         iconType = 'send';
@@ -220,10 +261,16 @@ export const UserTransactionsStatement: React.FC<UserTransactionsStatementProps>
         categoryTag = 'সেন্ড মানি';
         serviceTitle = 'টাকা পাঠানো (Send Money)';
 
-        let matchedUser: User | undefined = undefined;
-        if (tx.receiverUid && userMap.has(tx.receiverUid)) matchedUser = userMap.get(tx.receiverUid);
-        else if (tx.receiverId && userMap.has(tx.receiverId)) matchedUser = userMap.get(tx.receiverId);
-        else if (tx.phone && userMap.has(tx.phone)) matchedUser = userMap.get(tx.phone);
+        const nameMatch = desc.match(/সদস্য\s+([^(]+?)\s+\(আইডি:\s*([^)]+)\)/) || desc.match(/মেম্বার\s+([^(]+?)\s+\(([^)]+)\)/);
+        const parsedName = nameMatch ? nameMatch[1].trim() : '';
+        const parsedMemberId = nameMatch ? nameMatch[2].trim() : '';
+
+        const matchedUser =
+          lookupUser(tx.receiverUid, true) ||
+          lookupUser(tx.receiverId, true) ||
+          lookupUser(parsedMemberId, true) ||
+          lookupUser((tx as any).receiverPhone, true) ||
+          lookupUser(tx.phone, true);
 
         if (matchedUser) {
           partyName = matchedUser.name;
@@ -231,47 +278,59 @@ export const UserTransactionsStatement: React.FC<UserTransactionsStatementProps>
           partyMemberId = matchedUser.memberId;
           partyProfilePic = matchedUser.profilePic;
         } else {
-          partyName = tx.receiverName || '';
-          partyPhone = tx.phone || '';
-          partyMemberId = tx.receiverId || '';
-          
-          if (!partyName) {
-            const nameMatch = desc.match(/সদস্য\s+([^(]+)\s+\(আইডি:\s*([^)]+)\)/);
-            if (nameMatch) {
-              partyName = nameMatch[1].trim();
-              partyMemberId = nameMatch[2].trim();
-            }
-          }
+          partyName = tx.receiverName || parsedName || '';
+          partyPhone = (tx as any).receiverPhone || (!isSelfPhone(tx.phone) ? (tx.phone || '') : '');
+          partyMemberId = tx.receiverId || parsedMemberId || '';
         }
 
         if (!partyName) partyName = 'BNB সদস্য প্রাপক';
       }
       // Case 2: Receive Money (Money In)
-      else if (type === 'received_transfer' || (type === 'deposit' && isCredit && (desc.includes('হতে') || desc.includes('প্রাপ্তি')))) {
+      else if (
+        type === 'received_transfer' ||
+        (type === 'deposit' && isCredit && (desc.includes('হতে') || desc.includes('প্রাপ্তি'))) ||
+        (type === 'coop_savings_deposit' && isCredit && (desc.includes('হতে') || desc.includes('থেকে') || (Boolean((tx as any).senderUid) && (tx as any).senderUid !== user.uid)))
+      ) {
         iconType = 'receive';
         avatarTheme = 'emerald';
-        categoryTag = 'টাকা প্রাপ্তি';
+        categoryTag = type === 'coop_savings_deposit' ? 'সমিতি প্রাপ্তি' : 'টাকা প্রাপ্তি';
         serviceTitle = 'টাকা গ্রহণ (Receive Money)';
 
-        let matchedUser: User | undefined = undefined;
-        if (tx.senderInfo && userMap.has(tx.senderInfo)) matchedUser = userMap.get(tx.senderInfo);
-        else if (tx.senderPhone && userMap.has(tx.senderPhone)) matchedUser = userMap.get(tx.senderPhone);
-        else if (tx.phone && userMap.has(tx.phone)) matchedUser = userMap.get(tx.phone);
+        // Extract sender info from description first (authoritative for legacy records too)
+        const matchBn = desc.match(/সদস্য\s+([^(]+?)\s+\(আইডি:\s*([^)]+)\)\s*হতে/);
+        const matchServer = desc.match(/মেম্বার\s+([^(]+?)\s+\(([^)]+)\)\s*থেকে/);
+        const matchEn = desc.match(/Received from\s+([^(]+?)\s+\(([^)]+)\)/i);
+
+        const parsedName = (matchBn?.[1] || matchServer?.[1] || matchEn?.[1] || '').trim();
+        const parsedIdOrPhone = (matchBn?.[2] || matchServer?.[2] || matchEn?.[2] || '').trim();
+        const parsedMemberId = matchBn?.[2]?.trim() || matchServer?.[2]?.trim() || '';
+        const parsedPhoneFromEn = matchEn?.[2] && /^\+?\d{6,}$/.test(matchEn[2].replace(/\s/g, '')) ? matchEn[2].trim() : '';
+
+        const senderNumberRaw = (tx as any).senderNumber || '';
+        const senderUidRaw = (tx as any).senderUid || '';
+        const senderIdRaw = (tx as any).senderId || '';
+        const senderNameRaw = (tx as any).senderName || '';
+        const safeTxPhone = tx.phone && !isSelfPhone(tx.phone) ? tx.phone : '';
+
+        const matchedUser =
+          lookupUser(senderUidRaw, true) ||
+          lookupUser(senderIdRaw, true) ||
+          lookupUser(parsedMemberId, true) ||
+          lookupUser(senderNumberRaw, true) ||
+          lookupUser(tx.senderPhone, true) ||
+          lookupUser(tx.senderInfo, true) ||
+          lookupUser(parsedIdOrPhone, true) ||
+          lookupUser(safeTxPhone, true);
 
         if (matchedUser) {
-          partyName = matchedUser.name;
-          partyPhone = matchedUser.phone || (matchedUser as any).phoneNumber || '';
-          partyMemberId = matchedUser.memberId;
+          partyName = matchedUser.name || senderNameRaw || parsedName;
+          partyPhone = matchedUser.phone || (matchedUser as any).phoneNumber || senderNumberRaw || tx.senderPhone || tx.senderInfo || parsedPhoneFromEn || safeTxPhone || '';
+          partyMemberId = matchedUser.memberId || senderIdRaw || parsedMemberId || '';
           partyProfilePic = matchedUser.profilePic;
         } else {
-          partyName = tx.userName || '';
-          partyPhone = tx.senderInfo || tx.senderPhone || tx.phone || '';
-          
-          const nameMatch = desc.match(/সদস্য\s+([^(]+)\s+\(আইডি:\s*([^)]+)\)\s*হতে/);
-          if (nameMatch) {
-            partyName = nameMatch[1].trim();
-            partyMemberId = nameMatch[2].trim();
-          }
+          partyName = senderNameRaw || parsedName || '';
+          partyMemberId = senderIdRaw || parsedMemberId || '';
+          partyPhone = senderNumberRaw || tx.senderPhone || tx.senderInfo || parsedPhoneFromEn || safeTxPhone || '';
         }
 
         if (!partyName) partyName = 'BNB সদস্য প্রেরক';

@@ -113,3 +113,13 @@ export function getReturnOrigin(): string {
   }
   return APP_BASE_URL;
 }
+
+export function getAdminPortalUrl(): string {
+  if (isStrictNative()) {
+    return `${APP_BASE_URL}/admin`;
+  }
+  if (typeof window !== 'undefined' && window.location.origin && window.location.origin.startsWith('http')) {
+    return `${window.location.origin.replace(/\/$/, '')}/admin`;
+  }
+  return `${APP_BASE_URL}/admin`;
+}

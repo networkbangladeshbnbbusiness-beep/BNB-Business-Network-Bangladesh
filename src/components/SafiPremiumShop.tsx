@@ -848,7 +848,10 @@ export const SafiPremiumShop = React.memo(function SafiPremiumShop({
   const isEffectiveAdmin = isAdmin && !adminPreviewAsUser;
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#f8fafc] w-full h-full min-h-screen font-sans flex flex-col text-slate-800">
+    <div className={isAdminMode
+      ? "relative z-10 bg-[#f8fafc] w-full min-h-[75vh] font-sans flex flex-col text-slate-800 rounded-3xl overflow-hidden"
+      : "fixed inset-0 z-50 bg-[#f8fafc] w-full h-full min-h-screen font-sans flex flex-col text-slate-800"
+    }>
       {/* 1. Header Area - Green Top Header matching Home Dashboard */}
       <div className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-2.5 pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden shrink-0 space-y-2.5">
         <div className="flex items-center justify-between gap-1">
@@ -1961,7 +1964,10 @@ export const SafiPremiumShop = React.memo(function SafiPremiumShop({
       </AnimatePresence>
 
       {/* 5. Bottom Navigation Bar */}
-      <div className="bg-[#1e1e2d] text-white border-t border-white/10 px-4 py-2 flex justify-around items-center shrink-0 fixed bottom-0 inset-x-0 z-40 max-w-lg mx-auto shadow-2xl">
+      <div className={isAdminMode
+        ? "bg-[#1e1e2d] text-white border-t border-white/10 px-4 py-2 flex justify-around items-center shrink-0 sticky bottom-0 inset-x-0 z-30 w-full shadow-xl"
+        : "bg-[#1e1e2d] text-white border-t border-white/10 px-4 py-2 flex justify-around items-center shrink-0 fixed bottom-0 inset-x-0 z-40 max-w-lg mx-auto shadow-2xl"
+      }>
         <button
           type="button"
           onClick={() => setActiveTab('home')}

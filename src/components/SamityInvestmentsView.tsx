@@ -4,6 +4,7 @@ import { db } from '../lib/firebase';
 import { collection, onSnapshot, doc, getDoc, setDoc, deleteDoc, updateDoc, arrayUnion, arrayRemove, getDocs } from 'firebase/firestore';
 import { useBackHandler } from '../lib/navigationManager';
 import UnifiedBackButton from './UnifiedBackButton';
+import { isStandaloneAdminRoute } from '../lib/adminRoute';
 import { 
   TrendingUp, 
   Sparkles, 
@@ -240,7 +241,7 @@ export default function SamityInvestmentsView({ user, onBack, isAdmin, hideHeade
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  const isUserAdmin = isAdmin || user.role === 'admin' || user.role === 'sub_admin';
+  const isUserAdmin = Boolean(isAdmin) && isStandaloneAdminRoute();
 
   // 1. Real-time Subscription to `samity_investments` collection in Firestore
   useEffect(() => {

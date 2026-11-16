@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import UnifiedBackButton from './UnifiedBackButton';
+import { isStandaloneAdminRoute } from '../lib/adminRoute';
 import { 
   Lock, 
   HelpCircle, 
@@ -47,6 +48,7 @@ import {
   onSnapshot 
 } from 'firebase/firestore';
 import { User as UserType, Transaction } from '../types';
+import { computeSafeDealsFee } from '../lib/config';
 import { useBackHandler } from '../lib/navigationManager';
 
 interface SafeDealsEscrowViewProps {
@@ -122,6 +124,15 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
   const [activeFilter, setActiveFilter] = useState<'all' | 'pending' | 'confirmed' | 'shipped' | 'cancelled'>('all');
   const [showBalance, setShowBalance] = useState<boolean>(true);
 
+  const safeDealsCfg = appConfig?.safeDealsConfig;
+  const supportPhone = String(safeDealsCfg?.supportWhatsapp || '01865911728').trim() || '01865911728';
+  const supportWaHref = `https://wa.me/88${supportPhone.replace(/\D/g, '')}`;
+  const minEscrowAmount = Math.max(1, Number(safeDealsCfg?.minAmount ?? 100));
+  const maxEscrowAmount = Math.max(minEscrowAmount, Number(safeDealsCfg?.maxAmount ?? 500000));
+  const allowBuyerSend = safeDealsCfg?.allowBuyerSend !== false && safeDealsCfg?.enabled !== false && appConfig?.serviceStatus?.safedeals !== false;
+  const allowSellerCancel = safeDealsCfg?.allowSellerCancel !== false;
+  const allowBuyerDispute = safeDealsCfg?.allowBuyerDispute !== false;
+
   // States for localized transaction history
   const [txHistory, setTxHistory] = useState<Transaction[]>([]);
   const [loadingTx, setLoadingTx] = useState(false);
@@ -185,10 +196,9 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
       const list: any[] = [];
       snap.forEach((d) => {
         const data = d.data();
-        // Include if associated with current user, or if admin/sub_admin
+        // Include if associated with current user, or if inside standalone Admin Panel
         if (
-          liveUser.role === 'admin' || 
-          liveUser.role === 'sub_admin' || 
+          (isStandaloneAdminRoute() && (liveUser.role === 'admin' || liveUser.role === 'sub_admin')) || 
           data.buyerUid === liveUser.uid || 
           data.sellerUid === liveUser.uid || 
           data.buyerPhone === liveUser.phone || 
@@ -325,7 +335,7 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
   // Sync support tickets real-time
   useEffect(() => {
     if (!liveUser?.uid) return;
-    const q = (liveUser.role === 'admin' || liveUser.role === 'sub_admin')
+    const q = (isStandaloneAdminRoute() && (liveUser.role === 'admin' || liveUser.role === 'sub_admin'))
       ? collection(db, 'escrow_disputes')
       : query(collection(db, 'escrow_disputes'), where('userId', '==', liveUser.uid));
     const unsubscribe = onSnapshot(q, (snap) => {
@@ -402,13 +412,32 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
   // Send Secure Escrow Money Execution
   const handleSendEscrow = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!allowBuyerSend) {
+      setErrorMsg("বর্তমানে নতুন নিরাপদ লেনদেন পাঠানো সাময়িকভাবে বন্ধ রাখা হয়েছে।");
+      return;
+    }
     const cleanAmount = parseFloat(sendAmount);
     if (!sendPhone || isNaN(cleanAmount) || cleanAmount <= 0) {
       setErrorMsg("অনুগ্রহ করে মোবাইল/আইডি এবং সঠিক টাকার পরিমাণ লিখুন।");
       return;
     }
-    if (cleanAmount > liveUser.balance) {
-      setErrorMsg(`আপনার অ্যাকাউন্টে পর্যাপ্ত ব্যালেন্স নেই! আপনার ব্যালেন্স মাত্র ৳${liveUser.balance.toLocaleString('bn-BD')} BDT।`);
+    if (cleanAmount < minEscrowAmount) {
+      setErrorMsg(`সর্বনিম্ন ৳${minEscrowAmount.toLocaleString('bn-BD')} টাকা পাঠানো যাবে।`);
+      return;
+    }
+    if (cleanAmount > maxEscrowAmount) {
+      setErrorMsg(`একবারে সর্বোচ্চ ৳${maxEscrowAmount.toLocaleString('bn-BD')} টাকা পাঠানো যাবে।`);
+      return;
+    }
+
+    const escrowFee = computeSafeDealsFee(cleanAmount, safeDealsCfg);
+    const feeMode = safeDealsCfg?.feeMode || 'free';
+    const feeBearer = safeDealsCfg?.feeBearer || 'buyer';
+    const totalBuyerPaid = feeBearer === 'buyer' ? Math.round((cleanAmount + escrowFee) * 100) / 100 : cleanAmount;
+    const netSellerAmount = feeBearer === 'seller' ? Math.max(0, Math.round((cleanAmount - escrowFee) * 100) / 100) : cleanAmount;
+
+    if (totalBuyerPaid > liveUser.balance) {
+      setErrorMsg(`আপনার অ্যাকাউন্টে পর্যাপ্ত ব্যালেন্স নেই! প্রয়োজন ৳${totalBuyerPaid.toLocaleString('bn-BD')} BDT (ব্যালেন্স ৳${liveUser.balance.toLocaleString('bn-BD')})।`);
       return;
     }
     if (sendPin !== liveUser.pin) {
@@ -423,9 +452,10 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
 
       // Deduct sender's balance
       const senderRef = doc(db, 'users', liveUser.uid);
+      const nextSenderBalance = Math.max(0, Math.round((liveUser.balance - totalBuyerPaid) * 100) / 100);
       await updateDoc(senderRef, {
-        balance: liveUser.balance - cleanAmount,
-        mainBalance: liveUser.balance - cleanAmount
+        balance: nextSenderBalance,
+        mainBalance: nextSenderBalance
       });
 
       // Create new safe deal escrow order
@@ -442,6 +472,11 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
         totalAmount: cleanAmount,
         pricePerItem: cleanAmount,
         quantity: 1,
+        escrowFee,
+        feeMode,
+        feeBearer,
+        totalBuyerPaid,
+        netSellerAmount,
         status: 'Payment Held', // 'অপেক্ষমাণ' state
         createdAt: timestamp,
         courierName: '',
@@ -476,9 +511,12 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
         memberId: liveUser.memberId,
         type: 'fee_payment',
         typeLabel: 'নিরাপদ লেনদেন হোল্ড',
-        amount: cleanAmount,
+        amount: totalBuyerPaid,
+        principalAmount: cleanAmount,
+        fee: escrowFee,
+        profit: escrowFee,
         status: 'success',
-        description: `নিরাপদ ডিল ফান্ড বুকিং: ${sendPurpose || 'লেনদেন'} (আইডি: ${docRef.id.substring(0, 6).toUpperCase()})। টাকা এসক্রো লক করা হয়েছে।`,
+        description: `নিরাপদ ডিল ফান্ড বুকিং: ${sendPurpose || 'লেনদেন'} (আইডি: ${docRef.id.substring(0, 6).toUpperCase()})। টাকা এসক্রো লক করা হয়েছে।${escrowFee > 0 ? ` (চার্জ: ৳${escrowFee})` : ''}`,
         createdAt: timestamp,
         paymentMethod: 'Main Balance'
       });
@@ -610,14 +648,18 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
       });
 
       // 2. Transfer funds to target seller/recipient's balance if they are registered users
+      const sellerCreditAmount = order.feeBearer === 'seller' && Number(order.escrowFee) > 0
+        ? Math.max(0, Math.round(((Number(order.totalAmount) || 0) - Number(order.escrowFee)) * 100) / 100)
+        : (Number(order.totalAmount) || 0);
+
       if (order.sellerUid) {
         const sellerRef = doc(db, 'users', order.sellerUid);
         const sellerSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', order.sellerUid)));
         if (!sellerSnap.empty) {
           const sellerData = sellerSnap.docs[0].data();
           await updateDoc(sellerRef, {
-            balance: (sellerData.balance || 0) + order.totalAmount,
-            mainBalance: (sellerData.balance || 0) + order.totalAmount
+            balance: (sellerData.balance || 0) + sellerCreditAmount,
+            mainBalance: (sellerData.balance || 0) + sellerCreditAmount
           });
         }
 
@@ -629,7 +671,9 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
           memberId: order.sellerMemberId || 'SELLER',
           type: 'deposit',
           typeLabel: 'নিরাপদ লেনদেন প্রাপ্তি',
-          amount: order.totalAmount,
+          amount: sellerCreditAmount,
+          grossAmount: Number(order.totalAmount) || 0,
+          fee: order.feeBearer === 'seller' ? (Number(order.escrowFee) || 0) : 0,
           status: 'success',
           description: `নিরাপদ লেনদেন সম্পন্নঃ ক্রেতা পণ্য চেক করে টাকা রিলিজ করেছেন (মোবাইল: ${order.buyerPhone})।`,
           createdAt: timestamp,
@@ -693,12 +737,17 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
       });
 
       // 2. Credit back the buyer's balance
+      const buyerRefundAmount = order.feeBearer === 'buyer' && Number(order.totalBuyerPaid) > Number(order.totalAmount)
+        ? Number(order.totalBuyerPaid)
+        : (Number(order.totalAmount) || 0);
+
       const buyerRef = doc(db, 'users', order.buyerUid);
       const buyerSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', order.buyerUid)));
       if (!buyerSnap.empty) {
         const buyerData = buyerSnap.docs[0].data();
         await updateDoc(buyerRef, {
-          balance: (buyerData.balance || 0) + order.totalAmount
+          balance: (buyerData.balance || 0) + buyerRefundAmount,
+          mainBalance: (buyerData.balance || 0) + buyerRefundAmount
         });
       }
 
@@ -710,7 +759,7 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
         memberId: order.buyerMemberId,
         type: 'deposit',
         typeLabel: 'নিরাপদ লেনদেন রিফান্ড',
-        amount: order.totalAmount,
+        amount: buyerRefundAmount,
         status: 'success',
         description: `নিরাপদ লেনদেন বুকিং রিফান্ডঃ ডিল বাতিল হওয়ার কারণে পেমেন্ট মেইন ব্যালেন্সে ক্রেডিট করা হয়েছে।`,
         createdAt: timestamp,
@@ -742,6 +791,11 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
 
   // Cancel/Refund Transaction (Available to Seller freely OR Admin)
   const handleCancelEscrow = (order: any) => {
+    const isAdminActor = liveUser.role === 'admin' || liveUser.role === 'sub_admin' || isStandaloneAdminRoute();
+    if (!isAdminActor && !allowSellerCancel) {
+      alert("বর্তমানে বিক্রেতা কর্তৃক সরাসরি লেনদেন বাতিল করা বন্ধ রাখা হয়েছে। অনুগ্রহ করে এডমিন সাপোর্টে যোগাযোগ করুন।");
+      return;
+    }
     setConfirmModalData({
       title: "লেনদেন বাতিল ও রিফান্ড নিশ্চিতকরণ",
       description: `আপনি কি নিশ্চিতভাবে এই লেনদেনটি বাতিল বা রিফান্ড করতে চান? বুকিংকৃত টাকা সরাসরি পুনরায় ক্রেতার মেইন ওয়ালেটে ফেরত দেওয়া হবে।`,
@@ -754,6 +808,10 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
   };
 
   const handleOpenDisputeModal = (order: any) => {
+    if (!allowBuyerDispute) {
+      alert("বর্তমানে অনলাইন অভিযোগ দাখিল সাময়িকভাবে বন্ধ রাখা হয়েছে। সাপোর্ট হোয়াটসঅ্যাপে যোগাযোগ করুন।");
+      return;
+    }
     setDisputeOrder(order);
     setDisputeReason('');
     setDisputeContactPhone(liveUser.phone || '');
@@ -789,7 +847,7 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
         description: disputeReason.trim(),
         status: 'Pending', // Pending, Processing, Resolved
         createdAt: timestamp,
-        whatsappSupportNumber: '01865911728',
+        whatsappSupportNumber: supportPhone,
         courierName: disputeOrder.courierName || 'N/A',
         trackingNumber: disputeOrder.trackingNumber || 'N/A',
         shipmentDate: disputeOrder.shipmentDate || 'N/A'
@@ -815,7 +873,7 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
       // Add a notice to user about support ticket submission
       await addDoc(collection(db, 'notices'), {
         title: `অভিযোগ সাবমিট সম্পন্নঃ রসিদ নং ${ticketId}`,
-        content: `আপনার নিরাপদ লেনদেন ডিল "${disputeOrder.dealTitle}" এর বিপরীতে অভিযোগটি সফলভাবে রেজিস্টার করা হয়েছে। সিরিয়াল নংঃ ${serialNo}। আমাদের গ্রাহক সেবা প্রতিনিধি আপনার সাথে হোয়াটসঅ্যাপে (01865911728) যোগাযোগ করবেন।`,
+        content: `আপনার নিরাপদ লেনদেন ডিল "${disputeOrder.dealTitle}" এর বিপরীতে অভিযোগটি সফলভাবে রেজিস্টার করা হয়েছে। সিরিয়াল নংঃ ${serialNo}। আমাদের গ্রাহক সেবা প্রতিনিধি আপনার সাথে হোয়াটসঅ্যাপে (${supportPhone}) যোগাযোগ করবেন।`,
         createdAt: timestamp
       });
 
@@ -1040,7 +1098,13 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
 
             <button
               type="button"
-              onClick={() => setShowSendModal(true)}
+              onClick={() => {
+                if (!allowBuyerSend) {
+                  alert("নিরাপদ লেনদেন পাঠানো বর্তমানে এডমিন কর্তৃক সাময়িকভাবে বন্ধ রয়েছে।");
+                  return;
+                }
+                setShowSendModal(true);
+              }}
               className="mt-6 bg-[#006A3E] hover:bg-[#005230] active:scale-95 text-white font-black text-xs sm:text-[13px] tracking-wide py-2.5 sm:py-3 px-5 sm:px-6 rounded-full transition-transform w-[130px] sm:w-[155px] shadow-sm cursor-pointer text-center leading-none"
             >
               টাকা পাঠান
@@ -1332,8 +1396,9 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
                       <input 
                         type="number"
                         required
-                        min="100"
-                        placeholder="নূন্যতম 100 টাকা"
+                        min={minEscrowAmount}
+                        max={maxEscrowAmount}
+                        placeholder={`নূন্যতম ${minEscrowAmount} টাকা`}
                         value={sendAmount}
                         onChange={(e) => setSendAmount(e.target.value)}
                         className="w-full px-4 py-4 bg-slate-50 border-2 border-slate-200 text-slate-900 rounded-2xl text-xl font-black focus:border-emerald-500 font-mono text-center shadow-inner transition-all"
@@ -1344,6 +1409,19 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
                       <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">বর্তমান ব্যালেন্সঃ</p>
                       <p className="text-[11px] text-emerald-700 font-black">৳ {(liveUser.balance || 0).toLocaleString('bn-BD')} BDT</p>
                     </div>
+                    {(() => {
+                      const amt = parseFloat(sendAmount) || 0;
+                      const fee = computeSafeDealsFee(amt, safeDealsCfg);
+                      if (fee <= 0) return null;
+                      const bearer = safeDealsCfg?.feeBearer || 'buyer';
+                      const totalPay = bearer === 'buyer' ? Math.round((amt + fee) * 100) / 100 : amt;
+                      return (
+                        <div className="flex items-center justify-between px-1 pt-0.5 text-[11px] font-black text-amber-700">
+                          <span>সার্ভিস ফি ({bearer === 'buyer' ? 'ক্রেতা' : 'বিক্রেতা'}): ৳{fee.toLocaleString('bn-BD')}</span>
+                          <span>{bearer === 'buyer' ? `মোট প্রদেয়: ৳${totalPay.toLocaleString('bn-BD')}` : `প্রাপক পাবেন: ৳${Math.max(0, Math.round((amt - fee) * 100) / 100).toLocaleString('bn-BD')}`}</span>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Purpose/Description */}
@@ -1824,8 +1902,8 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
                     </div>
                   )}
 
-                  {/* 4. Admin Arbitrator Actions */}
-                  {(liveUser.role === 'admin' || liveUser.role === 'sub_admin') && (selectedOrder.status === 'Payment Held' || selectedOrder.status === 'Shipped') && (
+                  {/* 4. Admin Arbitrator Actions (Strictly inside /admin) */}
+                  {isStandaloneAdminRoute() && (liveUser.role === 'admin' || liveUser.role === 'sub_admin') && (selectedOrder.status === 'Payment Held' || selectedOrder.status === 'Shipped') && (
                     <div className="bg-amber-50 border-2 border-amber-200/50 p-5 rounded-[28px] space-y-4 shadow-sm">
                       <div className="flex items-center gap-2">
                         <div className="w-8 h-8 bg-amber-500 text-white rounded-lg flex items-center justify-center shadow-sm">
@@ -2628,10 +2706,10 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
                   <div className="space-y-1">
                     <span className="text-[10px] font-black text-emerald-800 uppercase tracking-widest block">সরাসরি হোয়াটসঅ্যাপে যোগাযোগঃ</span>
                     <p className="text-sm font-black text-slate-800 leading-tight">এডমিন সাপোর্ট সেন্টারের সাথে সরাসরি কথা বলুন</p>
-                    <p className="text-xs text-emerald-700 font-mono font-black mt-1">WhatsApp: 01865911728</p>
+                    <p className="text-xs text-emerald-700 font-mono font-black mt-1">WhatsApp: {supportPhone}</p>
                   </div>
                   <a
-                    href="https://wa.me/8801865911728"
+                    href={supportWaHref}
                     target="_blank"
                     rel="noreferrer"
                     className="w-full py-4 bg-[#25D366] hover:bg-emerald-600 text-white font-black text-sm rounded-2xl transition shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 active:scale-95"

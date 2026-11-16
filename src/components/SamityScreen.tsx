@@ -6,6 +6,7 @@ import SamityAdmin from './SamityAdmin';
 import SamityInvestmentsView from './SamityInvestmentsView';
 import SamityRequestForm from './SamityRequestForm';
 import UnifiedBackButton from './UnifiedBackButton';
+import { isStandaloneAdminRoute } from '../lib/adminRoute';
 import { BNBPaymentReceiptModal, PaymentReceiptData } from './BNBPaymentReceiptModal';
 import { verifyUserPin } from '../lib/memberUtils';
 import { 
@@ -364,6 +365,8 @@ export const SamityScreen = React.memo(function SamityScreen({
           if (app.dpsBalance !== undefined && (existing.dpsBalance === undefined || existing.dpsBalance === null)) existing.dpsBalance = Number(app.dpsBalance) || 0;
           if (app.nomineeName && !existing.nomineeName) existing.nomineeName = app.nomineeName;
           if (app.nomineePhone && !existing.nomineePhone) existing.nomineePhone = app.nomineePhone;
+          if (Array.isArray(app.nominees) && (!Array.isArray(existing.nominees) || existing.nominees.length === 0)) existing.nominees = app.nominees;
+          if (app.birthReg && !existing.birthReg) existing.birthReg = app.birthReg;
           if (app.monthlySavingsTarget && !existing.monthlySavingsTarget) existing.monthlySavingsTarget = app.monthlySavingsTarget;
           if (app.samityStatus === 'approved' || app.status === 'approved' || app.approved === true) {
             existing.samityStatus = 'approved';
@@ -656,70 +659,150 @@ export const SamityScreen = React.memo(function SamityScreen({
   const [deactivatePin, setDeactivatePin] = useState('');
   const [deactivateSubmitting, setDeactivateSubmitting] = useState(false);
 
-  // Dec 25 Auto Balance Release effect
+  // Dec 25 Auto Balance Release effect (Automatic annual refund for Switch-OFF members)
   useEffect(() => {
     const checkDec25AutoRelease = async () => {
       if (!user.uid) return;
       const now = new Date();
+      const currentYear = now.getFullYear();
       const isDec25OrLater = now.getMonth() === 11 && now.getDate() >= 25;
-      const isApproved = user.samityDeactivateStatus === 'approved' || (user.canDisableAutoSavings && user.samityAutoSavingsActive === false);
-      const savingsToRelease = Number(user.savings || 0);
+      if (!isDec25OrLater) return;
 
-      if (isDec25OrLater && isApproved && savingsToRelease > 0) {
-        try {
-          const newBalance = (user.balance || 0) + savingsToRelease;
-          const userRef = doc(db, 'users', user.uid);
-          
-          await updateDoc(userRef, {
+      const isSwitchOff =
+        user.samityAutoSavingsActive === false ||
+        (user as any).samitySwitchStatus === 'OFF' ||
+        user.samityDeactivateStatus === 'self_opted_out' ||
+        user.samityDeactivateStatus === 'approved';
+      const savingsCandidate = Number(
+        user.savings !== undefined ? user.savings : ((user as any).dpsBalance || 0)
+      );
+      const alreadyRefundedThisYear =
+        (user as any).samityLastDec25RefundYear === currentYear ||
+        user.samityDeactivateStatus === 'released';
+
+      if (!isSwitchOff || alreadyRefundedThisYear || savingsCandidate <= 0) return;
+
+      try {
+        const userRef = doc(db, 'users', user.uid);
+        const txResult = await runTransaction(db, async (transaction) => {
+          const latestSnap = await transaction.get(userRef);
+          if (!latestSnap.exists()) return null;
+
+          const latestData = latestSnap.data() as any;
+          const latestSwitchOff =
+            latestData.samityAutoSavingsActive === false ||
+            latestData.samitySwitchStatus === 'OFF' ||
+            latestData.samityDeactivateStatus === 'self_opted_out' ||
+            latestData.samityDeactivateStatus === 'approved';
+          const latestAlreadyRefunded =
+            latestData.samityLastDec25RefundYear === currentYear ||
+            latestData.samityDeactivateStatus === 'released';
+          const latestSavings = Number(
+            latestData.savings !== undefined ? latestData.savings : (latestData.dpsBalance || 0)
+          );
+
+          if (!latestSwitchOff || latestAlreadyRefunded || latestSavings <= 0) {
+            return null;
+          }
+
+          const preBalance = Number(
+            latestData.balance !== undefined ? latestData.balance : (latestData.mainBalance || 0)
+          );
+          const newBalance = preBalance + latestSavings;
+
+          transaction.update(userRef, {
             balance: newBalance,
             mainBalance: newBalance,
             savings: 0,
+            dpsBalance: 0,
             samityDeactivateStatus: 'released',
-            samityAutoSavingsActive: false
+            samityAutoSavingsActive: false,
+            samitySwitchStatus: 'OFF',
+            samityLastDec25RefundYear: currentYear,
+            samityLastDec25RefundAmount: latestSavings,
+            samityLastDec25RefundAt: new Date().toISOString(),
+            updatedAt: serverTimestamp()
           });
 
-          const nowIso = now.toISOString();
-          await addDoc(collection(db, 'transactions'), {
-            userId: user.uid,
-            userName: user.name || '',
-            memberId: user.memberId || '',
-            phone: user.phone || '',
-            type: 'samity_release',
-            typeLabel: 'সমিতি সঞ্চয় মেয়ারপূর্তি রিফান্ড (25 ডিসেম্বর)',
-            amount: savingsToRelease,
-            preBalance: user.balance || 0,
-            postBalance: newBalance,
-            status: 'completed',
-            description: `25শে ডিসেম্বর সমবায় সমিতি সঞ্চয় অফ আবেদনের নীতি অনুযায়ী জমানো ৳${savingsToRelease.toLocaleString('bn-BD')} টাকা মেইন ব্যালেন্সে স্বয়ংক্রিয়ভাবে রিফান্ড করা হয়েছে।`,
-            createdAt: nowIso,
-            receiptNo: `REFUND-DEC25-${Date.now()}`
-          });
+          return {
+            releasedAmount: latestSavings,
+            preBalance,
+            newBalance,
+            userName: latestData.name || user.name || '',
+            memberId: latestData.memberId || user.memberId || '',
+            phone: latestData.phone || user.phone || ''
+          };
+        });
 
-          await addDoc(collection(db, 'user_notifications'), {
-            userId: user.uid,
-            memberId: user.memberId || '',
-            title: '🎉 25শে ডিসেম্বর সমবায় সঞ্চয় রিফান্ড!',
-            body: `আপনার অনুমোদিত সঞ্চয় বন্ধের আবেদন অনুযায়ী সঞ্চিত ৳${savingsToRelease.toLocaleString('bn-BD')} টাকা সফলভাবে মেইন ব্যালেন্সে স্থানান্তরিত করা হয়েছে।`,
-            read: false,
-            isPersonal: true,
-            isTransactionHistory: true,
-            category: 'transaction',
-            createdAt: nowIso
-          });
+        if (!txResult) return;
 
-          syncLiveProfile();
-          setCustomAlert({
-            title: '🎉 25শে ডিসেম্বর সমবায় সঞ্চয় রিফান্ড সম্পূর্ণ!',
-            message: `আপনার সমবায় সমিতি সঞ্চয়ের মোট ৳${savingsToRelease.toLocaleString('bn-BD')} টাকা সফলভাবে আপনার মেইন ব্যালেন্সে জমা করা হয়েছে।`
-          });
-        } catch (err) {
-          console.error("Auto release error:", err);
-        }
+        const nowIso = now.toISOString();
+        const { releasedAmount, preBalance, newBalance, userName, memberId, phone } = txResult;
+
+        await addDoc(collection(db, 'transactions'), {
+          userId: user.uid,
+          userName,
+          memberId,
+          phone,
+          type: 'samity_release',
+          typeLabel: `সমিতি সঞ্চয় বার্ষিক রিফান্ড (২৫শে ডিসেম্বর ${currentYear})`,
+          category: 'samity_dec25_refund',
+          amount: releasedAmount,
+          preBalance,
+          postBalance: newBalance,
+          status: 'completed',
+          description: `২৫শে ডিসেম্বর (${currentYear}) সমবায় সমিতি অটো সঞ্চয় সুইচ অফ থাকার নীতিমালা অনুযায়ী জমানো ৳${releasedAmount.toLocaleString('bn-BD')} টাকা স্বয়ংক্রিয়ভাবে মেইন ওয়ালেট ব্যালেন্সে রিফান্ড করা হয়েছে।`,
+          createdAt: nowIso,
+          date: now.toLocaleDateString('en-GB'),
+          time: now.toLocaleTimeString(),
+          receiptNo: `REFUND-DEC25-${currentYear}-${Date.now()}`
+        });
+
+        await addDoc(collection(db, 'user_notifications'), {
+          userId: user.uid,
+          memberId,
+          title: '🎉 ২৫শে ডিসেম্বর সমবায় সঞ্চয় অটো রিফান্ড!',
+          message: `আপনার সুইচ অফ করা সমবায় সঞ্চয়ের সম্পূর্ণ ৳${releasedAmount.toLocaleString('bn-BD')} টাকা স্বয়ংক্রিয়ভাবে আপনার মেইন ওয়ালেটে জমা করা হয়েছে।`,
+          body: `আপনার সুইচ অফ করা সমবায় সঞ্চয়ের সম্পূর্ণ ৳${releasedAmount.toLocaleString('bn-BD')} টাকা স্বয়ংক্রিয়ভাবে আপনার মেইন ওয়ালেটে জমা করা হয়েছে।`,
+          read: false,
+          isPersonal: true,
+          isTransactionHistory: true,
+          category: 'transaction',
+          createdAt: nowIso
+        });
+
+        await addDoc(collection(db, 'admin_notifications'), {
+          title: '💸 ২৫শে ডিসেম্বর সুইচ অফ অটো রিফান্ড সম্পন্ন',
+          message: `${userName || 'সদস্য'} (${memberId || 'N/A'})-এর সুইচ অফ থাকা সঞ্চয়ের ৳${releasedAmount.toLocaleString('bn-BD')} টাকা ২৫শে ডিসেম্বরের নিয়মে স্বয়ংক্রিয়ভাবে মেইন ওয়ালেটে রিফান্ড হয়েছে।`,
+          userId: user.uid,
+          memberId,
+          userName,
+          amount: releasedAmount,
+          type: 'samity_dec25_refund',
+          read: false,
+          createdAt: serverTimestamp()
+        });
+
+        syncLiveProfile();
+        setCustomAlert({
+          title: '🎉 ২৫শে ডিসেম্বর সমবায় সঞ্চয় রিফান্ড সম্পূর্ণ!',
+          message: `আপনার সমবায় সমিতি সঞ্চয়ের মোট ৳${releasedAmount.toLocaleString('bn-BD')} টাকা সফলভাবে আপনার মেইন ব্যালেন্সে জমা করা হয়েছে।`
+        });
+      } catch (err) {
+        console.error("Auto release error:", err);
       }
     };
 
     checkDec25AutoRelease();
-  }, [user.uid, user.samityDeactivateStatus, user.savings, user.canDisableAutoSavings, user.samityAutoSavingsActive]);
+  }, [
+    user.uid,
+    user.samityDeactivateStatus,
+    user.savings,
+    (user as any).dpsBalance,
+    user.canDisableAutoSavings,
+    user.samityAutoSavingsActive,
+    (user as any).samitySwitchStatus
+  ]);
 
   // Handle Dec 25-30 auto-transfer when auto-savings switch is OFF
   const [selectedPayMonth, setSelectedPayMonth] = useState<{ id: string; monthNum: number; name: string; year: number } | null>(null);
@@ -3415,15 +3498,27 @@ export const SamityScreen = React.memo(function SamityScreen({
                   <span className="font-bold font-mono text-slate-800">{effectiveUser.phone}</span>
                 </div>
                 <div className="flex justify-between border-b border-slate-200 pb-1.5">
+                  <span className="text-slate-500 font-medium">নির্বাচিত ক্যাটাগরি:</span>
+                  <span className="font-extrabold text-emerald-900">
+                    {effectiveUser.memberCategory === 'owner'
+                      ? '🔴 ওনার'
+                      : effectiveUser.memberCategory === 'shareholder'
+                      ? '🔵 শেয়ার হোল্ডার'
+                      : effectiveUser.memberCategory === 'investor'
+                      ? '🟢 ইনভেস্টার'
+                      : '🟡 সাপোর্টার'}
+                  </span>
+                </div>
+                <div className="flex justify-between border-b border-slate-200 pb-1.5">
                   <span className="text-slate-500 font-medium">মাসিক ইনভেস্টমেন্ট / ডিপোজিট হার:</span>
                   <span className="font-extrabold text-emerald-800">
-                    ৳{(effectiveUser.monthlySavingsTarget || effectiveUser.samityApplicationInstallmentAmount || 500).toLocaleString('bn-BD')} / মাস
+                    ৳{(effectiveUser.monthlySavingsTarget || effectiveUser.samityApplicationInstallmentAmount || 1000).toLocaleString('bn-BD')} / মাস
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500 font-medium">১ম মাসের জমা দেওয়া ইনভেস্টমেন্ট:</span>
+                  <span className="text-slate-500 font-medium">১ম মাসের জমা দেওয়া টাকা:</span>
                   <span className="font-extrabold text-emerald-700 font-mono">
-                    ৳{(effectiveUser.samityApplicationInstallmentAmount || effectiveUser.monthlySavingsTarget || 500).toLocaleString('bn-BD')}
+                    ৳{(effectiveUser.samityApplicationInstallmentAmount || effectiveUser.monthlySavingsTarget || 1000).toLocaleString('bn-BD')}
                   </span>
                 </div>
               </div>
@@ -3612,7 +3707,7 @@ export const SamityScreen = React.memo(function SamityScreen({
               )}
             </button>
 
-            {(user.role === 'admin' || user.role === 'sub_admin') && (
+            {Boolean(isAdminView) && isStandaloneAdminRoute() && (user.role === 'admin' || user.role === 'sub_admin') && (
               <button 
                 onClick={() => {
                   if (activeSubView === 'admin') {
@@ -4003,7 +4098,7 @@ export const SamityScreen = React.memo(function SamityScreen({
         )}
 
         {/* ================= SAMITY ADMINTRACTION VIEWS (ADMIN) ================= */}
-        {activeSubView === 'admin' && (user.role === 'admin' || user.role === 'sub_admin') && (
+        {Boolean(isAdminView) && isStandaloneAdminRoute() && activeSubView === 'admin' && (user.role === 'admin' || user.role === 'sub_admin') && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -4566,7 +4661,7 @@ export const SamityScreen = React.memo(function SamityScreen({
             <SamityInvestmentsView
               user={effectiveUser}
               onBack={() => setActiveSubView('main')}
-              isAdmin={user.role === 'admin' || user.role === 'sub_admin'}
+              isAdmin={Boolean(isAdminView) && isStandaloneAdminRoute() && (user.role === 'admin' || user.role === 'sub_admin')}
             />
           </motion.div>
         )}

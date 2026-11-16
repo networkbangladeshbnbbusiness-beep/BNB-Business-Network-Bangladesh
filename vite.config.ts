@@ -25,6 +25,9 @@ export default defineConfig(() => {
       },
     },
     define: {
+      "import.meta.env.VITE_APP_VARIANT": JSON.stringify(
+        process.env.VITE_APP_VARIANT || "user"
+      ),
       "import.meta.env.VITE_GOOGLE_MAPS_API_KEY": JSON.stringify(
         process.env.VITE_GOOGLE_MAPS_API_KEY ||
           process.env.GOOGLE_MAPS_API_KEY ||

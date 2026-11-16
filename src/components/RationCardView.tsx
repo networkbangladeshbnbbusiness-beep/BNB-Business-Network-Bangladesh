@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import html2canvas from 'html2canvas';
 import { motion, AnimatePresence } from 'motion/react';
 import UnifiedBackButton from './UnifiedBackButton';
+import { isStandaloneAdminRoute } from '../lib/adminRoute';
 import { 
   CreditCard, 
   HelpCircle, 
@@ -540,8 +541,8 @@ export const RationCardView = React.memo(function RationCardView({ liveUser, syn
     }
   };
 
-  // Check if current user is admin/sub-admin
-  const isAdmin = liveUser?.role === 'admin' || liveUser?.role === 'sub_admin';
+  // Check if current user is admin/sub-admin strictly inside Standalone Admin Software (/admin)
+  const isAdmin = isStandaloneAdminRoute() && (liveUser?.role === 'admin' || liveUser?.role === 'sub_admin');
 
   // Handle Base64 VIP card template image upload from gallery by Admin
   const handleUploadVipCardImage = async (e: React.ChangeEvent<HTMLInputElement>) => {

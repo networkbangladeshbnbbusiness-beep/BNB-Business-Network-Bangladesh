@@ -116,7 +116,9 @@ export interface User {
   deviceChangeRequested?: boolean; // Whether the user requested a device change approval
   isLoggedIn?: boolean; // Active logged in state for real-time zero device force logout
   qardLateCount?: number; // Count of late repayments for Qard Hasana
-  isLifetimeBannedFromQard?: boolean; // Lifetime ban status if late repayments >= 2
+  isLifetimeBannedFromQard?: boolean; // Lifetime ban status if not repaid within 1 month (30 days)
+  qardBannedAt?: string; // Timestamp of permanent Qard Hasana block
+  qardBanReason?: string; // Reason for permanent Qard Hasana block
   forceLogoutAt?: string; // Force logout timestamp set by admin to force instant logout
   sessionLoggedInAt?: string; // Session login timestamp on the client side
   ambCardNumber?: string;
@@ -141,6 +143,9 @@ export interface User {
   samityDeactivateRequestedAt?: string;
   samitySwitchStatus?: 'ON' | 'OFF';
   samityApplicationInstallmentAmount?: number; // Held 1st month installment amount for pending Samity applications
+  samityFirstInstallmentCredited?: boolean; // Whether 1st month pre-deducted installment was already credited to savings
+  samityRole?: string; // Selected or assigned Samity role/category
+  samityRejectionReason?: string; // Rejection reason when Samity application is rejected
   fineEnabled?: boolean; // Whether fine calculation is enabled for this member (admin toggleable, default true)
   samityOptOutReason?: string;
   samityOptInReason?: string;
@@ -179,6 +184,35 @@ export interface User {
   group?: string;
   isDemoUser?: boolean;
   cashback?: number;
+  isAdminBanned?: boolean;
+  adminBannedAt?: string;
+  adminBannedBy?: string;
+  adminBanReason?: string;
+  previousAdminRole?: string;
+  forceAdminLogoutAt?: string;
+  isAdminOnline?: boolean;
+  lastAdminLoginAt?: string;
+  lastAdminHeartbeatAt?: string;
+  adminLoginCount?: number;
+  lastAdminSessionId?: string;
+}
+
+export interface AdminSessionRecord {
+  id: string;
+  sessionId: string;
+  uid: string;
+  name: string;
+  phone: string;
+  memberId?: string;
+  role: 'super_admin' | 'admin' | 'sub_admin' | string;
+  status: 'online' | 'offline' | 'kicked' | 'banned_kicked';
+  deviceInfo?: string;
+  platform?: string;
+  loginAt: string;
+  lastHeartbeatAt: string;
+  loggedOutAt?: string;
+  kickedAt?: string;
+  kickedBy?: string;
 }
 
 export interface BankAccount {
@@ -747,7 +781,15 @@ export interface AppConfig {
   companyReserveFund?: number; // Company Gross Starting Reserve Capital
   companyFundAccounts?: CompanyFundAccount[]; // Detailed account breakdown (e.g. spouse, brother, personal, bank)
   masterFundAccounts?: MasterFundAccount[]; // Master Fund detailed account breakdown
+  samityFundAccounts?: any[]; // Samity Fund asset custody & holding ledger (land, gold, bank, bkash/nagad, cash, business)
+  samityCapitalOverrides?: Record<string, number | null>; // Samity 8-card manual tune overrides
   manualFundAdjustments?: Record<string, number>; // Manual overrides/adjustments for company fund balance modules
+  sectionAuditOverrides?: Record<string, {
+    revenue?: number | null;
+    profit?: number | null;
+    loss?: number | null;
+    expense?: number | null;
+  }>; // Per-section manual balance tune/overrides across the 12 admin sections
   // END NEW FIELDS
   logoUrl?: string;
   appLogoUrl?: string;
@@ -766,6 +808,21 @@ export interface AppConfig {
   rationTitleText?: string;
   rationTotalItemsText?: string;
   escrowCoverUrl?: string;
+  safeDealsBanners?: { id: number; tag?: string; title?: string; description?: string; bgGradient?: string; image: string; }[];
+  safeDealsConfig?: {
+    enabled?: boolean;
+    feeMode: 'free' | 'percent' | 'fixed' | 'both';
+    feePercent: number;
+    feeFixed: number;
+    feeBearer: 'buyer' | 'seller';
+    minAmount: number;
+    maxAmount: number;
+    supportWhatsapp?: string;
+    allowBuyerSend?: boolean;
+    allowSellerCancel?: boolean;
+    allowBuyerDispute?: boolean;
+    rulesSummary?: string;
+  };
   mobileRechargePercent?: number;
   alaapRechargePercent?: number;
   brilliantRechargePercent?: number;

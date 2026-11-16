@@ -1,22 +1,19 @@
 import React, { useState } from 'react';
-import { User, AppConfig } from '../types';
+import { User, AppConfig, MemberNominee } from '../types';
 import { db } from '../lib/firebase';
-import { doc, getDoc, updateDoc, setDoc, addDoc, collection } from 'firebase/firestore';
-import { 
-  Building2, 
-  ArrowLeft, 
-  User as UserIcon, 
-  Phone, 
-  CreditCard, 
-  MapPin, 
-  Calendar, 
-  ShieldAlert, 
-  CheckCircle2, 
+import { doc, runTransaction, addDoc, collection } from 'firebase/firestore';
+import {
+  Building2,
+  ArrowLeft,
+  User as UserIcon,
+  ShieldAlert,
+  CheckCircle2,
   Send,
   FileText,
-  Globe
+  Globe,
+  Users,
+  IdCard
 } from 'lucide-react';
-import { motion } from 'motion/react';
 
 interface SamityRequestFormProps {
   user: User;
@@ -25,85 +22,196 @@ interface SamityRequestFormProps {
   onSubmitSuccess: () => void;
 }
 
+type SamityCategoryKey = 'owner' | 'shareholder' | 'investor' | 'supporter';
+type IdentityDocType = 'nid' | 'birthReg';
+
+interface NomineeFormEntry {
+  name: string;
+  relation: string;
+  phone: string;
+}
+
+const SAMITY_CATEGORIES: Array<{
+  key: SamityCategoryKey;
+  title: string;
+  emoji: string;
+  monthlyFee: number;
+  monthlyLabel: string;
+  subBadge: string;
+  titleColor: string;
+  priceColor: string;
+  idleBg: string;
+  activeBg: string;
+  badgeIdle: string;
+  badgeActive: string;
+}> = [
+  {
+    key: 'owner',
+    title: 'ওনার',
+    emoji: '🔴',
+    monthlyFee: 5000,
+    monthlyLabel: '৳৫,০০০/মাস',
+    subBadge: '৩ মাসে ৳১০হাজার',
+    titleColor: 'text-rose-950',
+    priceColor: 'text-rose-700',
+    idleBg: 'bg-rose-50/90 hover:bg-rose-100 border-rose-300',
+    activeBg: 'bg-gradient-to-b from-rose-600 via-red-600 to-red-700 text-white border-red-400 ring-2 ring-red-400 shadow-md scale-[1.02]',
+    badgeIdle: 'bg-rose-200/80 text-rose-900',
+    badgeActive: 'bg-white/20 text-rose-100',
+  },
+  {
+    key: 'shareholder',
+    title: 'শেয়ার হোল্ডার',
+    emoji: '🔵',
+    monthlyFee: 3000,
+    monthlyLabel: '৳৩,০০০/মাস',
+    subBadge: '৩ মাসে ৳৫হাজার',
+    titleColor: 'text-blue-950',
+    priceColor: 'text-blue-700',
+    idleBg: 'bg-blue-50/90 hover:bg-blue-100 border-blue-300',
+    activeBg: 'bg-gradient-to-b from-blue-600 via-indigo-600 to-blue-700 text-white border-blue-400 ring-2 ring-blue-400 shadow-md scale-[1.02]',
+    badgeIdle: 'bg-blue-200/80 text-blue-900',
+    badgeActive: 'bg-white/20 text-blue-100',
+  },
+  {
+    key: 'investor',
+    title: 'ইনভেস্টার',
+    emoji: '🟢',
+    monthlyFee: 2000,
+    monthlyLabel: '৳২,০০০/মাস',
+    subBadge: '১ম মাস ৳২হাজার',
+    titleColor: 'text-emerald-950',
+    priceColor: 'text-emerald-700',
+    idleBg: 'bg-emerald-50/90 hover:bg-emerald-100 border-emerald-300',
+    activeBg: 'bg-gradient-to-b from-emerald-600 via-green-600 to-emerald-700 text-white border-emerald-400 ring-2 ring-emerald-400 shadow-md scale-[1.02]',
+    badgeIdle: 'bg-emerald-200/80 text-emerald-900',
+    badgeActive: 'bg-white/20 text-emerald-100',
+  },
+  {
+    key: 'supporter',
+    title: 'সাপোর্টার',
+    emoji: '🟡',
+    monthlyFee: 1000,
+    monthlyLabel: '৳১,০০০/মাস',
+    subBadge: '১ম মাস ৳১হাজার',
+    titleColor: 'text-amber-950',
+    priceColor: 'text-amber-700',
+    idleBg: 'bg-amber-50/90 hover:bg-amber-100 border-amber-300',
+    activeBg: 'bg-gradient-to-b from-amber-500 via-yellow-500 to-amber-600 text-white border-amber-400 ring-2 ring-amber-400 shadow-md scale-[1.02]',
+    badgeIdle: 'bg-amber-200/80 text-amber-900',
+    badgeActive: 'bg-white/20 text-amber-100',
+  },
+];
+
+const COUNTRIES_LIST = [
+  'Bangladesh (বাংলাদেশ)',
+  'India (ভারত)',
+  'Saudi Arabia (সৌদি আরব)',
+  'United Arab Emirates (ইউএই)',
+  'Qatar (কাতার)',
+  'Oman (ওমান)',
+  'Kuwait (কুয়েত)',
+  'Malaysia (মালয়েশিয়া)',
+  'Singapore (সিঙ্গাপুর)',
+  'United Kingdom (যুক্তরাজ্য)',
+  'United States (যুক্তরাষ্ট্র)',
+  'Canada (কানাডা)',
+  'Italy (ইতালি)',
+  'Australia (অস্ট্রেলিয়া)',
+  'South Africa (দক্ষিণ আফ্রিকা)',
+  'Japan (জাপান)',
+  'South Korea (দক্ষিণ কোরিয়া)',
+  'Other (অন্যান্য দেশ)'
+];
+
+const DIVISIONS = [
+  'ঢাকা (Dhaka)',
+  'চট্টগ্রাম (Chattogram)',
+  'রাজশাহী (Rajshahi)',
+  'খুলনা (Khulna)',
+  'বরিশাল (Barishal)',
+  'সিলেট (Sylhet)',
+  'রংপুর (Rangpur)',
+  'ময়মনসিংহ (Mymensingh)'
+];
+
 export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSuccess }: SamityRequestFormProps) {
   const [loading, setLoading] = useState(false);
   const [errorCode, setErrorCode] = useState('');
   const [success, setSuccess] = useState(false);
 
-  // Form states initialized with existing profile values
-  const [country, setCountry] = useState(user.country || 'Bangladesh');
+  // Selected Samity Category (must be chosen first)
+  const [selectedCategory, setSelectedCategory] = useState<SamityCategoryKey | ''>('');
+
+  // ID Type (NID or Birth Registration) & Number
+  const initialIdType: IdentityDocType = !user.nid && !user.nidNumber && user.birthReg ? 'birthReg' : 'nid';
+  const [idType, setIdType] = useState<IdentityDocType>(initialIdType);
+  const [idNumber, setIdNumber] = useState<string>(
+    initialIdType === 'birthReg' ? (user.birthReg || '') : (user.nid || user.nidNumber || '')
+  );
+
+  // Profile / Personal fields
+  const [country, setCountry] = useState(user.country || 'Bangladesh (বাংলাদেশ)');
   const [fatherName, setFatherName] = useState(user.fatherName || '');
   const [motherName, setMotherName] = useState(user.motherName || '');
-  const [nid, setNid] = useState(user.nid || '');
   const [dob, setDob] = useState(user.dob || '');
   const [division, setDivision] = useState(user.division || '');
   const [district, setDistrict] = useState(user.district || '');
   const [thana, setThana] = useState(user.thana || '');
   const [postOffice, setPostOffice] = useState(user.postOffice || '');
   const [customRegion, setCustomRegion] = useState('');
-  const [nomineeName, setNomineeName] = useState(user.nomineeName || '');
-  const [nomineeRelation, setNomineeRelation] = useState(user.nomineeRelation || '');
-  const [nomineePhone, setNomineePhone] = useState(user.nomineePhone || '');
   const [agreed, setAgreed] = useState(false);
 
-  // Desired monthly savings rates states (minimum 500 BDT)
-  const [monthlySavingsOption, setMonthlySavingsOption] = useState<string>('');
-  const [customSavingsAmount, setCustomSavingsAmount] = useState<string>('');
+  // 3 Nominees (1st Mandatory, 2nd & 3rd Optional)
+  const buildInitialNominees = (): [NomineeFormEntry, NomineeFormEntry, NomineeFormEntry] => {
+    const existing = Array.isArray(user.nominees) ? user.nominees : [];
+    const first: NomineeFormEntry = existing[0]
+      ? { name: existing[0].name || '', relation: existing[0].relation || '', phone: existing[0].phone || '' }
+      : { name: user.nomineeName || '', relation: user.nomineeRelation || '', phone: user.nomineePhone || '' };
+    const second: NomineeFormEntry = existing[1]
+      ? { name: existing[1].name || '', relation: existing[1].relation || '', phone: existing[1].phone || '' }
+      : { name: '', relation: '', phone: '' };
+    const third: NomineeFormEntry = existing[2]
+      ? { name: existing[2].name || '', relation: existing[2].relation || '', phone: existing[2].phone || '' }
+      : { name: '', relation: '', phone: '' };
+    return [first, second, third];
+  };
+  const [nominees, setNominees] = useState<[NomineeFormEntry, NomineeFormEntry, NomineeFormEntry]>(buildInitialNominees);
 
-  const parseAmountInput = (raw: string): number => {
-    const normalized = String(raw || '')
-      .replace(/[০-৯]/g, (d) => String('০১২৩৪৫৬৭৮৯'.indexOf(d)))
-      .replace(/[^0-9]/g, '');
-    return parseInt(normalized, 10) || 0;
+  const selectedCategoryMeta = SAMITY_CATEGORIES.find((c) => c.key === selectedCategory) || null;
+  const currentMainBalance = Number(user.balance !== undefined ? user.balance : user.mainBalance) || 0;
+  const requiredFirstMonthAmount = selectedCategoryMeta ? selectedCategoryMeta.monthlyFee : 0;
+  const hasInsufficientBalance = requiredFirstMonthAmount > 0 && currentMainBalance < requiredFirstMonthAmount;
+
+  const handleSelectCategory = (cat: (typeof SAMITY_CATEGORIES)[number]) => {
+    setSelectedCategory(cat.key);
+    setErrorCode('');
   };
 
-  const currentMainBalance = Number(user.balance !== undefined ? user.balance : user.mainBalance) || 0;
-  const selectedMonthlyAmount =
-    monthlySavingsOption === 'custom'
-      ? parseAmountInput(customSavingsAmount)
-      : parseInt(monthlySavingsOption, 10) || 0;
-  const hasInsufficientBalance = selectedMonthlyAmount > 0 && currentMainBalance < selectedMonthlyAmount;
+  const handleSelectIdType = (nextType: IdentityDocType) => {
+    setIdType(nextType);
+    if (nextType === 'nid' && !idNumber.trim() && (user.nid || user.nidNumber)) {
+      setIdNumber(user.nid || user.nidNumber || '');
+    } else if (nextType === 'birthReg' && !idNumber.trim() && user.birthReg) {
+      setIdNumber(user.birthReg);
+    }
+    setErrorCode('');
+  };
 
-  // Countries List for Global Citizens
-  const countriesList = [
-    'Bangladesh (বাংলাদেশ)',
-    'India (ভারত)',
-    'Saudi Arabia (সৌদি আরব)',
-    'United Arab Emirates (ইউএই)',
-    'Qatar (কাতার)',
-    'Oman (ওমান)',
-    'Kuwait (কুয়েত)',
-    'Malaysia (মালয়েশিয়া)',
-    'Singapore (সিঙ্গাপুর)',
-    'United Kingdom (যুক্তরাজ্য)',
-    'United States (যুক্তরাষ্ট্র)',
-    'Canada (কানাডা)',
-    'Italy (ইতালি)',
-    'Australia (অস্ট্রেলিয়া)',
-    'South Africa (দক্ষিণ আফ্রিকা)',
-    'Japan (জাপান)',
-    'South Korea (দক্ষিণ কোরিয়া)',
-    'Other (অন্যান্য দেশ)'
-  ];
-
-  // Division Options for Bangladesh
-  const divisions = [
-    'ঢাকা (Dhaka)',
-    'চট্টগ্রাম (Chattogram)',
-    'রাজশাহী (Rajshahi)',
-    'খুলনা (Khulna)',
-    'বরিশাল (Barishal)',
-    'সিলেট (Sylhet)',
-    'রংপুর (Rangpur)',
-    'ময়মনসিংহ (Mymensingh)'
-  ];
+  const updateNomineeField = (index: 0 | 1 | 2, field: keyof NomineeFormEntry, value: string) => {
+    setNominees((prev) => {
+      const copy: [NomineeFormEntry, NomineeFormEntry, NomineeFormEntry] = [{ ...prev[0] }, { ...prev[1] }, { ...prev[2] }];
+      copy[index][field] = value;
+      return copy;
+    });
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorCode('');
 
-    if (!agreed) {
-      setErrorCode('আবেদন জমা দিতে অবশ্যই নীতিমালার সাথে একমত পোষণ করুন।');
+    if (!selectedCategory || !selectedCategoryMeta) {
+      setErrorCode('⚠️ অনুগ্রহ করে প্রথমে উপরের ৪টি ক্যাটাগরি (ওনার ৳৫,০০০ / শেয়ার হোল্ডার ৳৩,০০০ / ইনভেস্টার ৳২,০০০ / সাপোর্টার ৳১,০০০) থেকে একটি সিলেক্ট করুন।');
       return;
     }
 
@@ -117,8 +225,13 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
       return;
     }
 
-    if (!nid.trim() || nid.trim().length < 6) {
-      setErrorCode('অনুগ্রহ করে সঠিক জাতীয় পরিচয়পত্র (NID), পাসপোর্ট অথবা জন্ম নিবন্ধন নম্বর প্রদান করুন।');
+    const cleanedId = idNumber.trim();
+    if (!cleanedId || cleanedId.length < 6) {
+      setErrorCode(
+        idType === 'nid'
+          ? 'অনুগ্রহ করে সঠিক জাতীয় পরিচয়পত্র (NID) নম্বর প্রদান করুন (ন্যূনতম ৬ অক্ষর/সংখ্যা)।'
+          : 'অনুগ্রহ করে সঠিক জন্ম নিবন্ধন নম্বর প্রদান করুন (ন্যূনতম ৬ অক্ষর/সংখ্যা)।'
+      );
       return;
     }
 
@@ -148,170 +261,225 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
       return;
     }
 
-    if (!nomineeName.trim()) {
-      setErrorCode('অনুগ্রহ করে আপনার মনোনীত নমিনির নাম প্রদান করুন।');
+    // Validate Nominee 1 (Mandatory)
+    const nom1 = nominees[0];
+    if (!nom1.name.trim()) {
+      setErrorCode('নমিনি ১ (বাধ্যতামূলক)-এর নাম প্রদান করুন।');
+      return;
+    }
+    if (!nom1.relation.trim()) {
+      setErrorCode('নমিনি ১ (বাধ্যতামূলক)-এর সাথে সম্পর্ক উল্লেখ করুন।');
+      return;
+    }
+    if (!nom1.phone.trim() || nom1.phone.replace(/\D/g, '').length < 7) {
+      setErrorCode('নমিনি ১ (বাধ্যতামূলক)-এর সচল মোবাইল নম্বর লিখুন (ন্যূনতম ৭ ডিজিট)।');
       return;
     }
 
-    if (!nomineeRelation.trim()) {
-      setErrorCode('অনুগ্রহ করে নমিনির সাথে সম্পর্ক প্রদান করুন (যেমন: পিতা, মাতা, স্ত্রী, ভাই)।');
-      return;
-    }
-
-    if (!nomineePhone.trim() || nomineePhone.replace(/\D/g, '').length < 7) {
-      setErrorCode('সঠিক নমিনির সচল মোবাইল নম্বর লিখুন (ন্যূনতম ৭ ডিজিট)।');
-      return;
-    }
-
-    if (!monthlySavingsOption) {
-      setErrorCode('অনুগ্রহ করে আপনি প্রতি মাসে কত টাকা ডিপোজিট / ইনভেস্ট করবেন তা নির্বাচন করুন।');
-      return;
-    }
-
-    let savingsTarget = 500;
-    let selectedCategory: 'owner' | 'shareholder' | 'investor' | 'supporter' | 'regular' = 'supporter';
-
-    if (monthlySavingsOption === 'custom') {
-      const parsedAmt = parseAmountInput(customSavingsAmount);
-      if (!parsedAmt || parsedAmt < 500) {
-        setErrorCode('⚠️ সর্বনিম্ন ইনভেস্টমেন্ট ৳৫০০ টাকা! অনুগ্রহ করে কমপক্ষে ৫০০ টাকা বা তার বেশি সংখ্যায় লিখুন।');
-        return;
+    // Validate Optional Nominees 2 & 3 (only if partially filled)
+    const validNominees: MemberNominee[] = [
+      {
+        id: 'nom_1',
+        name: nom1.name.trim(),
+        relation: nom1.relation.trim(),
+        phone: nom1.phone.trim(),
       }
-      savingsTarget = parsedAmt;
-    } else {
-      savingsTarget = parseInt(monthlySavingsOption, 10);
-      if (isNaN(savingsTarget) || savingsTarget < 500) {
-        setErrorCode('⚠️ সর্বনিম্ন ইনভেস্টমেন্ট ৳৫০০ টাকা হতে হবে।');
-        return;
+    ];
+
+    for (let idx = 1; idx <= 2; idx++) {
+      const entry = nominees[idx];
+      const hasAny = Boolean(entry.name.trim() || entry.relation.trim() || entry.phone.trim());
+      if (hasAny) {
+        const label = idx === 1 ? 'নমিনি ২' : 'নমিনি ৩';
+        if (!entry.name.trim()) {
+          setErrorCode(`${label}-এর নাম লিখুন অথবা সব ঘর খালি রাখুন।`);
+          return;
+        }
+        if (!entry.relation.trim()) {
+          setErrorCode(`${label}-এর সাথে সম্পর্ক লিখুন অথবা সব ঘর খালি রাখুন।`);
+          return;
+        }
+        if (!entry.phone.trim() || entry.phone.replace(/\D/g, '').length < 7) {
+          setErrorCode(`${label}-এর সঠিক মোবাইল নম্বর লিখুন (ন্যূনতম ৭ ডিজিট) অথবা ঘরটি খালি রাখুন।`);
+          return;
+        }
+        validNominees.push({
+          id: `nom_${idx + 1}`,
+          name: entry.name.trim(),
+          relation: entry.relation.trim(),
+          phone: entry.phone.trim(),
+        });
       }
     }
 
-    if (savingsTarget >= 5000) selectedCategory = 'owner';
-    else if (savingsTarget >= 3000) selectedCategory = 'shareholder';
-    else if (savingsTarget >= 2000) selectedCategory = 'investor';
-    else if (savingsTarget >= 1000) selectedCategory = 'supporter';
-    else selectedCategory = 'supporter';
+    if (!agreed) {
+      setErrorCode('আবেদন জমা দিতে অবশ্যই নীতিমালার সাথে একমত পোষণ করুন।');
+      return;
+    }
 
-    const requiredFirstMonthAmount = savingsTarget;
+    const savingsTarget = selectedCategoryMeta.monthlyFee;
     const localMainBalance = Number(user.balance !== undefined ? user.balance : user.mainBalance) || 0;
 
-    if (localMainBalance < requiredFirstMonthAmount) {
-      setErrorCode(`⚠️ আপনার মেইন ব্যালেন্সে ১ম মাসের ইনভেস্টমেন্ট বাবদ ৳${requiredFirstMonthAmount.toLocaleString('bn-BD')} টাকা নেই! (আপনার বর্তমান মেইন ব্যালেন্স: ৳${localMainBalance.toLocaleString('bn-BD')})। আপনি যে পরিমাণ মাসিক ইনভেস্টমেন্ট সিলেক্ট করবেন, আবেদন করার সময় আপনার মেইন ব্যালেন্সে কমপক্ষে সেই পরিমাণ টাকা থাকতে হবে।`);
+    if (localMainBalance < savingsTarget) {
+      setErrorCode(`⚠️ আপনার মেইন ব্যালেন্সে ${selectedCategoryMeta.title} ক্যাটাগরির ১ম মাসের টাকা বাবদ ৳${savingsTarget.toLocaleString('bn-BD')} টাকা নেই! (বর্তমান ব্যালেন্স: ৳${localMainBalance.toLocaleString('bn-BD')})। আগে মেইন ব্যালেন্সে টাকা অ্যাড মানি করুন, তারপর আবেদন করুন।`);
       return;
     }
 
     setLoading(true);
     try {
       const userRef = doc(db, 'users', user.uid);
-      const latestUserSnap = await getDoc(userRef);
-      const latestUserData = latestUserSnap.exists() ? latestUserSnap.data() : null;
-      const userCurrentMainBalance = latestUserData
-        ? (Number(latestUserData.balance !== undefined ? latestUserData.balance : latestUserData.mainBalance) || 0)
-        : localMainBalance;
-
-      if (userCurrentMainBalance < requiredFirstMonthAmount) {
-        setErrorCode(`⚠️ আপনার মেইন ব্যালেন্সে ১ম মাসের ইনভেস্টমেন্ট বাবদ ৳${requiredFirstMonthAmount.toLocaleString('bn-BD')} টাকা নেই! (আপনার বর্তমান মেইন ব্যালেন্স: ৳${userCurrentMainBalance.toLocaleString('bn-BD')})। প্রথম মাসের ইনভেস্টমেন্ট মেইন ব্যালেন্স থেকে পরিশোধ করে আবেদন করতে হবে।`);
-        setLoading(false);
-        return;
-      }
-
       const appRef = doc(db, 'samity_applications', user.uid);
-      const nowIso = new Date().toISOString();
-      
-      const newMainBalance = userCurrentMainBalance - requiredFirstMonthAmount;
-      const targetSamityStatus = 'pending';
-
-      const updateData: Partial<User> & Record<string, any> = {
-        balance: newMainBalance,
-        mainBalance: newMainBalance,
-        country: country,
-        fatherName: fatherName.trim(),
-        motherName: motherName.trim(),
-        nid: nid.trim(),
-        dob: dob || user.dob || '',
-        division: finalRegion,
-        district: district.trim(),
-        thana: thana.trim(),
-        postOffice: postOffice.trim(),
-        nomineeName: nomineeName.trim(),
-        nomineeRelation: nomineeRelation.trim(),
-        nomineePhone: nomineePhone.trim(),
-        monthlySavingsTarget: savingsTarget,
-        memberCategory: selectedCategory,
-        samityStatus: targetSamityStatus,
-        samityApproved: false,
-        isSamityMember: false,
-        samityAppliedAt: nowIso,
-        samityApplicationInstallmentAmount: requiredFirstMonthAmount,
-        samityFirstInstallmentCredited: false,
-        hasSetProfile: true
-      };
-
-      const appData = {
-        id: user.uid,
-        uid: user.uid,
-        userId: user.uid,
-        name: user.name,
-        phone: user.phone,
-        memberId: user.memberId || '',
-        country: country,
-        fatherName: fatherName.trim(),
-        motherName: motherName.trim(),
-        nid: nid.trim(),
-        dob: dob || user.dob || '',
-        division: finalRegion,
-        district: district.trim(),
-        thana: thana.trim(),
-        postOffice: postOffice.trim(),
-        nomineeName: nomineeName.trim(),
-        nomineeRelation: nomineeRelation.trim(),
-        nomineePhone: nomineePhone.trim(),
-        monthlySavingsTarget: savingsTarget,
-        memberCategory: selectedCategory,
-        installmentAmount: requiredFirstMonthAmount,
-        status: targetSamityStatus,
-        samityStatus: targetSamityStatus,
-        approved: false,
-        samityAppliedAt: nowIso,
-        appliedAt: nowIso,
-        createdAt: nowIso
-      };
-
       const txDocRef = doc(collection(db, 'transactions'));
-      const txData = {
-        id: txDocRef.id,
-        userId: user.uid,
-        userName: user.name,
-        userPhone: user.phone,
-        memberId: user.memberId || '',
-        type: 'deposit',
-        typeLabel: 'BNB কোম্পানি ইনভেস্টর ১ম মাসের ইনভেস্টমেন্ট (রিভিউ পেন্ডিং)',
-        category: 'samity_deposit',
-        amount: requiredFirstMonthAmount,
-        status: 'pending',
-        isApproved: false,
-        paymentMethod: 'মেইন ব্যালেন্স কর্তন',
-        description: `BNB কোম্পানি ইনভেস্টর সদস্যপদ আবেদনের ১ম মাসের ইনভেস্টমেন্ট ৳${requiredFirstMonthAmount.toLocaleString('bn-BD')} মেইন ব্যালেন্স থেকে কেটে জমা রাখা হয়েছে। এডমিন প্যানেল অনুমোদন দিলে ইনভেস্টমেন্ট ব্যালেন্সে যুক্ত হবে, বাতিল হলে মেইন ব্যালেন্সে রিফান্ড হবে।`,
-        createdAt: nowIso,
-        date: new Date().toLocaleDateString('en-GB'),
-        time: new Date().toLocaleTimeString(),
-        receiptNo: `REC-SAMITY-APP-${Date.now()}`
-      };
+      const ledgerRef = doc(collection(db, 'wallet_ledger'));
+      const userNotifRef = doc(collection(db, 'user_notifications'));
+      const nowIso = new Date().toISOString();
 
-      await Promise.all([
-        setDoc(userRef, updateData, { merge: true }),
-        setDoc(appRef, appData, { merge: true }),
-        setDoc(txDocRef, txData)
-      ]);
+      await runTransaction(db, async (transaction) => {
+        const latestUserSnap = await transaction.get(userRef);
+        const latestUserData = latestUserSnap.exists() ? latestUserSnap.data() : null;
 
-      // Async background notification for admin review
+        if (latestUserData?.samityStatus === 'pending') {
+          throw new Error('আপনার একটি আবেদন ইতিমধ্যে পর্যালোচনাধীন রয়েছে।');
+        }
+        if (latestUserData?.samityStatus === 'approved' && latestUserData?.samityApproved === true) {
+          throw new Error('আপনি ইতিমধ্যে সমবায় সমিতির অনুমোদিত সদস্য।');
+        }
+
+        const userCurrentMainBalance = latestUserData
+          ? (Number(latestUserData.balance !== undefined ? latestUserData.balance : latestUserData.mainBalance) || 0)
+          : localMainBalance;
+
+        if (userCurrentMainBalance < savingsTarget) {
+          throw new Error(`⚠️ আপনার মেইন ব্যালেন্সে ${selectedCategoryMeta.title} ক্যাটাগরির ১ম মাসের টাকা বাবদ ৳${savingsTarget.toLocaleString('bn-BD')} টাকা নেই! (বর্তমান মেইন ব্যালেন্স: ৳${userCurrentMainBalance.toLocaleString('bn-BD')})। আগে মেইন ব্যালেন্সে টাকা অ্যাড মানি করুন।`);
+        }
+
+        const newMainBalance = userCurrentMainBalance - savingsTarget;
+        const targetSamityStatus = 'pending';
+
+        const identityPayload =
+          idType === 'nid'
+            ? { idType: 'nid', nid: cleanedId, nidNumber: cleanedId }
+            : { idType: 'birthReg', birthReg: cleanedId };
+
+        const updateData: Partial<User> & Record<string, any> = {
+          balance: newMainBalance,
+          mainBalance: newMainBalance,
+          country,
+          fatherName: fatherName.trim(),
+          motherName: motherName.trim(),
+          ...identityPayload,
+          dob: dob || user.dob || '',
+          division: finalRegion,
+          district: district.trim(),
+          thana: thana.trim(),
+          postOffice: postOffice.trim(),
+          nominees: validNominees,
+          nomineeName: validNominees[0].name,
+          nomineeRelation: validNominees[0].relation || '',
+          nomineePhone: validNominees[0].phone || '',
+          monthlySavingsTarget: savingsTarget,
+          memberCategory: selectedCategory,
+          samityRole: selectedCategory,
+          samityStatus: targetSamityStatus,
+          samityApproved: false,
+          isSamityMember: false,
+          samityAppliedAt: nowIso,
+          samityApplicationInstallmentAmount: savingsTarget,
+          samityFirstInstallmentCredited: false,
+          hasSetProfile: true,
+          updatedAt: nowIso
+        };
+
+        const appData = {
+          id: user.uid,
+          uid: user.uid,
+          userId: user.uid,
+          name: user.name,
+          phone: user.phone,
+          memberId: user.memberId || '',
+          country,
+          fatherName: fatherName.trim(),
+          motherName: motherName.trim(),
+          ...identityPayload,
+          dob: dob || user.dob || '',
+          division: finalRegion,
+          district: district.trim(),
+          thana: thana.trim(),
+          postOffice: postOffice.trim(),
+          nominees: validNominees,
+          nomineeName: validNominees[0].name,
+          nomineeRelation: validNominees[0].relation || '',
+          nomineePhone: validNominees[0].phone || '',
+          monthlySavingsTarget: savingsTarget,
+          memberCategory: selectedCategory,
+          samityRole: selectedCategory,
+          installmentAmount: savingsTarget,
+          samityApplicationInstallmentAmount: savingsTarget,
+          status: targetSamityStatus,
+          samityStatus: targetSamityStatus,
+          approved: false,
+          samityAppliedAt: nowIso,
+          appliedAt: nowIso,
+          createdAt: nowIso
+        };
+
+        const txData = {
+          id: txDocRef.id,
+          userId: user.uid,
+          userName: user.name,
+          userPhone: user.phone,
+          memberId: user.memberId || '',
+          type: 'samity_deposit',
+          typeLabel: `সমবায় আবেদন (${selectedCategoryMeta.title}) - ১ম মাসের টাকা কর্তন`,
+          category: 'samity_deposit',
+          amount: savingsTarget,
+          totalDeducted: savingsTarget,
+          beforeBalance: userCurrentMainBalance,
+          afterBalance: newMainBalance,
+          postBalance: newMainBalance,
+          status: 'pending',
+          isApproved: false,
+          paymentMethod: 'মেইন ব্যালেন্স কর্তন',
+          description: `সমবায় সমিতিতে (${selectedCategoryMeta.title}) সদস্যপদ আবেদনের ১ম মাসের ৳${savingsTarget.toLocaleString('bn-BD')} টাকা মেইন ব্যালেন্স থেকে কেটে নেওয়া হয়েছে। এডমিন অনুমোদন দিলে সঞ্চয়ে যুক্ত হবে, বাতিল হলে মেইন ব্যালেন্সে ফেরত আসবে।`,
+          createdAt: nowIso,
+          date: new Date().toLocaleDateString('en-GB'),
+          time: new Date().toLocaleTimeString(),
+          receiptNo: `REC-SAMITY-APP-${Date.now()}`
+        };
+
+        transaction.set(userRef, updateData, { merge: true });
+        transaction.set(appRef, appData, { merge: true });
+        transaction.set(txDocRef, txData);
+        transaction.set(ledgerRef, {
+          id: ledgerRef.id,
+          userId: user.uid,
+          type: 'DEBIT',
+          channel: 'samity_application',
+          category: selectedCategory,
+          amount: savingsTarget,
+          beforeBalance: userCurrentMainBalance,
+          afterBalance: newMainBalance,
+          description: `Samity 1st month application payment (${selectedCategoryMeta.title})`,
+          createdAt: nowIso
+        });
+        transaction.set(userNotifRef, {
+          userId: user.uid,
+          title: `🏢 সমবায় আবেদন সাবমিট (${selectedCategoryMeta.title})`,
+          message: `আপনার সমবায় সমিতির (${selectedCategoryMeta.title}) আবেদনটি সফলভাবে জমা হয়েছে এবং ১ম মাসের ৳${savingsTarget.toLocaleString('bn-BD')} মেইন ব্যালেন্স থেকে কেটে নেওয়া হয়েছে। এডমিন অনুমোদনের অপেক্ষায় আছে।`,
+          type: 'samity_applied',
+          read: false,
+          createdAt: nowIso
+        });
+      });
+
       addDoc(collection(db, 'admin_notifications'), {
         type: 'samity_membership_application',
-        title: '🏢 নতুন BNB কোম্পানি ইনভেস্টর আবেদন!',
-        message: `${user.name} (${user.memberId || user.phone}) BNB কোম্পানি ইনভেস্টর সদস্যপদের জন্য আবেদন করেছেন। (মাসিক ও ১ম মাসের ইনভেস্টমেন্ট: ৳${savingsTarget.toLocaleString('bn-BD')} BDT)`,
+        title: `🏢 নতুন সমবায় আবেদন (${selectedCategoryMeta.title})!`,
+        message: `${user.name} (${user.memberId || user.phone}) ${selectedCategoryMeta.title} ক্যাটাগরিতে সমবায় সমিতির জন্য আবেদন করেছেন। ১ম মাসের ৳${savingsTarget.toLocaleString('bn-BD')} মেইন ব্যালেন্স থেকে কেটে রাখা হয়েছে।`,
         userId: user.uid,
         userName: user.name,
         memberId: user.memberId || '',
+        memberCategory: selectedCategory,
         read: false,
         createdAt: nowIso
       }).catch(e => console.warn("Admin notification warning:", e));
@@ -320,33 +488,36 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
       setTimeout(() => {
         onSubmitSuccess();
       }, 1000);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error submitting Samity request form:', err);
-      setErrorCode('আবেদনটি ডাটাবেজে রেকর্ড করা যায়নি। অনুগ্রহ করে পুনরায় চেষ্টা করুন।');
+      setErrorCode(err?.message || 'আবেদনটি ডাটাবেজে রেকর্ড করা যায়নি। অনুগ্রহ করে পুনরায় চেষ্টা করুন।');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="max-w-2xl mx-auto bg-white rounded-3xl border border-slate-150 overflow-hidden shadow-xl mt-6">
+    <div className="max-w-2xl mx-auto bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xl mt-4 sm:mt-6">
       {/* Header Banner */}
-      <div className="bg-gradient-to-r from-emerald-800 to-teal-750 p-6 text-white text-left relative overflow-hidden">
+      <div className="bg-gradient-to-r from-emerald-800 to-teal-700 p-5 text-white text-left relative overflow-hidden">
         <div className="absolute right-0 top-0 translate-x-12 -translate-y-6 w-32 h-32 bg-white/5 rounded-full blur-xl pointer-events-none" />
-        <button 
+        <button
+          type="button"
           onClick={onClose}
-          className="mb-4 flex items-center gap-1.5 text-xs text-emerald-100 hover:text-white transition bg-emerald-900/40 p-2 py-1 rounded-lg"
+          className="mb-3 flex items-center gap-1.5 text-xs text-emerald-100 hover:text-white transition bg-emerald-900/40 px-2.5 py-1 rounded-lg cursor-pointer"
         >
           <ArrowLeft className="w-3.5 h-3.5" />
           ফিরে যান
         </button>
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 bg-white/10 rounded-2xl flex items-center justify-center text-white shrink-0">
-            <Building2 className="w-6 h-6" />
+          <div className="w-11 h-11 bg-white/15 rounded-2xl flex items-center justify-center text-white shrink-0">
+            <Building2 className="w-5 h-5" />
           </div>
           <div>
             <h1 className="text-base sm:text-lg font-black tracking-tight leading-tight">সমিতি সদস্যপদ আবেদন ফরম</h1>
-            <p className="text-[10.5px] text-emerald-150 mt-1 font-medium font-sans">বিশ্বের যে কোনো প্রান্ত থেকে সঞ্চয়, কিস্তি ও ঋণের অনলাইন সুবিধার জন্য সদস্যপদের প্রস্তাবনা</p>
+            <p className="text-[10.5px] text-emerald-100 mt-0.5 font-medium font-sans">
+              ক্যাটাগরি নির্বাচন ও প্রয়োজনীয় তথ্য পূরণ করে অনলাইন সদস্যপদের আবেদন সম্পন্ন করুন
+            </p>
           </div>
         </div>
       </div>
@@ -363,74 +534,128 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
           <div className="w-16 h-1 bg-emerald-500 rounded mx-auto mt-4 animate-pulse" />
         </div>
       ) : (
-        <form onSubmit={handleSubmit} className="p-6 space-y-5 text-left">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-5 space-y-4 text-left">
+          {/* Top 4 Samity Categories Selector */}
+          <div className="bg-slate-50 border-2 border-emerald-200/90 rounded-2xl p-2.5 space-y-2 shadow-xs">
+            <div className="flex items-center justify-between gap-2 px-1">
+              <span className="text-[11px] font-black text-emerald-950">
+                ১. সমবায় সমিতির ক্যাটাগরি নির্বাচন করুন <span className="text-rose-600">*</span>
+              </span>
+              <span className="text-[9.5px] font-bold text-slate-500">
+                মেইন ব্যালেন্স: <strong className="font-mono text-emerald-700">৳{currentMainBalance.toLocaleString('bn-BD')}</strong>
+              </span>
+            </div>
+
+            <div className="grid grid-cols-4 gap-1.5">
+              {SAMITY_CATEGORIES.map((cat) => {
+                const isActive = selectedCategory === cat.key;
+                return (
+                  <button
+                    key={cat.key}
+                    type="button"
+                    onClick={() => handleSelectCategory(cat)}
+                    className={`py-2 px-1 rounded-xl border transition-all flex flex-col items-center justify-center text-center cursor-pointer relative min-h-[68px] active:scale-95 ${
+                      isActive ? cat.activeBg : cat.idleBg
+                    }`}
+                  >
+                    <span className={`text-[9.5px] sm:text-[11px] font-black leading-tight flex items-center justify-center gap-0.5 ${isActive ? 'text-white' : cat.titleColor}`}>
+                      <span>{cat.emoji}</span>
+                      <span className="truncate">{cat.title}</span>
+                    </span>
+                    <span className={`text-[8.5px] sm:text-[9.5px] font-black mt-1 block font-mono ${isActive ? 'text-white' : cat.priceColor}`}>
+                      {cat.monthlyLabel}
+                    </span>
+                    <span className={`text-[7px] sm:text-[7.5px] font-extrabold px-1 py-0.5 rounded mt-1 leading-none ${isActive ? cat.badgeActive : cat.badgeIdle}`}>
+                      {isActive ? '✓ নির্বাচিত' : cat.subBadge}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {selectedCategoryMeta ? (
+              <div className={`px-3 py-2 rounded-xl border text-[10.5px] font-bold leading-snug ${
+                hasInsufficientBalance
+                  ? 'bg-rose-50 border-rose-200 text-rose-800'
+                  : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              }`}>
+                {hasInsufficientBalance ? (
+                  <>
+                    ⚠️ আপনি <strong>{selectedCategoryMeta.title} ({selectedCategoryMeta.monthlyLabel})</strong> সিলেক্ট করেছেন। আবেদন করতে মেইন ব্যালেন্সে কমপক্ষে <strong>৳{requiredFirstMonthAmount.toLocaleString('bn-BD')}</strong> থাকতে হবে (আরও অ্যাড মানি প্রয়োজন: <strong>৳{(requiredFirstMonthAmount - currentMainBalance).toLocaleString('bn-BD')}</strong>)।
+                  </>
+                ) : (
+                  <>
+                    ✅ নির্বাচিত ক্যাটাগরি: <strong>{selectedCategoryMeta.title}</strong> — ফর্ম সাবমিট করলে ১ম মাসের <strong>৳{requiredFirstMonthAmount.toLocaleString('bn-BD')}</strong> আপনার মেইন ব্যালেন্স থেকে কেটে নেওয়া হবে।
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className="px-3 py-2 rounded-xl border border-amber-200 bg-amber-50/90 text-[10.5px] font-bold text-amber-900 leading-snug">
+                👆 অনুগ্রহ করে প্রথমে উপরের ৪টি ক্যাটাগরি থেকে একটি নির্বাচন করুন। নির্বাচিত ক্যাটাগরির ১ম মাসের টাকা সাবমিটের সময় মেইন ব্যালেন্স থেকে কেটে নেওয়া হবে।
+              </div>
+            )}
+          </div>
+
           {errorCode && (
-            <div className="bg-rose-50 text-rose-750 border border-rose-100 p-3.5 rounded-2xl text-[11px] font-bold flex items-center gap-2">
-              <ShieldAlert className="w-4 h-4 text-rose-650 shrink-0" />
-              {errorCode}
+            <div className="bg-rose-50 text-rose-700 border border-rose-200 p-3 rounded-2xl text-[11px] font-bold flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{errorCode}</span>
             </div>
           )}
 
           {appConfig.samityTerms && (
-            <div className="bg-emerald-50/50 text-slate-800 border border-emerald-200/60 p-4 rounded-2.5xl text-[10.5px] font-medium leading-relaxed space-y-2 shadow-xs">
-              <span className="text-emerald-900 font-extrabold flex items-center gap-1.5 text-xs">
+            <div className="bg-emerald-50/60 text-slate-800 border border-emerald-200/70 p-3 rounded-2xl text-[10.5px] font-medium leading-relaxed space-y-1">
+              <span className="text-emerald-900 font-extrabold flex items-center gap-1.5 text-[11px]">
                 📢 ভর্তি নিয়মাবলী ও নির্দেশাবলীঃ
               </span>
-              <p className="text-slate-700 font-bold">{appConfig.samityTerms}</p>
+              <p className="text-slate-700 font-semibold">{appConfig.samityTerms}</p>
             </div>
           )}
 
-          {/* Section A: Verified Base Identity */}
-          <div className="space-y-3 bg-slate-50/70 border border-slate-150 p-4 rounded-2.5xl">
-            <h3 className="text-xs font-black text-slate-500 uppercase tracking-wider flex items-center gap-1.5 border-b border-slate-200 pb-1.5">
-              <UserIcon className="w-3.5 h-3.5 text-slate-400" /> 1. প্রাথমিক প্রোফাইল তথ্য (স্থায়ী ও অপরিবর্তনশীল)
+          {/* Section A: Verified Base Identity (Compact) */}
+          <div className="space-y-2.5 bg-slate-50/80 border border-slate-200 p-3.5 rounded-2xl">
+            <h3 className="text-[11px] font-black text-slate-600 uppercase tracking-wider flex items-center gap-1.5 border-b border-slate-200 pb-1.5">
+              <UserIcon className="w-3.5 h-3.5 text-slate-500" /> প্রাথমিক প্রোফাইল তথ্য (স্থায়ী)
             </h3>
-            
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-[11px] font-sans">
+
+            <div className="grid grid-cols-2 gap-2.5 text-[11px] font-sans">
               <div>
-                <label className="text-slate-450 font-semibold block">সদস্যের নাম (Full Name):</label>
-                <div className="text-slate-800 font-bold bg-white border border-slate-200 rounded-xl px-3 py-2 mt-1 block">
+                <span className="text-slate-400 font-semibold block text-[10px]">সদস্যের নাম:</span>
+                <div className="text-slate-800 font-bold bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 mt-0.5 truncate">
                   {user.name}
                 </div>
               </div>
-
               <div>
-                <label className="text-slate-450 font-semibold block">মোবাইল নম্বর (Phone No):</label>
-                <div className="text-slate-800 font-bold bg-white border border-slate-200 rounded-xl px-3 py-2 mt-1 font-mono">
+                <span className="text-slate-400 font-semibold block text-[10px]">মোবাইল নম্বর:</span>
+                <div className="text-slate-800 font-bold bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 mt-0.5 font-mono truncate">
                   {user.phone}
                 </div>
               </div>
-
               <div>
-                <label className="text-slate-450 font-semibold block">সদস্য আইডি (Member ID):</label>
-                <div className="text-emerald-800 font-black bg-white border border-slate-200 rounded-xl px-3 py-2 mt-1 font-mono">
-                  {user.memberId}
+                <span className="text-slate-400 font-semibold block text-[10px]">সদস্য আইডি:</span>
+                <div className="text-emerald-800 font-black bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 mt-0.5 font-mono truncate">
+                  {user.memberId || 'নতুন আবেদন'}
                 </div>
               </div>
-
               <div>
-                <label className="text-slate-450 font-semibold block">অ্যাকাউন্ট রোল (Account Role):</label>
-                <div className="text-slate-700 font-semibold bg-white border border-slate-200 rounded-xl px-3 py-2 mt-1 capitalize">
+                <span className="text-slate-400 font-semibold block text-[10px]">অ্যাকাউন্ট রোল:</span>
+                <div className="text-slate-700 font-semibold bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 mt-0.5 truncate">
                   {user.role === 'admin' ? 'এডমিন (BNB Admin)' : 'প্রিমিয়াম সদস্য'}
                 </div>
               </div>
             </div>
-            <p className="text-[9px] text-slate-400 italic">
-              * নাম এবং মোবাইল নম্বর পরিবর্তন করতে হেল্পডেস্কে সরাসরি যোগাযোগ করুন।
-            </p>
           </div>
 
-          {/* Section B: Editable Fields */}
-          <div className="space-y-3">
-            <h3 className="text-xs font-black text-indigo-900 uppercase tracking-wider flex items-center gap-1.5 border-b border-indigo-100 pb-1.5">
-              <FileText className="w-3.5 h-3.5 text-indigo-600" /> 2. অতিরিক্ত সমবায় তথ্যাদি প্রদান (সারা বিশ্ব থেকে গ্রহণযোগ্য)
+          {/* Section B: Personal, Identity Doc (NID / Birth Reg) & Address */}
+          <div className="space-y-3 bg-white border border-slate-200 p-3.5 rounded-2xl">
+            <h3 className="text-[11px] font-black text-indigo-900 uppercase tracking-wider flex items-center gap-1.5 border-b border-indigo-100 pb-1.5">
+              <FileText className="w-3.5 h-3.5 text-indigo-600" /> ২. ব্যক্তিগত তথ্য, পরিচয়পত্র ও ঠিকানা
             </h3>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-[11px] font-sans">
-              
-              {/* Country Selection Field */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px] font-sans">
+              {/* Country */}
               <div>
-                <label className="text-slate-600 font-bold block mb-1">বসবাসকারী দেশ (Country) <span className="text-rose-500">*</span></label>
+                <label className="text-slate-600 font-bold block mb-1">বসবাসকারী দেশ <span className="text-rose-500">*</span></label>
                 <div className="relative">
                   <select
                     value={country}
@@ -440,68 +665,104 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
                         setDivision('');
                       }
                     }}
-                    className="w-full pl-8 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 transition-all appearance-none"
+                    className="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 transition-all"
                   >
-                    {countriesList.map((countryName) => (
+                    {COUNTRIES_LIST.map((countryName) => (
                       <option key={countryName} value={countryName}>{countryName}</option>
                     ))}
                   </select>
-                  <Globe className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-3.5 pointer-events-none" />
+                  <Globe className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
                 </div>
+              </div>
+
+              {/* Date of Birth */}
+              <div>
+                <label className="text-slate-600 font-bold block mb-1">জন্ম তারিখ (Date of Birth) <span className="text-rose-500">*</span></label>
+                <input
+                  type="date"
+                  required
+                  value={dob}
+                  onChange={(e) => setDob(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 transition-all font-mono"
+                />
               </div>
 
               {/* Father's Name */}
               <div>
-                <label className="text-slate-600 font-bold block mb-1">পিতার নাম (Father's Name) <span className="text-rose-500">*</span></label>
+                <label className="text-slate-600 font-bold block mb-1">পিতার নাম <span className="text-rose-500">*</span></label>
                 <input
                   type="text"
                   required
                   placeholder="পিতার নাম লিখুন"
                   value={fatherName}
                   onChange={(e) => setFatherName(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 placeholder-slate-400 transition-all"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 placeholder-slate-400 transition-all"
                 />
               </div>
 
               {/* Mother's Name */}
               <div>
-                <label className="text-slate-600 font-bold block mb-1">মাতার নাম (Mother's Name) <span className="text-rose-500">*</span></label>
+                <label className="text-slate-600 font-bold block mb-1">মাতার নাম <span className="text-rose-500">*</span></label>
                 <input
                   type="text"
                   required
                   placeholder="মাতার নাম লিখুন"
                   value={motherName}
                   onChange={(e) => setMotherName(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 placeholder-slate-400 transition-all"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 placeholder-slate-400 transition-all"
                 />
               </div>
 
-              {/* NID / Passport Field */}
-              <div>
-                <label className="text-slate-600 font-bold block mb-1">জাতীয় পরিচয়পত্র / পাসপোর্ট নম্বর <span className="text-rose-500">*</span></label>
-                <input
-                  type="text"
-                  required
-                  placeholder="NID অথবা Passport নম্বর লিখুন"
-                  value={nid}
-                  onChange={(e) => setNid(e.target.value)} // Don't restrict to digits so global passports work
-                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 placeholder-slate-400 transition-all"
-                />
+              {/* Identity Document Selector: NID OR Birth Registration */}
+              <div className="sm:col-span-2 bg-slate-50/90 border border-emerald-200 rounded-2xl p-3 space-y-2">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <label className="text-slate-800 font-extrabold text-[11px] flex items-center gap-1.5">
+                    <IdCard className="w-3.5 h-3.5 text-emerald-700" />
+                    পরিচয়পত্র নির্বাচন করুন (যেকোনো একটি আবশ্যক) <span className="text-rose-500">*</span>
+                  </label>
+                  <div className="grid grid-cols-2 gap-1.5 bg-white p-1 rounded-xl border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => handleSelectIdType('nid')}
+                      className={`px-2.5 py-1.5 rounded-lg text-[10.5px] font-black transition-all cursor-pointer ${
+                        idType === 'nid'
+                          ? 'bg-emerald-700 text-white shadow-xs'
+                          : 'text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      🪪 এনআইডি (NID)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectIdType('birthReg')}
+                      className={`px-2.5 py-1.5 rounded-lg text-[10.5px] font-black transition-all cursor-pointer ${
+                        idType === 'birthReg'
+                          ? 'bg-emerald-700 text-white shadow-xs'
+                          : 'text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      📜 জন্ম নিবন্ধন
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <input
+                    type="text"
+                    required
+                    placeholder={
+                      idType === 'nid'
+                        ? 'আপনার জাতীয় পরিচয়পত্র (NID) নম্বর লিখুন'
+                        : 'আপনার ১৭ ডিজিটের জন্ম নিবন্ধন নম্বর লিখুন'
+                    }
+                    value={idNumber}
+                    onChange={(e) => setIdNumber(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-900 placeholder-slate-400 transition-all"
+                  />
+                </div>
               </div>
 
-              {/* Date of Birth */}
-              <div>
-                <label className="text-slate-600 font-bold block mb-1">জন্ম তারিখ (Date of Birth)</label>
-                <input
-                  type="date"
-                  placeholder="DD-MM-YYYY"
-                  value={dob}
-                  onChange={(e) => setDob(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 transition-all font-mono"
-                />
-              </div>
-
-              {/* Division/State Field */}
+              {/* Division / Custom Region */}
               {country.startsWith('Bangladesh') ? (
                 <div>
                   <label className="text-slate-600 font-bold block mb-1">বিভাগ (Division) <span className="text-rose-500">*</span></label>
@@ -509,29 +770,29 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
                     value={division}
                     required
                     onChange={(e) => setDivision(e.target.value)}
-                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 transition-all"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 transition-all"
                   >
                     <option value="">-- বিভাগ নির্বাচন করুন --</option>
-                    {divisions.map((div) => (
+                    {DIVISIONS.map((div) => (
                       <option key={div} value={div}>{div}</option>
                     ))}
                   </select>
                 </div>
               ) : (
                 <div>
-                  <label className="text-slate-600 font-bold block mb-1">স্টেট / প্রদেশ / অঞ্চল (State / Province / Region) <span className="text-rose-500">*</span></label>
+                  <label className="text-slate-600 font-bold block mb-1">স্টেট / প্রদেশ <span className="text-rose-500">*</span></label>
                   <input
                     type="text"
                     required
-                    placeholder="উদাঃ মক্কা, কুয়ালালামপুর, কুইন্স"
+                    placeholder="উদাঃ মক্কা, কুয়ালালামপুর"
                     value={customRegion}
                     onChange={(e) => setCustomRegion(e.target.value)}
-                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 placeholder-slate-400 transition-all"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 placeholder-slate-400 transition-all"
                   />
                 </div>
               )}
 
-              {/* District Field */}
+              {/* District */}
               <div>
                 <label className="text-slate-600 font-bold block mb-1">জেলা (District) <span className="text-rose-500">*</span></label>
                 <input
@@ -540,216 +801,167 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
                   placeholder="আপনার জেলার নাম লিখুন"
                   value={district}
                   onChange={(e) => setDistrict(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 placeholder-slate-400 transition-all"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 placeholder-slate-400 transition-all"
                 />
               </div>
 
-              {/* Thana / Upazila Field */}
+              {/* Thana */}
               <div>
-                <label className="text-slate-600 font-bold block mb-1">থানা / উপজেলা (Thana / Upazila) <span className="text-rose-500">*</span></label>
+                <label className="text-slate-600 font-bold block mb-1">থানা / উপজেলা <span className="text-rose-500">*</span></label>
                 <input
                   type="text"
                   required
-                  placeholder="আপনার থানা বা উপজেলার নাম লিখুন"
+                  placeholder="থানা বা উপজেলার নাম লিখুন"
                   value={thana}
                   onChange={(e) => setThana(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 placeholder-slate-400 transition-all"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 placeholder-slate-400 transition-all"
                 />
               </div>
 
-              {/* Post Office or Village Field */}
+              {/* Post Office / Village */}
               <div>
-                <label className="text-slate-600 font-bold block mb-1">পোস্ট অফিস অথবা গ্রাম (Post Office / Village) <span className="text-rose-500">*</span></label>
+                <label className="text-slate-600 font-bold block mb-1">পোস্ট অফিস / গ্রাম <span className="text-rose-500">*</span></label>
                 <input
                   type="text"
                   required
-                  placeholder="আপনার পোস্ট অফিস বা গ্রামের নাম লিখুন"
+                  placeholder="পোস্ট অফিস বা গ্রামের নাম"
                   value={postOffice}
                   onChange={(e) => setPostOffice(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 placeholder-slate-400 transition-all"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 placeholder-slate-400 transition-all"
                 />
-              </div>
-
-              {/* Nominee Name */}
-              <div>
-                <label className="text-slate-600 font-bold block mb-1">নমিনির নাম (Nominee Name) <span className="text-rose-500">*</span></label>
-                <input
-                  type="text"
-                  required
-                  placeholder="উদাঃ মোসাম্মৎ কুলসুম"
-                  value={nomineeName}
-                  onChange={(e) => setNomineeName(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 placeholder-slate-400 transition-all"
-                />
-              </div>
-
-              {/* Nominee Relation */}
-              <div>
-                <label className="text-slate-600 font-bold block mb-1">নমিনির সাথে সম্পর্ক <span className="text-rose-500">*</span></label>
-                <input
-                  type="text"
-                  required
-                  placeholder="উদাঃ মাতা, স্ত্রী, পিতা, পুত্র"
-                  value={nomineeRelation}
-                  onChange={(e) => setNomineeRelation(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 placeholder-slate-400 transition-all"
-                />
-              </div>
-
-              {/* Nominee Phone */}
-              <div>
-                <label className="text-slate-600 font-bold block mb-1">নমিনির সচল মোবাইল নম্বর <span className="text-rose-500">*</span></label>
-                <input
-                  type="text"
-                  required
-                  placeholder="উদাঃ +8801712345678"
-                  value={nomineePhone}
-                  onChange={(e) => setNomineePhone(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 placeholder-slate-400 transition-all"
-                />
-              </div>
-
-              {/* Monthly Savings / Investment Target Choice */}
-              <div className="sm:col-span-2 space-y-2.5">
-                <label className="text-slate-700 font-extrabold block mb-1">
-                  প্রতি মাসে কত টাকা ডিপোজিট / ইনভেস্ট করবেন নির্বাচন করুন (সর্বনিম্ন ইনভেস্ট ৳৫০০ টাকা — ১ম মাসের ইনভেস্টমেন্ট মেইন ব্যালেন্সে থাকতে হবে) <span className="text-rose-500">*</span>
-                </label>
-
-                {/* Quick Select Preset Buttons */}
-                <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
-                  {[
-                    { value: '500', label: '৳৫০০ (সর্বনিম্ন)' },
-                    { value: '1000', label: '৳১,০০০' },
-                    { value: '2000', label: '৳২,০০০' },
-                    { value: '3000', label: '৳৩,০০০' },
-                    { value: '5000', label: '৳৫,০০০' },
-                    { value: '10000', label: '৳১০,০০০' },
-                    { value: '20000', label: '৳২০,০০০' },
-                    { value: '50000', label: '৳৫০,০০০' },
-                    { value: '100000', label: '৳১,০০,০০০ (১ লক্ষ)' },
-                    { value: 'custom', label: '⚙️ ইচ্ছেমতো পরিমাণ' }
-                  ].map((item) => {
-                    const isSelected = monthlySavingsOption === item.value;
-                    return (
-                      <button
-                        key={item.value}
-                        type="button"
-                        onClick={() => setMonthlySavingsOption(item.value)}
-                        className={`py-2 px-2 rounded-xl text-[11px] font-extrabold border transition-all cursor-pointer ${
-                          isSelected
-                            ? 'bg-emerald-700 text-white border-emerald-800 shadow-sm ring-2 ring-emerald-300'
-                            : 'bg-slate-50 hover:bg-emerald-50 text-slate-700 border-slate-200'
-                        }`}
-                      >
-                        {item.label}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <select
-                  required
-                  value={monthlySavingsOption}
-                  onChange={(e) => setMonthlySavingsOption(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white text-slate-800 transition-all font-sans"
-                >
-                  <option value="" disabled>-- মাসিক ডিপোজিট / ইনভেস্টমেন্ট নির্বাচন করুন (সর্বনিম্ন ৳৫০০ টাকা) --</option>
-                  <option value="500">🔹 ৳৫০০ / মাস — সর্বনিম্ন ইনভেস্ট (১ম মাসের ইনভেস্টমেন্ট ৳৫০০ মেইন ব্যালেন্সে আবশ্যক)</option>
-                  <option value="1000">⭐ ৳১,০০০ / মাস (১ম মাসের ইনভেস্টমেন্ট ৳১,০০০ মেইন ব্যালেন্সে আবশ্যক)</option>
-                  <option value="2000">💎 ৳২,০০০ / মাস (১ম মাসের ইনভেস্টমেন্ট ৳২,০০০ মেইন ব্যালেন্সে আবশ্যক)</option>
-                  <option value="3000">👑 ৳৩,০০০ / মাস (১ম মাসের ইনভেস্টমেন্ট ৳৩,০০০ মেইন ব্যালেন্সে আবশ্যক)</option>
-                  <option value="5000">👑 ৳৫,০০০ / মাস (১ম মাসের ইনভেস্টমেন্ট ৳৫,০০০ মেইন ব্যালেন্সে আবশ্যক)</option>
-                  <option value="10000">🏆 ৳১০,০০০ / মাস (১ম মাসের ইনভেস্টমেন্ট ৳১০,০০০ মেইন ব্যালেন্সে আবশ্যক)</option>
-                  <option value="20000">🏆 ৳২০,০০০ / মাস (১ম মাসের ইনভেস্টমেন্ট ৳২০,০০০ মেইন ব্যালেন্সে আবশ্যক)</option>
-                  <option value="50000">🏆 ৳৫০,০০০ / মাস (১ম মাসের ইনভেস্টমেন্ট ৳৫০,০০০ মেইন ব্যালেন্সে আবশ্যক)</option>
-                  <option value="100000">👑 ৳১,০০,০০০ (১ লক্ষ টাকা) / মাস (১ম মাসের ইনভেস্টমেন্ট ৳১,০০,০০০ মেইন ব্যালেন্সে আবশ্যক)</option>
-                  <option value="custom">⚙️ কাস্টম পরিমাণ (সর্বনিম্ন ৳৫০০ থেকে যেকোনো পরিমাণ লিখুন)</option>
-                </select>
-
-                {monthlySavingsOption === 'custom' && (
-                  <div className="mt-2">
-                    <label className="text-slate-700 font-bold text-[11px] block mb-1">
-                      আপনি প্রতি মাসে কত টাকা ডিপোজিট / ইনভেস্ট করবেন তা লিখুন (সর্বনিম্ন ৳৫০০ টাকা, যেমন: 500, 1000, 2000, 5000, 100000):
-                    </label>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      placeholder="টাকার পরিমাণ লিখুন (সর্বনিম্ন 500 টাকা)"
-                      value={customSavingsAmount}
-                      onChange={(e) => setCustomSavingsAmount(e.target.value)}
-                      className="w-full px-3 py-2.5 bg-white border border-emerald-400 rounded-xl text-xs font-extrabold font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-900"
-                    />
-                  </div>
-                )}
-
-                {/* Live Main Balance & 1st Month Investment Verification Box */}
-                <div className={`p-3.5 rounded-2xl border text-xs space-y-1.5 ${
-                  (monthlySavingsOption === 'custom' && selectedMonthlyAmount > 0 && selectedMonthlyAmount < 500) || hasInsufficientBalance
-                    ? 'bg-rose-50 border-rose-200 text-rose-900'
-                    : selectedMonthlyAmount >= 500
-                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                    : 'bg-slate-50 border-slate-200 text-slate-700'
-                }`}>
-                  <div className="flex items-center justify-between font-bold">
-                    <span>আপনার বর্তমান মেইন ব্যালেন্স:</span>
-                    <span className="font-mono text-sm font-black">৳{currentMainBalance.toLocaleString('bn-BD')}</span>
-                  </div>
-                  {selectedMonthlyAmount > 0 && (
-                    <div className="flex items-center justify-between font-bold border-t border-current/10 pt-1.5">
-                      <span>নির্বাচিত ১ম মাসের ইনভেস্টমেন্ট:</span>
-                      <span className="font-mono text-sm font-black">৳{selectedMonthlyAmount.toLocaleString('bn-BD')}</span>
-                    </div>
-                  )}
-                  {monthlySavingsOption === 'custom' && selectedMonthlyAmount > 0 && selectedMonthlyAmount < 500 ? (
-                    <p className="text-[11px] font-bold text-rose-700 pt-1 leading-relaxed">
-                      ⚠️ BNB কোম্পানি ইনভেস্টর সেকশনে সর্বনিম্ন ইনভেস্টমেন্ট ৳৫০০ টাকা! অনুগ্রহ করে কমপক্ষে ৫০০ টাকা বা তার বেশি পরিমাণ লিখুন।
-                    </p>
-                  ) : hasInsufficientBalance ? (
-                    <p className="text-[11px] font-bold text-rose-700 pt-1 leading-relaxed">
-                      ⚠️ আপনার মেইন ব্যালেন্সে পর্যাপ্ত টাকা নেই! আপনি প্রতি মাসে ৳{selectedMonthlyAmount.toLocaleString('bn-BD')} সিলেক্ট করেছেন, তাই আবেদন করার সময় ১ম মাসের ইনভেস্টমেন্ট দেওয়ার জন্য আপনার মেইন ব্যালেন্সে কমপক্ষে ৳{selectedMonthlyAmount.toLocaleString('bn-BD')} থাকতে হবে (আরও প্রয়োজন: ৳{(selectedMonthlyAmount - currentMainBalance).toLocaleString('bn-BD')})।
-                    </p>
-                  ) : selectedMonthlyAmount >= 500 ? (
-                    <p className="text-[11px] font-semibold text-emerald-800 pt-1 leading-relaxed">
-                      ✅ আপনার মেইন ব্যালেন্সে পর্যাপ্ত টাকা রয়েছে। আবেদন সাবমিট করলে ১ম মাসের ইনভেস্টমেন্ট বাবদ ৳{selectedMonthlyAmount.toLocaleString('bn-BD')} আপনার মেইন ব্যালেন্স থেকে জমা নেওয়া হবে এবং এডমিন অনুমোদনের জন্য পাঠানো হবে।
-                    </p>
-                  ) : (
-                    <p className="text-[10.5px] text-slate-600 pt-0.5 leading-relaxed">
-                      📌 নিয়ম: সর্বনিম্ন ইনভেস্টমেন্ট ৳৫০০ টাকা। আপনি ফরমে যত টাকা মাসিক ইনভেস্টমেন্ট সিলেক্ট করবেন (৳৫০০ / ৳১,০০০ / ৳২,০০০ / ৳৫,০০০ / ৳১,০০,০০০ ইত্যাদি), আবেদন করার সময় আপনার মেইন ব্যালেন্সে সেই পরিমাণ টাকা থাকতে হবে এবং ১ম মাসের ইনভেস্টমেন্ট দিয়ে এখানে প্রবেশ করতে হবে।
-                    </p>
-                  )}
-                </div>
               </div>
             </div>
           </div>
 
-          {/* Step C: Checkbox Agreement */}
-          <div className="pt-2">
-            <label className="flex items-start gap-2.5 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={agreed}
-                onChange={(e) => setAgreed(e.target.checked)}
-                className="w-4 h-4 bg-slate-100 border border-slate-200 rounded text-emerald-600 focus:ring-emerald-500 accent-emerald-600 mt-0.5 shrink-0"
-              />
-              <span className="text-[10px] text-slate-500 leading-normal font-sans">
-                আমি ঘোষণা করছি যে উপরে প্রদত্ত আমার সকল তথ্য সম্পূর্ণ সঠিক ও নিখুঁত। আমি সমবায়ের অনলাইন সেবার সদস্যপদ নিতে ইচ্ছুক এবং সমিতির যাবতীয় নিয়ম-কানুন ও নীতিমালা মেনে চলতে সর্বদা দায়বদ্ধ থাকবো।
-              </span>
-            </label>
+          {/* Section C: 3 Nominees (1 Mandatory, 2 & 3 Optional) */}
+          <div className="space-y-2.5 bg-white border border-slate-200 p-3.5 rounded-2xl">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-1.5">
+              <h3 className="text-[11px] font-black text-emerald-950 uppercase tracking-wider flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5 text-emerald-700" /> ৩. নমিনি তথ্য (সর্বনিম্ন ১ জন বাধ্যতামূলক, সর্বোচ্চ ৩ জন)
+              </h3>
+            </div>
+
+            <div className="space-y-2.5">
+              {[0, 1, 2].map((idx) => {
+                const nomIdx = idx as 0 | 1 | 2;
+                const isRequired = nomIdx === 0;
+                const entry = nominees[nomIdx];
+                return (
+                  <div
+                    key={nomIdx}
+                    className={`p-2.5 rounded-xl border ${
+                      isRequired
+                        ? 'bg-emerald-50/40 border-emerald-200'
+                        : 'bg-slate-50/70 border-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10.5px] font-black text-slate-800">
+                        নমিনি {nomIdx === 0 ? '১' : nomIdx === 1 ? '২' : '৩'}
+                      </span>
+                      <span
+                        className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full ${
+                          isRequired
+                            ? 'bg-rose-100 text-rose-700'
+                            : 'bg-slate-200/80 text-slate-600'
+                        }`}
+                      >
+                        {isRequired ? 'বাধ্যতামূলক *' : 'ঐচ্ছিক (চাইলে স্কিপ করুন)'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
+                      <input
+                        type="text"
+                        required={isRequired}
+                        placeholder={isRequired ? 'নমিনির নাম *' : 'নমিনির নাম (ঐচ্ছিক)'}
+                        value={entry.name}
+                        onChange={(e) => updateNomineeField(nomIdx, 'name', e.target.value)}
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 text-slate-800 placeholder-slate-400"
+                      />
+                      <input
+                        type="text"
+                        required={isRequired}
+                        placeholder={isRequired ? 'সম্পর্ক (যেমন: স্ত্রী, মাতা) *' : 'সম্পর্ক (ঐচ্ছিক)'}
+                        value={entry.relation}
+                        onChange={(e) => updateNomineeField(nomIdx, 'relation', e.target.value)}
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 text-slate-800 placeholder-slate-400"
+                      />
+                      <input
+                        type="text"
+                        required={isRequired}
+                        placeholder={isRequired ? 'মোবাইল নম্বর *' : 'মোবাইল নম্বর (ঐচ্ছিক)'}
+                        value={entry.phone}
+                        onChange={(e) => updateNomineeField(nomIdx, 'phone', e.target.value)}
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500 text-slate-800 placeholder-slate-400"
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
-          <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row gap-3">
+          {/* Compact Balance & 1st Month Summary Box */}
+          <div className={`p-3 rounded-2xl border text-[11px] space-y-1 ${
+            hasInsufficientBalance
+              ? 'bg-rose-50 border-rose-200 text-rose-900'
+              : selectedCategoryMeta
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              : 'bg-slate-50 border-slate-200 text-slate-700'
+          }`}>
+            <div className="flex items-center justify-between font-bold">
+              <span>আপনার বর্তমান মেইন ব্যালেন্স:</span>
+              <span className="font-mono font-black text-xs">৳{currentMainBalance.toLocaleString('bn-BD')}</span>
+            </div>
+            {selectedCategoryMeta && (
+              <div className="flex items-center justify-between font-bold border-t border-current/10 pt-1">
+                <span>নির্বাচিত ক্যাটাগরি ({selectedCategoryMeta.emoji} {selectedCategoryMeta.title}):</span>
+                <span className="font-mono font-black text-xs">১ম মাস ৳{requiredFirstMonthAmount.toLocaleString('bn-BD')}</span>
+              </div>
+            )}
+            {hasInsufficientBalance ? (
+              <p className="text-[10.5px] font-bold text-rose-700 pt-0.5 leading-snug">
+                ⚠️ মেইন ব্যালেন্সে পর্যাপ্ত টাকা নেই! আবেদন সাবমিটের আগে কমপক্ষে ৳{(requiredFirstMonthAmount - currentMainBalance).toLocaleString('bn-BD')} টাকা অ্যাড মানি করুন।
+              </p>
+            ) : selectedCategoryMeta ? (
+              <p className="text-[10.5px] font-semibold text-emerald-800 pt-0.5 leading-snug">
+                ✅ সাবমিট করলে ১ম মাসের ৳{requiredFirstMonthAmount.toLocaleString('bn-BD')} মেইন ব্যালেন্স থেকে কেটে নেওয়া হবে।
+              </p>
+            ) : (
+              <p className="text-[10.5px] text-slate-600 pt-0.5 leading-snug">
+                📌 ফর্মের উপরে থাকা ৪টি ক্যাটাগরি থেকে একটি নির্বাচন করে আবেদন সম্পন্ন করুন।
+              </p>
+            )}
+          </div>
+
+          {/* Agreement Checkbox */}
+          <label className="flex items-start gap-2.5 cursor-pointer select-none px-1">
+            <input
+              type="checkbox"
+              checked={agreed}
+              onChange={(e) => setAgreed(e.target.checked)}
+              className="w-4 h-4 bg-slate-100 border border-slate-200 rounded text-emerald-600 focus:ring-emerald-500 accent-emerald-600 mt-0.5 shrink-0"
+            />
+            <span className="text-[10px] text-slate-500 leading-normal font-sans">
+              আমি ঘোষণা করছি যে উপরে প্রদত্ত আমার সকল তথ্য সম্পূর্ণ সঠিক ও নিখুঁত। আমি সমবায়ের অনলাইন সেবার সদস্যপদ নিতে ইচ্ছুক এবং সমিতির যাবতীয় নিয়ম-কানুন ও নীতিমালা মেনে চলতে সর্বদা দায়বদ্ধ থাকবো।
+            </span>
+          </label>
+
+          {/* Action Buttons */}
+          <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row gap-2.5">
             <button
               type="button"
               onClick={onClose}
               disabled={loading}
-              className="flex-1 px-4 py-2 bg-slate-100 border border-slate-200 text-slate-600 rounded-xl font-bold text-xs hover:bg-slate-200 active:scale-98 transition text-center"
+              className="sm:w-1/3 px-4 py-2.5 bg-slate-100 border border-slate-200 text-slate-600 rounded-xl font-bold text-xs hover:bg-slate-200 active:scale-98 transition text-center cursor-pointer"
             >
               বাতিল
             </button>
             <button
               type="submit"
               disabled={loading}
-              className="flex-1 px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl font-bold text-xs hover:from-emerald-700 hover:to-teal-705 active:scale-98 transition flex items-center justify-center gap-1.5 shadow-sm shadow-emerald-100"
+              className="sm:w-2/3 px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl font-bold text-xs hover:from-emerald-700 hover:to-teal-700 active:scale-98 transition flex items-center justify-center gap-1.5 shadow-sm shadow-emerald-100 cursor-pointer"
             >
               {loading ? (
                 <>

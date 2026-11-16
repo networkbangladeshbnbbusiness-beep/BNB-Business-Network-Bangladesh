@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import UnifiedBackButton from './UnifiedBackButton';
+import { isStandaloneAdminRoute } from '../lib/adminRoute';
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -38,11 +39,12 @@ import {
   Sparkles,
   MapPinned,
   Radio,
-  Compass
+  Compass,
+  Clock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { db } from '../lib/firebase';
-import { collection, addDoc, getDocs, query, where, orderBy, serverTimestamp, doc, updateDoc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { collection, addDoc, getDocs, getDoc, query, where, orderBy, serverTimestamp, doc, updateDoc, setDoc, deleteDoc, onSnapshot, runTransaction } from 'firebase/firestore';
 import LeafletActiveMap from './LeafletActiveMap';
 import GoogleAgentMap from './GoogleAgentMap';
 import AgentProfileCard from './AgentProfileCard';
@@ -60,6 +62,88 @@ import {
   toBanglaDigits
 } from '../lib/locationService';
 import { useBackHandler } from '../lib/navigationManager';
+import {
+  AgentWeeklySchedule,
+  DayKey,
+  WEEK_DAYS,
+  createDefaultWeeklySchedule,
+  normalizeWeeklySchedule,
+  formatDayScheduleBn,
+  formatClosedDaysLabel,
+  buildOpeningHoursSummary,
+  getWeeklyOffDays,
+  getLiveScheduleStatus,
+  formatTimeBn,
+} from '../lib/agentSchedule';
+import { getEffectivePaidMonthsList } from '../types';
+import { getMembershipCategory } from '../lib/memberUtils';
+
+const evaluateSamityFreeAgentEligibility = (profile: Record<string, any> | null | undefined) => {
+  if (!profile) {
+    return {
+      isFreeEligible: false,
+      isSamityTierMember: false,
+      categoryKey: 'regular' as const,
+      categoryBadgeBn: 'সাধারণ সদস্য',
+      paidMonthsCount: 0,
+      requiredMonths: 3,
+      monthlyRate: 0,
+      depositedSavings: 0,
+    };
+  }
+
+  const samitySt = String(profile.samityStatus || '').toLowerCase().trim();
+  const deactivateSt = String(profile.samityDeactivateStatus || '').toLowerCase().trim();
+  const isDeactivated =
+    deactivateSt === 'approved' ||
+    deactivateSt === 'released' ||
+    deactivateSt === 'self_opted_out';
+
+  const catMeta = getMembershipCategory(profile as any);
+  const isSamityTier = ['owner', 'shareholder', 'investor', 'supporter'].includes(catMeta.key);
+  const monthlyRate = catMeta.monthlyRate || Number(profile.monthlySavingsTarget || 0) || 1000;
+
+  const hasApprovedSamityMembership = Boolean(
+    !isDeactivated &&
+      isSamityTier &&
+      (profile.samityApproved === true ||
+        profile.isSamityMember === true ||
+        samitySt === 'approved' ||
+        profile.samitySchemeActive === true)
+  );
+
+  const rawSavings =
+    typeof profile.savings === 'number' && !isNaN(profile.savings)
+      ? profile.savings
+      : typeof profile.dpsBalance === 'number' && !isNaN(profile.dpsBalance)
+        ? profile.dpsBalance
+        : Number(profile.savings || profile.dpsBalance || 0) || 0;
+  const totalDepositVal = Number(profile.totalDeposit || profile.samityDepositBalance || 0) || 0;
+  const depositedSavings = Math.max(0, rawSavings, totalDepositVal);
+
+  const rawPaidMonths = Array.isArray(profile.samityPaidMonths) ? profile.samityPaidMonths : [];
+  const effectivePaidMonths = getEffectivePaidMonthsList(rawPaidMonths, depositedSavings, monthlyRate);
+  const paidBySavings = monthlyRate > 0 ? Math.floor(depositedSavings / monthlyRate) : 0;
+
+  // Minimum 3 months of actual Samity installments must be deposited (>= 3 months * monthlyRate)
+  const verifiedPaidMonths =
+    depositedSavings > 0
+      ? Math.max(paidBySavings, Math.min(effectivePaidMonths.length, paidBySavings))
+      : 0;
+
+  const isFreeEligible = hasApprovedSamityMembership && verifiedPaidMonths >= 3;
+
+  return {
+    isFreeEligible,
+    isSamityTierMember: hasApprovedSamityMembership,
+    categoryKey: catMeta.key,
+    categoryBadgeBn: catMeta.badgeBn,
+    paidMonthsCount: verifiedPaidMonths,
+    requiredMonths: 3,
+    monthlyRate,
+    depositedSavings,
+  };
+};
 
 interface AgentScreenProps {
   user: {
@@ -69,10 +153,31 @@ interface AgentScreenProps {
     email?: string;
     role?: string;
     balance?: number;
+    mainBalance?: number;
+    memberId?: string;
+    photoURL?: string;
+    photoUrl?: string;
+    profilePic?: string;
+    img?: string;
+    avatar?: string;
+    nid?: string;
+    nidNumber?: string;
+    birthReg?: string;
+    nomineeName?: string;
+    nomineeRelation?: string;
+    nomineePhone?: string;
+    nominees?: Array<{ id?: string; name: string; relation?: string; phone?: string; nid?: string }>;
+    samityStatus?: string;
+    samityApproved?: boolean;
+    isSamityMember?: boolean;
+    district?: string;
+    thana?: string;
   };
   onBack: () => void;
   appConfig?: any;
 }
+
+const AGENT_APPLICATION_FEE = 100;
 
 interface Agent {
   id: string;
@@ -112,6 +217,8 @@ interface Agent {
   agentCode?: string;
   badgeLabel?: string;
   openingHours?: string;
+  weeklySchedule?: AgentWeeklySchedule;
+  weeklyOffDays?: string[];
   approvalStatus?: 'approved' | 'pending' | 'rejected';
 }
 
@@ -130,6 +237,77 @@ export default function AgentScreen({ user, onBack, appConfig }: AgentScreenProp
   const [showFilterDropdown, setShowFilterDropdown] = useState<boolean>(false);
   const [highlightedAgentId, setHighlightedAgentId] = useState<string | null>(null);
   const [showSensitive, setShowSensitive] = useState<boolean>(false);
+  const [isMapFullscreen, setIsMapFullscreen] = useState<boolean>(false);
+
+  // Live Main Balance & User Profile Photo synced from users/{uid}
+  const [liveUserBalance, setLiveUserBalance] = useState<number>(
+    Number(user.balance !== undefined ? user.balance : user.mainBalance) || 0
+  );
+  const [liveUserPhoto, setLiveUserPhoto] = useState<string>(
+    String(user.photoURL || user.photoUrl || user.profilePic || user.img || user.avatar || '').trim()
+  );
+  const [liveUserDoc, setLiveUserDoc] = useState<Record<string, any> | null>(null);
+  const [myLatestApplication, setMyLatestApplication] = useState<any | null>(null);
+
+  useEffect(() => {
+    const fallbackBal = Number(user.balance !== undefined ? user.balance : user.mainBalance) || 0;
+    setLiveUserBalance(fallbackBal);
+  }, [user.balance, user.mainBalance]);
+
+  useEffect(() => {
+    const p = String(user.photoURL || user.photoUrl || user.profilePic || user.img || user.avatar || '').trim();
+    if (p) setLiveUserPhoto(p);
+  }, [user.photoURL, user.photoUrl, user.profilePic, user.img, user.avatar]);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    const unsubUser = onSnapshot(
+      doc(db, 'users', user.uid),
+      (snap) => {
+        if (snap.exists()) {
+          const d = snap.data() || {};
+          setLiveUserDoc(d);
+          const bal = Number(d.balance !== undefined ? d.balance : d.mainBalance);
+          if (!isNaN(bal)) setLiveUserBalance(bal);
+          const photo = String(d.photoURL || d.photoUrl || d.profilePic || d.img || d.avatar || '').trim();
+          if (photo && !photo.includes('1534528741775-53994a69daeb')) {
+            setLiveUserPhoto(photo);
+          }
+          if (d.weeklySchedule && typeof d.weeklySchedule === 'object') {
+            setWeeklySchedule(normalizeWeeklySchedule(d.weeklySchedule));
+          }
+        }
+      },
+      () => {}
+    );
+
+    const qMyReqs = query(collection(db, 'agent_requests'), where('userId', '==', user.uid));
+    const unsubMyReqs = onSnapshot(
+      qMyReqs,
+      (snap) => {
+        if (snap.empty) {
+          setMyLatestApplication(null);
+          return;
+        }
+        const docsList = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        docsList.sort((a: any, b: any) => {
+          const scoreA = a.status === 'approved' ? 2 : a.status === 'pending' ? 1 : 0;
+          const scoreB = b.status === 'approved' ? 2 : b.status === 'pending' ? 1 : 0;
+          if (scoreA !== scoreB) return scoreB - scoreA;
+          const tA = a.createdAt?.seconds || 0;
+          const tB = b.createdAt?.seconds || 0;
+          return tB - tA;
+        });
+        setMyLatestApplication(docsList[0]);
+      },
+      () => {}
+    );
+
+    return () => {
+      unsubUser();
+      unsubMyReqs();
+    };
+  }, [user?.uid]);
 
   // Admin Config State for Manual vs Auto Location
   const [allowManualLocation, setAllowManualLocation] = useState<boolean>(
@@ -166,6 +344,29 @@ export default function AgentScreen({ user, onBack, appConfig }: AgentScreenProp
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
+  }, []);
+
+  // Automatically try detecting ordinary member's GPS on mount so distance & nearest agents show right away
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) return;
+    let cancelled = false;
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        if (cancelled) return;
+        setUserLocation({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+        });
+      },
+      () => {
+        // Silent failure on auto-mount; user can tap GPS button anytime
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+    );
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Privacy: Share My Location toggle
@@ -211,36 +412,84 @@ export default function AgentScreen({ user, onBack, appConfig }: AgentScreenProp
   const [closestAgent, setClosestAgent] = useState<Agent | null>(null);
   const [loadingApps, setLoadingApps] = useState<boolean>(false);
   const [userApplications, setUserApplications] = useState<any[]>([]);
-  const [showApplyForm, setShowApplyForm] = useState<boolean>(false);
+  const [weeklySchedule, setWeeklySchedule] = useState<AgentWeeklySchedule>(() => createDefaultWeeklySchedule());
+  const [isSavingSchedule, setIsSavingSchedule] = useState<boolean>(false);
+  const [scheduleSuccessMsg, setScheduleSuccessMsg] = useState<string>('');
+  const [scheduleErrorMsg, setScheduleErrorMsg] = useState<string>('');
 
   // Agent internal back handler
   useBackHandler(() => {
+    if (isMapFullscreen) { setIsMapFullscreen(false); return true; }
     if (reportingAgent) { setReportingAgent(null); return true; }
     if (showFilterDropdown) { setShowFilterDropdown(false); return true; }
-    if (showApplyForm) { setShowApplyForm(false); return true; }
     if (activeTab !== 'map') {
       setActiveTab('map');
       return true;
     }
     return false;
   }, true, 25);
+  const effectiveUserProfile = useMemo(
+    () => ({ ...user, ...(liveUserDoc || {}) } as Record<string, any>),
+    [user, liveUserDoc]
+  );
+
+  const samityEligibility = useMemo(
+    () => evaluateSamityFreeAgentEligibility(effectiveUserProfile),
+    [effectiveUserProfile]
+  );
+  const isSamityInvestorFree = samityEligibility.isFreeEligible;
+  const isSamityMemberAccount = samityEligibility.isSamityTierMember;
+  const effectiveApplicationFee = isSamityInvestorFree ? 0 : AGENT_APPLICATION_FEE;
+
+  const existingProfileNid = String(
+    effectiveUserProfile.nid || effectiveUserProfile.nidNumber || effectiveUserProfile.birthReg || ''
+  ).trim();
+  const existingProfileNominee =
+    Array.isArray(effectiveUserProfile.nominees) && effectiveUserProfile.nominees.length > 0
+      ? effectiveUserProfile.nominees[0]
+      : effectiveUserProfile.nomineeName
+        ? {
+            name: effectiveUserProfile.nomineeName,
+            relation: effectiveUserProfile.nomineeRelation || '',
+            phone: effectiveUserProfile.nomineePhone || '',
+          }
+        : null;
+  const hasCompleteSamityAutoInfo = Boolean(
+    isSamityMemberAccount &&
+      existingProfileNid &&
+      existingProfileNominee?.name &&
+      existingProfileNominee?.phone
+  );
+
   const [successMessage, setSuccessMessage] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const [fullName, setFullName] = useState<string>('');
-  const [phoneNumber, setPhoneNumber] = useState<string>('');
-  const [emailAddress, setEmailAddress] = useState<string>('');
-  const [district, setDistrict] = useState<string>('');
-  const [areaName, setAreaName] = useState<string>('');
-  const [experience, setExperience] = useState<string>('');
+  const [fullName, setFullName] = useState<string>(user.name || '');
+  const [phoneNumber, setPhoneNumber] = useState<string>(user.phone || '');
+  const [district, setDistrict] = useState<string>(user.district || '');
+  const [areaName, setAreaName] = useState<string>(user.thana || '');
+  const [experience, setExperience] = useState<string>('নেই');
   const [whatsNumber, setWhatsNumber] = useState<string>('');
-  const [motivation, setMotivation] = useState<string>('');
+  const [agentNid, setAgentNid] = useState<string>(existingProfileNid);
+  const [agentNomineeName, setAgentNomineeName] = useState<string>(existingProfileNominee?.name || '');
+  const [agentNomineeRelation, setAgentNomineeRelation] = useState<string>(existingProfileNominee?.relation || '');
+  const [agentNomineePhone, setAgentNomineePhone] = useState<string>(existingProfileNominee?.phone || '');
   const [isFetchingAddress, setIsFetchingAddress] = useState<boolean>(false);
   const [applyLat, setApplyLat] = useState<number | null>(null);
   const [applyLng, setApplyLng] = useState<number | null>(null);
   const [shopMapLink, setShopMapLink] = useState<string>('');
   const [locationNumber, setLocationNumber] = useState<string>('');
   const [writtenLocation, setWrittenLocation] = useState<string>('');
+
+  // Keep profile name, phone, and Samity NID/Nominee auto-synced from user profile
+  useEffect(() => {
+    if (user.name) setFullName(user.name);
+    if (user.phone) setPhoneNumber(user.phone);
+    if (existingProfileNid) setAgentNid((prev) => prev || existingProfileNid);
+    if (existingProfileNominee?.name) setAgentNomineeName((prev) => prev || existingProfileNominee.name);
+    if (existingProfileNominee?.relation) setAgentNomineeRelation((prev) => prev || existingProfileNominee.relation || '');
+    if (existingProfileNominee?.phone) setAgentNomineePhone((prev) => prev || existingProfileNominee.phone || '');
+  }, [user.name, user.phone, existingProfileNid, existingProfileNominee?.name, existingProfileNominee?.relation, existingProfileNominee?.phone]);
 
   // Multi-Language translations dictionary
   const trans = {
@@ -904,6 +1153,42 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
       const agentsMap = new globalThis.Map<string, Agent>();
       const nonApprovedKeys = new Set<string>();
       const explicitlyApprovedKeys = new Set<string>();
+      const userPhotoLookup = new globalThis.Map<string, string>();
+      const userScheduleLookup = new globalThis.Map<
+        string,
+        { weeklySchedule: AgentWeeklySchedule; openingHours?: string; weeklyOffDays?: string[] }
+      >();
+
+      // Build live user photo & schedule lookup from 'users' so every agent pin reflects their latest info
+      try {
+        const usersSnap = await getDocs(collection(db, 'users'));
+        usersSnap.forEach((uDoc) => {
+          const ud = uDoc.data() || {};
+          const rawPic = String(
+            ud.photoURL || ud.photoUrl || ud.profilePic || ud.img || ud.avatar || ''
+          ).trim();
+          if (rawPic && rawPic.length > 5 && !rawPic.includes('1534528741775-53994a69daeb')) {
+            userPhotoLookup.set(uDoc.id, rawPic);
+            if (ud.uid) userPhotoLookup.set(String(ud.uid), rawPic);
+            if (ud.phone) userPhotoLookup.set(String(ud.phone).trim(), rawPic);
+          }
+          if (ud.weeklySchedule && typeof ud.weeklySchedule === 'object') {
+            const normalizedSched = normalizeWeeklySchedule(ud.weeklySchedule);
+            const schedEntry = {
+              weeklySchedule: normalizedSched,
+              openingHours: ud.openingHours || buildOpeningHoursSummary(normalizedSched),
+              weeklyOffDays: Array.isArray(ud.weeklyOffDays)
+                ? ud.weeklyOffDays
+                : getWeeklyOffDays(normalizedSched),
+            };
+            userScheduleLookup.set(uDoc.id, schedEntry);
+            if (ud.uid) userScheduleLookup.set(String(ud.uid), schedEntry);
+            if (ud.phone) userScheduleLookup.set(String(ud.phone).trim(), schedEntry);
+          }
+        });
+      } catch (e) {
+        console.warn('Could not preload user photos for agents:', e);
+      }
 
       const processDataAndAdd = (docId: string, data: any) => {
         if (!data) return;
@@ -929,7 +1214,14 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
           return;
         }
 
-        const avatar = resolveAgentAvatar(data, name);
+        const matchedUserPhoto =
+          (data.userId && userPhotoLookup.get(String(data.userId))) ||
+          (data.uid && userPhotoLookup.get(String(data.uid))) ||
+          userPhotoLookup.get(docId) ||
+          (phone && userPhotoLookup.get(phone.trim())) ||
+          '';
+
+        const avatar = matchedUserPhoto || resolveAgentAvatar(data, name);
         const shopMapLink = data.shopMapLink || data.manualMapLink || data.mapLink || data.googleMapUrl || data.locationUrl || data.shopLocationLink || '';
         const locationNumber = data.locationNumber || data.shopNumber || data.locationCode || '';
 
@@ -973,13 +1265,35 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
           String(data.role || '').includes('অফিসিয়াল সেন্টার') ||
           data.isOfficialCenter === true;
         const badgeLabel = data.badgeLabel || (isOfficialCenter ? 'অফিসিয়াল সেন্টার' : `এজেন্ট পয়েন্ট • ${agentCode}`);
-        const openingHours = data.openingHours || data.hours || data.schedule || 'সকাল ৯:০০ - রাত ১০:০০';
+        const matchedUserSchedule =
+          (data.userId && userScheduleLookup.get(String(data.userId))) ||
+          (data.uid && userScheduleLookup.get(String(data.uid))) ||
+          userScheduleLookup.get(docId) ||
+          (phone && userScheduleLookup.get(phone.trim())) ||
+          null;
+        const resolvedWeeklySchedule = data.weeklySchedule
+          ? normalizeWeeklySchedule(data.weeklySchedule)
+          : matchedUserSchedule?.weeklySchedule;
+        const resolvedWeeklyOffDays = resolvedWeeklySchedule
+          ? getWeeklyOffDays(resolvedWeeklySchedule)
+          : Array.isArray(data.weeklyOffDays)
+            ? data.weeklyOffDays
+            : undefined;
+        const openingHours =
+          (resolvedWeeklySchedule ? buildOpeningHoursSummary(resolvedWeeklySchedule) : '') ||
+          data.openingHours ||
+          matchedUserSchedule?.openingHours ||
+          data.hours ||
+          data.schedule ||
+          'সকাল ৯:০০ - রাত ১০:০০';
 
         const agentObj: Agent = {
           id: docId,
           agentCode,
           badgeLabel,
           openingHours,
+          weeklySchedule: resolvedWeeklySchedule,
+          weeklyOffDays: resolvedWeeklyOffDays,
           name: name || 'এজেন্ট সদস্য',
           role: data.role || data.agentRole || 'Approved Agent',
           country: meta.country,
@@ -1022,6 +1336,11 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
           }
           if (avatar && !avatar.includes('ui-avatars.com')) {
             existing.img = avatar;
+          }
+          if (resolvedWeeklySchedule && !existing.weeklySchedule) {
+            existing.weeklySchedule = resolvedWeeklySchedule;
+            existing.weeklyOffDays = resolvedWeeklyOffDays;
+            existing.openingHours = openingHours;
           }
           if (!existing.district && (data.district || data.division)) existing.district = data.district || data.division;
           if (!existing.thana && (data.thana || data.areaName || data.area)) existing.thana = data.thana || data.areaName || data.area;
@@ -1140,7 +1459,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
     setLoadingApps(true);
     try {
       const qApps =
-        user.role === 'admin' || user.role === 'sub_admin'
+        isStandaloneAdminRoute() && (user.role === 'admin' || user.role === 'sub_admin')
           ? collection(db, 'agent_requests')
           : query(collection(db, 'agent_requests'), where('userId', '==', user.uid));
       const snap = await getDocs(qApps);
@@ -1190,9 +1509,23 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
       });
 
       // 2. Save approved agent with permanent geocoded coordinates to 'agents' & 'bap_agents'
+      let resolvedPhoto = app.img || app.photoURL || app.profilePic || '';
+      if ((!resolvedPhoto || resolvedPhoto.includes('1534528741775-53994a69daeb')) && app.userId) {
+        try {
+          const uSnap = await getDoc(doc(db, 'users', app.userId));
+          if (uSnap.exists()) {
+            const ud = uSnap.data() || {};
+            resolvedPhoto = ud.photoURL || ud.photoUrl || ud.profilePic || ud.img || ud.avatar || resolvedPhoto;
+          }
+        } catch {
+          // ignore user photo lookup fallback
+        }
+      }
+
       const newAgentId = app.userId || 'agent_' + app.id;
       const newAgentObj = {
         id: newAgentId,
+        userId: app.userId || newAgentId,
         name: app.userName || app.fullName || 'অনুমোদিত এজেন্ট',
         role: app.role || 'Approved Agent',
         country: app.country || 'Bangladesh',
@@ -1207,7 +1540,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
         address: resolvedAddress,
         shopMapLink: app.shopMapLink || '',
         locationNumber: app.locationNumber || '',
-        img: resolveAgentAvatar(app, app.userName),
+        img: resolveAgentAvatar({ ...app, img: resolvedPhoto }, app.userName),
         district: app.district || '',
         thana: app.thana || app.area || '',
         postOffice: app.postOffice || '',
@@ -1223,12 +1556,38 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
       await setDoc(doc(db, 'agents', newAgentId), newAgentObj, { merge: true });
       await setDoc(doc(db, 'bap_agents', newAgentId), newAgentObj, { merge: true }).catch(() => {});
 
+      if (app.userId) {
+        await updateDoc(doc(db, 'users', app.userId), { role: 'agent' }).catch(() => {});
+        try {
+          const pendingFeeQ = query(
+            collection(db, 'transactions'),
+            where('userId', '==', app.userId),
+            where('category', '==', 'agent_fee'),
+            where('status', '==', 'pending')
+          );
+          const pendingFeeSnap = await getDocs(pendingFeeQ);
+          await Promise.all(
+            pendingFeeSnap.docs.map((d) =>
+              updateDoc(doc(db, 'transactions', d.id), {
+                status: 'completed',
+                isApproved: true,
+                reviewStatus: 'approved',
+                updatedAt: new Date().toISOString(),
+              })
+            )
+          );
+        } catch {
+          // ignore fee tx completion warning
+        }
+      }
+
       // 3. Dispatch dynamic notification to user's inbox
       const noticeId = 'notice_' + Date.now();
       await setDoc(doc(db, 'user_notifications', noticeId), {
         id: noticeId,
         userId: app.userId,
         title: '🛡️ এজেন্ট অনুমোদন বিজ্ঞপ্তি',
+        message: `অভিনন্দন ${app.userName}! আপনার কো-অপারেটিভ এজেন্ট হওয়ার আবেদনটি সফলভাবে অনুমোদিত হয়েছে। এখন থেকে আপনি আমাদের অফিসিয়াল এজেন্ট ম্যাপে যুক্ত হয়েছেন।`,
         content: `অভিনন্দন ${app.userName}! আপনার কো-অপারেটিভ এজেন্ট হওয়ার আবেদনটি সফলভাবে অনুমোদিত হয়েছে। এখন থেকে আপনি আমাদের অফিসিয়াল রিপ্রেজেন্টেটিভ ম্যাপে যুক্ত হয়েছেন।`,
         createdAt: new Date().toISOString(),
         read: false,
@@ -1244,26 +1603,121 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
   const handleRejectApplication = async (app: any) => {
     const reason = window.prompt('আবেদনটি বাতিল করার কারণ লিখুন (ঐচ্ছিক):');
     if (reason === null) return; // cancelled
+    const finalReason = reason.trim() || 'তথ্য অসম্পূর্ণ বা ত্রুটিপূর্ণ';
     try {
-      // 1. Update request status to rejected
-      await updateDoc(doc(db, 'agent_requests', app.id), {
-        status: 'rejected',
-        processedAt: serverTimestamp(),
-        rejectReason: reason || 'তথ্য অসম্পূর্ণ বা ক্রুটিপূর্ণ'
+      const feeToRefund =
+        !app.agentFeeRefunded && Number(app.agentApplicationFeeAmount) > 0
+          ? Number(app.agentApplicationFeeAmount)
+          : 0;
+      const nowIso = new Date().toISOString();
+
+      await runTransaction(db, async (transaction) => {
+        const reqRef = doc(db, 'agent_requests', app.id);
+        const freshReqSnap = await transaction.get(reqRef);
+        const freshReq = freshReqSnap.exists() ? freshReqSnap.data() : app;
+
+        const actualRefund =
+          !freshReq?.agentFeeRefunded && Number(freshReq?.agentApplicationFeeAmount) > 0
+            ? Number(freshReq.agentApplicationFeeAmount)
+            : feeToRefund;
+
+        if (actualRefund > 0 && app.userId) {
+          const uRef = doc(db, 'users', app.userId);
+          const uSnap = await transaction.get(uRef);
+          if (uSnap.exists()) {
+            const ud = uSnap.data() || {};
+            const curBal = Number(ud.balance !== undefined ? ud.balance : ud.mainBalance) || 0;
+            const nextBal = curBal + actualRefund;
+            transaction.update(uRef, {
+              balance: nextBal,
+              mainBalance: nextBal,
+              updatedAt: nowIso,
+            });
+
+            const refundTxRef = doc(collection(db, 'transactions'));
+            transaction.set(refundTxRef, {
+              id: refundTxRef.id,
+              userId: app.userId,
+              userName: app.userName || ud.name || '',
+              userPhone: app.phone || ud.phone || '',
+              type: 'agent_fee_refund',
+              typeLabel: `এজেন্ট আবেদন বাতিল - ৳${actualRefund} ফি রিফান্ড`,
+              category: 'agent_fee_refund',
+              amount: actualRefund,
+              beforeBalance: curBal,
+              afterBalance: nextBal,
+              postBalance: nextBal,
+              status: 'completed',
+              isApproved: true,
+              paymentMethod: 'মেইন ব্যালেন্স রিফান্ড',
+              description: `এজেন্ট আবেদন বাতিল হওয়ায় ৳${actualRefund} টাকা আপনার মেইন ব্যালেন্সে ফেরত দেওয়া হয়েছে। কারণ: ${finalReason}`,
+              createdAt: nowIso,
+              date: new Date().toLocaleDateString('en-GB'),
+              time: new Date().toLocaleTimeString(),
+            });
+
+            const refundLedgerRef = doc(collection(db, 'wallet_ledger'));
+            transaction.set(refundLedgerRef, {
+              id: refundLedgerRef.id,
+              userId: app.userId,
+              type: 'CREDIT',
+              channel: 'agent_application_refund',
+              category: 'agent_fee',
+              amount: actualRefund,
+              beforeBalance: curBal,
+              afterBalance: nextBal,
+              description: `Agent application rejected refund (${finalReason})`,
+              createdAt: nowIso,
+            });
+          }
+        }
+
+        transaction.update(reqRef, {
+          status: 'rejected',
+          processedAt: serverTimestamp(),
+          rejectReason: finalReason,
+          agentFeeRefunded: actualRefund > 0 ? true : Boolean(freshReq?.agentFeeRefunded),
+          agentFeeRefundedAt: actualRefund > 0 ? nowIso : freshReq?.agentFeeRefundedAt || null,
+        });
       });
+
+      if (app.userId) {
+        try {
+          const pendingFeeQ = query(
+            collection(db, 'transactions'),
+            where('userId', '==', app.userId),
+            where('category', '==', 'agent_fee'),
+            where('status', '==', 'pending')
+          );
+          const pendingFeeSnap = await getDocs(pendingFeeQ);
+          await Promise.all(
+            pendingFeeSnap.docs.map((d) =>
+              updateDoc(doc(db, 'transactions', d.id), {
+                status: 'rejected',
+                isApproved: false,
+                rejectReason: finalReason,
+                updatedAt: nowIso,
+              })
+            )
+          );
+        } catch {
+          // ignore pending tx update failure
+        }
+      }
 
       // 2. Dispatch dynamic notification to user's inbox
       const noticeId = 'notice_' + Date.now();
+      const refundText = feeToRefund > 0 ? ` আবেদন ফি ৳${feeToRefund} আপনার মেইন ব্যালেন্সে ফেরত দেওয়া হয়েছে।` : '';
       await setDoc(doc(db, 'user_notifications', noticeId), {
         id: noticeId,
         userId: app.userId,
         title: '❌ এজেন্ট আবেদন বাতিল',
-        content: `দুঃখিত ${app.userName}, আপনার এজেন্ট হওয়ার আবেদনটি বাতিল করা হয়েছে। কারণঃ ${reason || 'তথ্য অসম্পূর্ণ বা ক্রুটিপূর্ণ'}`,
-        createdAt: new Date().toISOString(),
+        message: `দুঃখিত ${app.userName}, আপনার এজেন্ট হওয়ার আবেদনটি বাতিল করা হয়েছে। কারণঃ ${finalReason}।${refundText}`,
+        content: `দুঃখিত ${app.userName}, আপনার এজেন্ট হওয়ার আবেদনটি বাতিল করা হয়েছে। কারণঃ ${finalReason}।${refundText}`,
+        createdAt: nowIso,
         read: false
       });
 
-      console.log('আবেদনপত্রটি বাতিল করা হয়েছে!');
       fetchMyApplications();
     } catch (err: any) {
       console.error('ত্রুটিঃ ' + err.message);
@@ -1453,11 +1907,50 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
     );
   };
 
-  // Handle application submission
+  // Handle simplified application submission (with ৳100 Main Balance atomic fee deduction & user photo attachment)
   const handleApplySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!phoneNumber || !fullName || !district || !areaName) {
-      setErrorMessage('অনুগ্রহ করে সঠিক তথ্য দিয়ে ফরমটি পূর্ণাঙ্গ রূপ দিন।');
+    const resolvedName = (fullName || user.name || '').trim();
+    const resolvedPhone = (phoneNumber || user.phone || '').trim();
+    const resolvedWhatsapp = whatsNumber.trim();
+    const resolvedShopAddress = writtenLocation.trim();
+    const resolvedMapSerial = locationNumber.trim();
+    const resolvedNid = (agentNid || existingProfileNid).trim();
+    const resolvedNomName = (agentNomineeName || existingProfileNominee?.name || '').trim();
+    const resolvedNomRelation = (agentNomineeRelation || existingProfileNominee?.relation || '').trim();
+    const resolvedNomPhone = (agentNomineePhone || existingProfileNominee?.phone || '').trim();
+
+    if (!resolvedName || !resolvedPhone) {
+      setErrorMessage('প্রোফাইলের নাম ও মোবাইল নম্বর পাওয়া যায়নি।');
+      return;
+    }
+    if (!resolvedWhatsapp || resolvedWhatsapp.replace(/\D/g, '').length < 7) {
+      setErrorMessage('অনুগ্রহ করে আপনার সচল হোয়াটসঅ্যাপ নম্বর লিখুন।');
+      return;
+    }
+    if (!resolvedShopAddress) {
+      setErrorMessage('অনুগ্রহ করে আপনার দোকান বা ব্যবসার ঠিকানা লিখুন।');
+      return;
+    }
+    if (!resolvedMapSerial) {
+      setErrorMessage('অনুগ্রহ করে গুগল ম্যাপ থেকে কপি করা সিরিয়াল নম্বর / কোঅর্ডিনেট বা লিংক বসান।');
+      return;
+    }
+    if (!resolvedNid || resolvedNid.length < 6) {
+      setErrorMessage('এজেন্ট হওয়ার জন্য আপনার সঠিক এনআইডি (NID) কার্ড নম্বর প্রদান করা বাধ্যতামূলক।');
+      return;
+    }
+    if (!hasCompleteSamityAutoInfo) {
+      if (!resolvedNomName || !resolvedNomRelation || !resolvedNomPhone || resolvedNomPhone.replace(/\D/g, '').length < 7) {
+        setErrorMessage('নমিনির নাম, সম্পর্ক এবং সচল মোবাইল নম্বর প্রদান করা বাধ্যতামূলক।');
+        return;
+      }
+    }
+
+    if (effectiveApplicationFee > 0 && liveUserBalance < effectiveApplicationFee) {
+      setErrorMessage(
+        `⚠️ সাধারণ সদস্যদের এজেন্ট আবেদন করার জন্য মেইন ব্যালেন্সে কমপক্ষে ৳${effectiveApplicationFee} টাকা থাকতে হবে! (বর্তমান মেইন ব্যালেন্স: ৳${liveUserBalance.toLocaleString('bn-BD')})। আগে মেইন ব্যালেন্সে টাকা অ্যাড মানি করুন অথবা সমবায়/ইনভেস্টর সদস্য হলে প্রোফাইল আপডেট করুন।`
+      );
       return;
     }
 
@@ -1466,92 +1959,274 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
     setSuccessMessage('');
 
     try {
-      // If shopMapLink was entered, try to extract coordinates if applyLat is not set
-      let finalLat = applyLat || (userLocation ? userLocation.lat : 23.8103);
-      let finalLng = applyLng || (userLocation ? userLocation.lng : 90.4125);
+      let finalLat = applyLat;
+      let finalLng = applyLng;
+      let resolvedDistrict = district || user.district || '';
+      let resolvedArea = areaName || user.thana || '';
 
-      if (shopMapLink && (!applyLat || !applyLng)) {
-        const parsed = parseCoordinatesFromInput(shopMapLink);
-        if (parsed) {
-          finalLat = parsed.lat;
-          finalLng = parsed.lng;
+      // 1. Parse coordinates directly from pasted Google Maps serial/coordinates or link
+      const directCoords = parseCoordinatesFromInput(resolvedMapSerial);
+      if (directCoords) {
+        finalLat = directCoords.lat;
+        finalLng = directCoords.lng;
+      } else {
+        // 2. Fallback: attempt geocoding from map serial/link or shop address
+        const geoFromSerial = await geocodeAddressWithGoogle(resolvedMapSerial);
+        if (geoFromSerial) {
+          finalLat = geoFromSerial.lat;
+          finalLng = geoFromSerial.lng;
+        } else {
+          const geoFromAddr = await geocodeAddressWithGoogle(resolvedShopAddress);
+          if (geoFromAddr) {
+            finalLat = geoFromAddr.lat;
+            finalLng = geoFromAddr.lng;
+          }
         }
       }
 
-      const newRequest = {
-        userId: user.uid,
-        userName: fullName,
-        phone: phoneNumber,
-        email: emailAddress,
-        district,
-        area: areaName,
-        experience,
-        whatsapp: whatsNumber || phoneNumber,
-        motivation: motivation || 'কোনো বিবরণ দেওয়া হয়নি',
-        shopMapLink: shopMapLink || '',
-        writtenLocation: writtenLocation || '',
-        locationNumber: locationNumber || '',
-        status: 'pending', // pending, reviewed, approved, rejected
-        createdAt: serverTimestamp(),
-        appliedAtStr: new Date().toLocaleString('en-US'),
-        lat: finalLat,
-        lng: finalLng,
-        realLat: finalLat,
-        realLng: finalLng,
-        hasRealGPS: true
-      };
+      if (finalLat && finalLng && (!resolvedDistrict || !resolvedArea)) {
+        const reverseInfo = await fetchAddressFromCoords(finalLat, finalLng).catch(() => null);
+        if (reverseInfo) {
+          resolvedDistrict = resolvedDistrict || reverseInfo.district;
+          resolvedArea = resolvedArea || reverseInfo.area;
+        }
+      }
 
-      await addDoc(collection(db, 'agent_requests'), newRequest);
+      const finalLatNum = finalLat || (userLocation ? userLocation.lat : 23.8103);
+      const finalLngNum = finalLng || (userLocation ? userLocation.lng : 90.4125);
+      const addressParts = resolvedShopAddress.split(',').map((s) => s.trim()).filter(Boolean);
+      const fallbackArea = resolvedArea || addressParts[0] || resolvedShopAddress;
+      const fallbackDistrict = resolvedDistrict || addressParts[addressParts.length - 1] || 'Bangladesh';
+
+      const nowIso = new Date().toISOString();
+      const userRef = doc(db, 'users', user.uid);
+      const reqRef = doc(collection(db, 'agent_requests'));
+      const txDocRef = doc(collection(db, 'transactions'));
+      const ledgerRef = doc(collection(db, 'wallet_ledger'));
+      const userNotifRef = doc(collection(db, 'user_notifications'));
+
+      let chargedFeeAmount = 0;
+
+      await runTransaction(db, async (transaction) => {
+        const latestUserSnap = await transaction.get(userRef);
+        const latestUserData = latestUserSnap.exists() ? latestUserSnap.data() : null;
+
+        const mergedDbProfile = { ...effectiveUserProfile, ...(latestUserData || {}) };
+        const serverEligibility = evaluateSamityFreeAgentEligibility(mergedDbProfile);
+        const serverIsSamityInvestor = serverEligibility.isFreeEligible;
+
+        const txFeeAmount = serverIsSamityInvestor ? 0 : AGENT_APPLICATION_FEE;
+        chargedFeeAmount = txFeeAmount;
+
+        const currentBal = latestUserData
+          ? (Number(latestUserData.balance !== undefined ? latestUserData.balance : latestUserData.mainBalance) || 0)
+          : liveUserBalance;
+
+        if (txFeeAmount > 0 && currentBal < txFeeAmount) {
+          throw new Error(
+            `⚠️ আপনার মেইন ব্যালেন্সে এজেন্ট আবেদন ফি বাবদ ৳${txFeeAmount} টাকা নেই! (বর্তমান মেইন ব্যালেন্স: ৳${currentBal.toLocaleString('bn-BD')})।`
+          );
+        }
+
+        const newMainBalance = currentBal - txFeeAmount;
+        const profilePhotoFromDb = latestUserData
+          ? String(
+              latestUserData.photoURL ||
+                latestUserData.photoUrl ||
+                latestUserData.profilePic ||
+                latestUserData.img ||
+                latestUserData.avatar ||
+                ''
+            ).trim()
+          : '';
+        const cleanProfilePhoto =
+          (profilePhotoFromDb && !profilePhotoFromDb.includes('1534528741775-53994a69daeb')
+            ? profilePhotoFromDb
+            : '') ||
+          (liveUserPhoto && !liveUserPhoto.includes('1534528741775-53994a69daeb')
+            ? liveUserPhoto
+            : '');
+
+        const generatedAgentSerial = `AG-${(String(resolvedPhone).replace(/\D/g, '').slice(-4) || '2041').padStart(4, '2')}`;
+
+        const newRequest = {
+          id: reqRef.id,
+          userId: user.uid,
+          userName: resolvedName,
+          phone: resolvedPhone,
+          email: user.email || '',
+          img: cleanProfilePhoto,
+          photoURL: cleanProfilePhoto,
+          agentCode: generatedAgentSerial,
+          district: fallbackDistrict,
+          area: fallbackArea,
+          thana: fallbackArea,
+          postOffice: addressParts[0] || '',
+          experience: experience || 'নেই',
+          whatsapp: resolvedWhatsapp,
+          whatsNumber: resolvedWhatsapp,
+          shopMapLink: resolvedMapSerial,
+          writtenLocation: resolvedShopAddress,
+          address: resolvedShopAddress,
+          locationNumber: resolvedMapSerial,
+          nid: resolvedNid,
+          nidNumber: resolvedNid,
+          nomineeName: resolvedNomName,
+          nomineeRelation: resolvedNomRelation,
+          nomineePhone: resolvedNomPhone,
+          applicantType: serverIsSamityInvestor ? 'samity_investor' : 'general',
+          isSamityMember: serverIsSamityInvestor || isSamityMemberAccount,
+          agentApplicationFeeAmount: txFeeAmount,
+          agentFeePaid: txFeeAmount > 0,
+          agentFeeWaived: txFeeAmount === 0,
+          feeWaivedReason: txFeeAmount === 0 ? 'samity_investor_free' : '',
+          agentFeeRefunded: false,
+          weeklySchedule,
+          weeklyOffDays: getWeeklyOffDays(weeklySchedule),
+          openingHours: buildOpeningHoursSummary(weeklySchedule),
+          status: 'pending',
+          createdAt: serverTimestamp(),
+          appliedAtStr: new Date().toLocaleString('en-US'),
+          lat: finalLatNum,
+          lng: finalLngNum,
+          realLat: finalLatNum,
+          realLng: finalLngNum,
+          hasRealGPS: Boolean(finalLat && finalLng),
+        };
+
+        const userUpdate: Record<string, any> = {
+          district: fallbackDistrict,
+          thana: fallbackArea,
+          area: fallbackArea,
+          shopMapLink: resolvedMapSerial,
+          locationNumber: resolvedMapSerial,
+          writtenLocation: resolvedShopAddress,
+          whatsapp: resolvedWhatsapp,
+          weeklySchedule,
+          weeklyOffDays: getWeeklyOffDays(weeklySchedule),
+          openingHours: buildOpeningHoursSummary(weeklySchedule),
+          realLat: finalLatNum,
+          realLng: finalLngNum,
+          hasRealGPS: Boolean(finalLat && finalLng),
+          updatedAt: nowIso,
+        };
+        if (txFeeAmount > 0) {
+          userUpdate.balance = newMainBalance;
+          userUpdate.mainBalance = newMainBalance;
+        }
+        if (!existingProfileNid && resolvedNid) {
+          userUpdate.nid = resolvedNid;
+          userUpdate.nidNumber = resolvedNid;
+        }
+        if (!existingProfileNominee?.name && resolvedNomName) {
+          userUpdate.nomineeName = resolvedNomName;
+          userUpdate.nomineeRelation = resolvedNomRelation;
+          userUpdate.nomineePhone = resolvedNomPhone;
+          userUpdate.nominees = [
+            {
+              id: 'nom_1',
+              name: resolvedNomName,
+              relation: resolvedNomRelation,
+              phone: resolvedNomPhone,
+            },
+          ];
+        }
+
+        transaction.set(reqRef, newRequest);
+        transaction.set(userRef, userUpdate, { merge: true });
+
+        if (txFeeAmount > 0) {
+          transaction.set(txDocRef, {
+            id: txDocRef.id,
+            userId: user.uid,
+            userName: resolvedName,
+            userPhone: resolvedPhone,
+            memberId: (user as any).memberId || '',
+            type: 'agent_fee',
+            typeLabel: 'BNB এজেন্ট আবেদন ফি (৳১০০ কর্তন)',
+            category: 'agent_fee',
+            amount: txFeeAmount,
+            totalDeducted: txFeeAmount,
+            beforeBalance: currentBal,
+            afterBalance: newMainBalance,
+            postBalance: newMainBalance,
+            status: 'pending',
+            isApproved: false,
+            paymentMethod: 'মেইন ব্যালেন্স কর্তন',
+            description: `BNB এজেন্ট হিসেবে আবেদনের ফি বাবদ ৳${txFeeAmount} টাকা আপনার মেইন ব্যালেন্স থেকে কেটে নেওয়া হয়েছে। এডমিন বাতিল করলে টাকা ফেরত পাবেন।`,
+            createdAt: nowIso,
+            date: new Date().toLocaleDateString('en-GB'),
+            time: new Date().toLocaleTimeString(),
+            receiptNo: `REC-AGT-${Date.now()}`,
+          });
+          transaction.set(ledgerRef, {
+            id: ledgerRef.id,
+            userId: user.uid,
+            type: 'DEBIT',
+            channel: 'agent_application',
+            category: 'agent_fee',
+            amount: txFeeAmount,
+            beforeBalance: currentBal,
+            afterBalance: newMainBalance,
+            description: 'BNB Agent Application Fee (৳100)',
+            createdAt: nowIso,
+          });
+        }
+
+        transaction.set(userNotifRef, {
+          id: userNotifRef.id,
+          userId: user.uid,
+          title:
+            txFeeAmount === 0
+              ? '🤝 ফ্রি এজেন্ট আবেদন জমা (সমবায়/ইনভেস্টর সুবিধা)'
+              : '🤝 এজেন্ট আবেদন জমা ও ৳১০০ ফি কর্তন',
+          message:
+            txFeeAmount === 0
+              ? 'আপনার সমবায় সমিতি / ইনভেস্টর প্রোফাইলের বিশেষ সুবিধায় কোনো ফি ছাড়াই (৳০ ফ্রি) BNB এজেন্ট আবেদন সফলভাবে জমা হয়েছে! এডমিন রিভিউয়ের পর ম্যাপে যুক্ত হবেন।'
+              : `আপনার BNB এজেন্ট আবেদনটি সফলভাবে জমা হয়েছে এবং আবেদন ফি বাবদ ৳${txFeeAmount} টাকা মেইন ব্যালেন্স থেকে কাটা হয়েছে। এডমিন রিভিউয়ের পর ম্যাপে যুক্ত হবেন।`,
+          type: 'agent_applied',
+          read: false,
+          createdAt: nowIso,
+        });
+      });
+
       addDoc(collection(db, 'admin_notifications'), {
-        title: '🤝 নতুন BNB এজেন্ট ও প্রতিনিধি আবেদন',
-        message: `${user.name || 'সদস্য'} (${(user as any).memberId || 'N/A'}) এজেন্ট হিসেবে আবেদন করেছেন।`,
+        title:
+          chargedFeeAmount === 0
+            ? '🤝 নতুন BNB এজেন্ট আবেদন (সমবায়/ইনভেস্টর • ফ্রি)'
+            : '🤝 নতুন BNB এজেন্ট ও প্রতিনিধি আবেদন (৳১০০ ফি পেইড)',
+        message:
+          chargedFeeAmount === 0
+            ? `${resolvedName} (${(user as any).memberId || resolvedPhone}) সমবায়/ইনভেস্টর সদস্য হিসেবে ফ্রিতে (৳০) এজেন্ট আবেদন করেছেন।`
+            : `${resolvedName} (${(user as any).memberId || resolvedPhone}) এজেন্ট হিসেবে আবেদন করেছেন (৳${chargedFeeAmount} ফি কর্তন)।`,
         userId: user.uid,
-        userName: user.name || '',
+        userName: resolvedName,
         memberId: (user as any).memberId || '',
-        userPhone: user.phone || '',
+        userPhone: resolvedPhone,
         type: 'agent_application',
         read: false,
-        createdAt: new Date().toISOString()
-      }).catch(e => console.warn('Admin notif error:', e));
+        createdAt: nowIso,
+      }).catch((e) => console.warn('Admin notif error:', e));
 
-      // Also save into user profile so shop location link is immediately saved
-      if (user.uid) {
-        try {
-          await updateDoc(doc(db, 'users', user.uid), {
-            district,
-            thana: areaName,
-            area: areaName,
-            shopMapLink: shopMapLink || '',
-            realLat: finalLat,
-            realLng: finalLng,
-            hasRealGPS: true
-          });
-        } catch (e) {
-          console.error(e);
-        }
-      }
-      
-      setSuccessMessage('আপনার এজেন্ট হওয়ার আবেদনটি সফলভাবে বাংলাদেশ কো-অপারেティブ কেন্দ্রীয় সার্ভারে দাখিল করা হয়েছে! আমাদের টিম 3 কর্মদিবসের মধ্যে যোগাযোগ করবে।');
-      
-      // Clear fields
-      setDistrict('');
-      setAreaName('');
+      setSuccessMessage(
+        chargedFeeAmount === 0
+          ? 'অভিনন্দন! সমবায়/ইনভেস্টর সদস্য হওয়ায় কোনো টাকা ছাড়াই (৳০ ফ্রি) আপনার এজেন্ট আবেদনটি সফলভাবে জমা হয়েছে। এডমিন অনুমোদন দিলে ম্যাপে যুক্ত হয়ে যাবেন!'
+          : 'আপনার এজেন্ট আবেদনটি সফলভাবে জমা হয়েছে এবং মেইন ব্যালেন্স থেকে ৳১০০ আবেদন ফি কাটা হয়েছে! এডমিন যাচাই করে অনুমোদন দিলে ম্যাপে যুক্ত হয়ে যাবেন।'
+      );
+
       setWhatsNumber('');
-      setMotivation('');
       setShopMapLink('');
       setWrittenLocation('');
       setLocationNumber('');
       setApplyLat(null);
       setApplyLng(null);
 
-      // Redirect to feedback or "my application"
       setTimeout(() => {
         setActiveTab('my-applications');
         setSuccessMessage('');
-      }, 3500);
-
+      }, 3000);
     } catch (err: any) {
-      setErrorMessage('পদ্ধতিগত ত্রুটি: ' + err.message);
+      setErrorMessage(err?.message || 'পদ্ধতিগত ত্রুটি হয়েছে, আবার চেষ্টা করুন।');
     } finally {
       setIsSubmitting(false);
     }
@@ -1674,6 +2349,137 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
       setProfError('পদ্ধতিগত ত্রুটি: ' + err.message);
     } finally {
       setIsProfSubmitting(false);
+    }
+  };
+
+  // WhatsApp Business-Style Agent Operating Hours & Weekly Off-Day Handler
+  const updateDaySchedule = (dayKey: DayKey, patch: Partial<AgentWeeklySchedule[DayKey]>) => {
+    setWeeklySchedule((prev) => ({
+      ...prev,
+      [dayKey]: {
+        ...prev[dayKey],
+        ...patch,
+      },
+    }));
+    setScheduleSuccessMsg('');
+    setScheduleErrorMsg('');
+  };
+
+  const applyFirstOpenDayToAllOpenDays = () => {
+    const sourceDay =
+      WEEK_DAYS.find((d) => weeklySchedule[d.key]?.enabled)?.key || 'sat';
+    const template = weeklySchedule[sourceDay];
+    setWeeklySchedule((prev) => {
+      const next = { ...prev };
+      for (const { key } of WEEK_DAYS) {
+        if (next[key].enabled) {
+          next[key] = {
+            ...next[key],
+            slot1Start: template.slot1Start,
+            slot1End: template.slot1End,
+            hasSecondSlot: template.hasSecondSlot,
+            slot2Start: template.slot2Start,
+            slot2End: template.slot2End,
+          };
+        }
+      }
+      return next;
+    });
+    setScheduleSuccessMsg('সব খোলা দিনের সময়সূচি একসাথে আপডেট করা হয়েছে। সেভ করতে নিচের বাটনে চাপুন।');
+    setScheduleErrorMsg('');
+  };
+
+  const handleSaveAgentSchedule = async () => {
+    if (!user?.uid || isSavingSchedule) return;
+    setScheduleErrorMsg('');
+    setScheduleSuccessMsg('');
+
+    // Validate time slots for open days
+    for (const { key, labelBn } of WEEK_DAYS) {
+      const cfg = weeklySchedule[key];
+      if (!cfg.enabled) continue;
+      if (!cfg.slot1Start || !cfg.slot1End || cfg.slot1Start >= cfg.slot1End) {
+        setScheduleErrorMsg(`${labelBn}: ১ম শিফটের শুরুর সময় শেষের সময়ের আগে হতে হবে।`);
+        return;
+      }
+      if (cfg.hasSecondSlot) {
+        if (!cfg.slot2Start || !cfg.slot2End || cfg.slot2Start >= cfg.slot2End) {
+          setScheduleErrorMsg(`${labelBn}: ২য় শিফটের শুরুর সময় শেষের সময়ের আগে হতে হবে।`);
+          return;
+        }
+        if (cfg.slot2Start <= cfg.slot1End) {
+          setScheduleErrorMsg(`${labelBn}: বিরতির পর ২য় শিফটের সময় অবশ্যই ১ম শিফটের শেষের পর হতে হবে।`);
+          return;
+        }
+      }
+    }
+
+    setIsSavingSchedule(true);
+    try {
+      const openingHoursSummary = buildOpeningHoursSummary(weeklySchedule);
+      const weeklyOffDays = getWeeklyOffDays(weeklySchedule);
+      const schedulePayload = {
+        weeklySchedule,
+        weeklyOffDays,
+        openingHours: openingHoursSummary,
+        openingHoursUpdatedAt: serverTimestamp(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      const writes: Promise<any>[] = [
+        setDoc(doc(db, 'users', user.uid), schedulePayload, { merge: true }),
+      ];
+
+      if (myAgentProfile?.id) {
+        writes.push(
+          setDoc(doc(db, 'agents', myAgentProfile.id), schedulePayload, { merge: true }).catch(() => {}),
+          setDoc(doc(db, 'bap_agents', myAgentProfile.id), schedulePayload, { merge: true }).catch(() => {}),
+          updateDoc(doc(db, 'agent_requests', myAgentProfile.id), schedulePayload).catch(() => {})
+        );
+      }
+
+      if (myAgentProfile || user.role === 'agent') {
+        writes.push(
+          updateDoc(doc(db, 'agents', user.uid), schedulePayload).catch(() => {}),
+          updateDoc(doc(db, 'bap_agents', user.uid), schedulePayload).catch(() => {})
+        );
+      }
+
+      await Promise.all(writes);
+
+      if (myAgentProfile) {
+        setMyAgentProfile((prev) =>
+          prev
+            ? {
+                ...prev,
+                weeklySchedule,
+                weeklyOffDays,
+                openingHours: openingHoursSummary,
+              }
+            : null
+        );
+        setAgentsList((prev) =>
+          prev.map((a) =>
+            a.id === myAgentProfile.id || a.phone === user.phone
+              ? {
+                  ...a,
+                  weeklySchedule,
+                  weeklyOffDays,
+                  openingHours: openingHoursSummary,
+                }
+              : a
+          )
+        );
+      }
+
+      setScheduleSuccessMsg(
+        'আপনার খোলার সময়, ডাবল বিরতি এবং সাপ্তাহিক বন্ধের দিন সফলভাবে সেভ ও লাইভ ম্যাপে আপডেট হয়েছে!'
+      );
+    } catch (err: any) {
+      console.error('Schedule save error:', err);
+      setScheduleErrorMsg('সময়সূচি সেভ করতে সমস্যা হয়েছে: ' + (err?.message || 'আবার চেষ্টা করুন'));
+    } finally {
+      setIsSavingSchedule(false);
     }
   };
 
@@ -2010,89 +2816,483 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
   return (
     <div className="bg-[#0b6623] min-h-screen text-slate-800 pb-28 relative max-w-lg mx-auto border-x border-slate-150">
       
-      {/* Green Top Header Section matching Home Dashboard */}
-      <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-safe pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-30 space-y-2.5">
-        <div className="flex items-center justify-between gap-1">
-          <div className="flex items-center gap-3">
-            <UnifiedBackButton
-              onClick={() => {
-                if (reportingAgent) { setReportingAgent(null); return; }
-                if (showFilterDropdown) { setShowFilterDropdown(false); return; }
-                if (showApplyForm) { setShowApplyForm(false); return; }
-                if (activeTab !== 'map') {
-                  setActiveTab('map');
-                  return;
-                }
-                onBack();
-              }}
-              variant="dark"
-              title="পিছনে যান"
-            />
-            <div>
-              <h1 className="text-sm font-black text-white leading-tight">{t.title}</h1>
-              <p className="text-[9px] font-bold text-amber-300 tracking-wide">{t.subtitle}</p>
+      {/* Green Top Header Section matching Home Dashboard (Hidden when dedicated Full-Screen Apply page is open) */}
+      {activeTab !== 'apply' && (
+        <header className="bg-gradient-to-b from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-3.5 pt-safe pb-2.5 rounded-b-[28px] shadow-sm border-b border-emerald-700/60 relative overflow-hidden z-30 space-y-2.5">
+          <div className="flex items-center justify-between gap-1">
+            <div className="flex items-center gap-3">
+              <UnifiedBackButton
+                onClick={() => {
+                  if (reportingAgent) { setReportingAgent(null); return; }
+                  if (showFilterDropdown) { setShowFilterDropdown(false); return; }
+                  if (activeTab !== 'map') {
+                    setActiveTab('map');
+                    return;
+                  }
+                  onBack();
+                }}
+                variant="dark"
+                title="পিছনে যান"
+              />
+              <div>
+                <h1 className="text-sm font-black text-white leading-tight">{t.title}</h1>
+                <p className="text-[9px] font-bold text-amber-300 tracking-wide">{t.subtitle}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {/* Dynamic Language Toggle */}
+              <button 
+                onClick={() => setLang(prev => prev === 'bn' ? 'en' : 'bn')}
+                className="p-1.5 bg-white/20 hover:bg-white/30 text-white border border-white/20 rounded-xl transition cursor-pointer flex items-center gap-1 text-[9.5px] font-black"
+              >
+                <Languages className="w-3.5 h-3.5" />
+                <span>{lang === 'bn' ? 'EN' : 'বাং'}</span>
+              </button>
+              <span className="text-[10px] font-bold text-white bg-black/20 px-2.5 py-1 rounded-full border border-white/20 leading-none">
+                {t.onlineBadge}
+              </span>
             </div>
           </div>
-          <div className="flex items-center gap-1.5">
-            {/* Dynamic Language Toggle */}
-            <button 
-              onClick={() => setLang(prev => prev === 'bn' ? 'en' : 'bn')}
-              className="p-1.5 bg-white/20 hover:bg-white/30 text-white border border-white/20 rounded-xl transition cursor-pointer flex items-center gap-1 text-[9.5px] font-black"
+
+          {/* Announcement Ticker (ঘোষণা) */}
+          <div className="flex items-center gap-2.5 overflow-hidden w-full pt-1 px-0.5 relative z-10">
+            <div className="bg-white text-[#005a36] text-[10.5px] font-black px-3 py-1 rounded-full shrink-0 shadow-xs flex items-center gap-1">
+              <span>ঘোষণা</span>
+            </div>
+            <div className="flex-grow overflow-hidden relative mr-1">
+              <marquee className="text-[12px] font-bold text-white leading-none py-0.5 tracking-wide" behavior="scroll" direction="left" scrollamount="4">
+                {appConfig?.agentTicker || "BNB এজেন্ট ও প্রতিনিধি পোর্টাল ডিরেক্টরিতে স্বাগতম। নিকটস্থ এজেন্টদের লাইভ লোকেশন দেখুন ও যোগাযোগ করুন।"}
+              </marquee>
+            </div>
+          </div>
+        </header>
+      )}
+
+      {/* ================= DEDICATED FULL-SCREEN AGENT APPLICATION PAGE ================= */}
+      {activeTab === 'apply' && (
+        <div className="min-h-screen bg-[#F5F8F6] text-slate-800 flex flex-col animate-fade-in">
+          {/* Sticky Top Navigation Bar */}
+          <div className="sticky top-0 z-40 bg-gradient-to-r from-[#0b6623] via-[#005a36] to-[#004d1a] text-white px-4 pt-safe pb-3 shadow-md flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <button
+                type="button"
+                onClick={() => setActiveTab('map')}
+                className="px-2.5 py-1.5 bg-white/15 hover:bg-white/25 border border-white/25 rounded-xl text-[11px] font-black flex items-center gap-1 transition cursor-pointer shrink-0"
+              >
+                <ChevronLeft className="w-4 h-4 shrink-0" />
+                <span>ফিরে যান</span>
+              </button>
+              <div className="min-w-0">
+                <h2 className="text-sm font-black text-white truncate">BNB এজেন্ট আবেদন ফরম</h2>
+                <p className="text-[9.5px] font-bold text-emerald-200 truncate">
+                  {isSamityInvestorFree
+                    ? `${samityEligibility.categoryBadgeBn} (৩+ মাস কিস্তি • ফ্রি সুবিধা)`
+                    : samityEligibility.isSamityTierMember
+                      ? `${samityEligibility.categoryBadgeBn} (${toBanglaDigits(samityEligibility.paidMonthsCount)} মাস জমা • ফি ৳১০০)`
+                      : 'সাধারণ সদস্য আবেদন (ফি ৳১০০)'}
+                </p>
+              </div>
+            </div>
+            <span
+              className={`text-[10px] font-black px-2.5 py-1 rounded-full border shrink-0 ${
+                isSamityInvestorFree
+                  ? 'bg-emerald-400/20 text-emerald-100 border-emerald-300/40'
+                  : 'bg-white/15 text-white border-white/25'
+              }`}
             >
-              <Languages className="w-3.5 h-3.5" />
-              <span>{lang === 'bn' ? 'EN' : 'বাং'}</span>
-            </button>
-            <span className="text-[10px] font-bold text-white bg-black/20 px-2.5 py-1 rounded-full border border-white/20 leading-none">
-              {t.onlineBadge}
+              {isSamityInvestorFree ? 'ফ্রি (৳০)' : `ফি: ৳${AGENT_APPLICATION_FEE}`}
             </span>
           </div>
-        </div>
 
-        {/* Announcement Ticker (ঘোষণা) */}
-        <div className="flex items-center gap-2.5 overflow-hidden w-full pt-1 px-0.5 relative z-10">
-          <div className="bg-white text-[#005a36] text-[10.5px] font-black px-3 py-1 rounded-full shrink-0 shadow-xs flex items-center gap-1">
-            <span>ঘোষণা</span>
+          <div className="p-4 space-y-4 pb-10">
+            {/* Compact Header Banner */}
+            <div className="bg-gradient-to-r from-[#0D9488] to-teal-800 rounded-2xl p-4 text-white space-y-1.5 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-black text-white flex items-center gap-1.5">
+                  <Briefcase className="w-4 h-4 text-emerald-200 shrink-0" />
+                  অফিসিয়াল এজেন্ট তালিকাভুক্তি আবেদন
+                </h3>
+                <span className="text-[9px] font-black px-2.5 py-0.5 rounded-full bg-white/15 border border-white/20">
+                  {isSamityInvestorFree
+                    ? `${samityEligibility.categoryBadgeBn} (ফ্রি)`
+                    : samityEligibility.isSamityTierMember
+                      ? samityEligibility.categoryBadgeBn
+                      : 'সাধারণ সদস্য'}
+                </span>
+              </div>
+              <p className="text-[10.5px] text-emerald-100 font-medium leading-relaxed">
+                {isSamityInvestorFree
+                  ? `আপনি BNB সমবায় সমিতির ${samityEligibility.categoryBadgeBn} সদস্য এবং কমপক্ষে ৩ মাসের (${toBanglaDigits(samityEligibility.paidMonthsCount)} মাস) কিস্তি পরিশোধ থাকায় সম্পূর্ণ ফ্রিতে (৳০) আবেদন করতে পারবেন।`
+                  : 'সমবায় সমিতিতে (ওনার/শেয়ার হোল্ডার/ইনভেস্টর/সাপোর্টার) ন্যূনতম ৩ মাসের টাকা জমা থাকলে ফ্রি আবেদন করা যাবে; অন্যথায় সাধারণ আবেদন ফি ৳১০০ প্রযোজ্য।'}
+              </p>
+            </div>
+
+            {successMessage && (
+              <div className="bg-emerald-50 border border-emerald-200 p-3.5 rounded-2xl text-center space-y-1">
+                <CheckCircle className="w-6 h-6 text-emerald-600 mx-auto" />
+                <p className="text-xs text-emerald-900 font-extrabold leading-normal">{successMessage}</p>
+              </div>
+            )}
+
+            {errorMessage && (
+              <div className="bg-rose-50 border border-rose-200 p-3.5 rounded-2xl text-[11px] text-rose-700 font-bold leading-normal">
+                ⚠️ {errorMessage}
+              </div>
+            )}
+
+            <form onSubmit={handleApplySubmit} className="bg-white border border-slate-200 rounded-3xl p-4 shadow-xs space-y-3.5">
+              {/* Auto-filled Name & Mobile Number from Profile */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 bg-slate-50 border border-slate-200 p-3 rounded-2xl">
+                <div>
+                  <label className="block text-[9.5px] font-bold text-slate-500 mb-1">
+                    এজেন্টের নাম (প্রোফাইল থেকে অটো)
+                  </label>
+                  <input
+                    type="text"
+                    readOnly
+                    value={fullName || user.name || ''}
+                    className="block w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-black text-slate-800 cursor-not-allowed"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[9.5px] font-bold text-slate-500 mb-1">
+                    মোবাইল নম্বর (প্রোফাইল থেকে অটো)
+                  </label>
+                  <input
+                    type="tel"
+                    readOnly
+                    value={phoneNumber || user.phone || ''}
+                    className="block w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono font-black text-slate-800 cursor-not-allowed"
+                  />
+                </div>
+              </div>
+
+              {/* WhatsApp Number */}
+              <div>
+                <label className="block text-[10.5px] font-black text-slate-700 mb-1">
+                  হোয়াটসঅ্যাপ নম্বর <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="tel"
+                  required
+                  value={whatsNumber}
+                  onChange={(e) => setWhatsNumber(e.target.value)}
+                  placeholder="উদাঃ 017XXXXXXXX বা +88017XXXXXXXX"
+                  className="block w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 focus:ring-1 focus:ring-[#0D9488] focus:bg-white focus:outline-none"
+                />
+              </div>
+
+              {/* Shop Address */}
+              <div>
+                <label className="block text-[10.5px] font-black text-slate-700 mb-1">
+                  দোকান বা ব্যবসার ঠিকানা <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={writtenLocation}
+                  onChange={(e) => setWrittenLocation(e.target.value)}
+                  placeholder="উদাঃ মিরপুর ১০ গোলচত্বর, ঢাকা"
+                  className="block w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:ring-1 focus:ring-[#0D9488] focus:bg-white focus:outline-none"
+                />
+              </div>
+
+              {/* Google Maps Copied Serial / Coordinates */}
+              <div className="bg-emerald-50/60 border border-emerald-200 p-3 rounded-2xl space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-[10.5px] font-black text-emerald-950 flex items-center gap-1">
+                    <MapPin className="w-3.5 h-3.5 text-[#0D9488]" />
+                    <span>ম্যাপ সিরিয়াল নম্বর / লোকেশন কোড <span className="text-rose-500">*</span></span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!navigator.geolocation) return;
+                      setIsFetchingAddress(true);
+                      navigator.geolocation.getCurrentPosition(
+                        (pos) => {
+                          const coordStr = `${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}`;
+                          setLocationNumber(coordStr);
+                          setApplyLat(pos.coords.latitude);
+                          setApplyLng(pos.coords.longitude);
+                          setIsFetchingAddress(false);
+                        },
+                        () => {
+                          setIsFetchingAddress(false);
+                          alert('জিপিএস নেওয়া যায়নি, গুগল ম্যাপ থেকে কপি করে বসান।');
+                        },
+                        { enableHighAccuracy: true, timeout: 8000 }
+                      );
+                    }}
+                    disabled={isFetchingAddress}
+                    className="text-[9.5px] font-black px-2.5 py-1 rounded-lg bg-[#0D9488] hover:bg-[#0B7A70] text-white cursor-pointer transition shrink-0"
+                  >
+                    {isFetchingAddress ? 'খুঁজছে...' : '📍 বর্তমান কোড নিন'}
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  required
+                  value={locationNumber}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setLocationNumber(val);
+                    const parsed = parseCoordinatesFromInput(val);
+                    if (parsed) {
+                      setApplyLat(parsed.lat);
+                      setApplyLng(parsed.lng);
+                    }
+                  }}
+                  placeholder="ম্যাপ থেকে কপি করা নম্বর বসান (যেমন: 23.8103, 90.4125)"
+                  className="block w-full px-3 py-2.5 bg-white border border-emerald-200 rounded-xl text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-[#0D9488] focus:outline-none"
+                />
+                <p className="text-[9.5px] text-emerald-800 font-semibold leading-snug">
+                  * গুগল ম্যাপে আপনার দোকানের লোকেশন চেপে ধরে কোঅর্ডিনেট সিরিয়াল নম্বরটি কপি করে এখানে পেস্ট করুন।
+                </p>
+              </div>
+
+              {/* Experience */}
+              <div>
+                <label className="block text-[10.5px] font-black text-slate-700 mb-1">
+                  পূর্ববর্তী কাজের অভিজ্ঞতা
+                </label>
+                <select
+                  value={experience}
+                  onChange={(e) => setExperience(e.target.value)}
+                  className="block w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-[#0D9488] focus:bg-white focus:outline-none text-slate-800 font-bold"
+                >
+                  <option value="নেই">কোনো অভিজ্ঞতা নেই</option>
+                  <option value="১ বছর বা তার কম">১ বছর বা তার কম</option>
+                  <option value="১ - ৩ বছর">১ থেকে ৩ বছর</option>
+                  <option value="৫+ বছর">৫ বছর বা তার বেশি অভিজ্ঞতা আছে</option>
+                </select>
+              </div>
+
+              {/* NID & Nominee Section (Auto-filled for Samity Members, Mandatory for General Members) */}
+              {hasCompleteSamityAutoInfo ? (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-[10.5px] font-black text-emerald-900">
+                    <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>সমবায় সমিতির প্রোফাইল থেকে এনআইডি ও নমিনি অটো-যুক্ত হয়েছে</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[10px] text-emerald-950 font-semibold pt-1 border-t border-emerald-200/70">
+                    <p>🪪 NID / পরিচয়পত্র: <strong className="font-mono">{existingProfileNid}</strong></p>
+                    <p>👥 নমিনি: <strong>{existingProfileNominee?.name}</strong> ({existingProfileNominee?.relation || 'নমিনি'})</p>
+                    <p className="sm:col-span-2">📱 নমিনির ফোন: <strong className="font-mono">{existingProfileNominee?.phone}</strong></p>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2 border-b border-slate-200 pb-1.5">
+                    <span className="text-[10.5px] font-black text-slate-800">
+                      🪪 এনআইডি ও নমিনি তথ্য (সাধারণ সদস্যদের জন্য বাধ্যতামূলক)
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                      এনআইডি (NID) কার্ড নম্বর <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={agentNid}
+                      onChange={(e) => setAgentNid(e.target.value)}
+                      placeholder="আপনার জাতীয় পরিচয়পত্র (NID) নম্বর লিখুন"
+                      className="block w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 focus:ring-1 focus:ring-[#0D9488] focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[9.5px] font-bold text-slate-600 mb-1">
+                        নমিনির নাম <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={agentNomineeName}
+                        onChange={(e) => setAgentNomineeName(e.target.value)}
+                        placeholder="নমিনির নাম"
+                        className="block w-full px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 focus:ring-1 focus:ring-[#0D9488] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9.5px] font-bold text-slate-600 mb-1">
+                        নমিনির সাথে সম্পর্ক <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={agentNomineeRelation}
+                        onChange={(e) => setAgentNomineeRelation(e.target.value)}
+                        placeholder="যেমন: পিতা, স্ত্রী"
+                        className="block w-full px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 focus:ring-1 focus:ring-[#0D9488] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9.5px] font-bold text-slate-600 mb-1">
+                        নমিনির ফোন নম্বর <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="tel"
+                        required
+                        value={agentNomineePhone}
+                        onChange={(e) => setAgentNomineePhone(e.target.value)}
+                        placeholder="017XXXXXXXX"
+                        className="block w-full px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 focus:ring-1 focus:ring-[#0D9488] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Membership Eligibility & Application Fee Summary Card */}
+              {isSamityInvestorFree ? (
+                <div className="p-3.5 rounded-2xl border border-emerald-300 bg-gradient-to-br from-emerald-50 via-teal-50/80 to-white space-y-2 shadow-4xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-black text-emerald-900">
+                      <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                      সমবায় সমিতি / ইনভেস্টর বিশেষ সুবিধা
+                    </span>
+                    <span className="text-[9.5px] font-black px-2.5 py-0.5 rounded-full bg-emerald-600 text-white shadow-3xs">
+                      সম্পূর্ণ ফ্রি ✓
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 bg-white/90 border border-emerald-200/80 rounded-xl p-2.5 text-[10.5px]">
+                    <div>
+                      <span className="text-[9px] font-bold text-slate-500 block">সমিতি ক্যাটাগরি ও কিস্তি</span>
+                      <span className="font-black text-emerald-800">
+                        {samityEligibility.categoryBadgeBn} • {toBanglaDigits(samityEligibility.paidMonthsCount)} মাস পরিশোধ ✓
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[9px] font-bold text-slate-500 block">এজেন্ট আবেদন ফি</span>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <span className="text-[10px] font-bold text-slate-400 line-through">৳{AGENT_APPLICATION_FEE}</span>
+                        <span className="font-mono font-black text-emerald-700 text-xs">৳০ (ফ্রি)</span>
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-[10px] font-bold text-emerald-800 leading-snug">
+                    ✓ আপনি BNB সমবায় সমিতির {samityEligibility.categoryBadgeBn} হিসেবে ন্যূনতম ৩ মাসের কিস্তি জমা দিয়েছেন — তাই কোনো ফি ছাড়াই সরাসরি এজেন্ট আবেদন করতে পারবেন।
+                  </p>
+                </div>
+              ) : (
+                <div
+                  className={`p-3.5 rounded-2xl border space-y-2 text-[11px] ${
+                    liveUserBalance >= AGENT_APPLICATION_FEE
+                      ? 'bg-emerald-50/80 border-emerald-200 text-emerald-950'
+                      : 'bg-rose-50 border-rose-200 text-rose-950'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-black/10">
+                    <span className="text-[10.5px] font-black">
+                      {samityEligibility.isSamityTierMember
+                        ? `সমবায় সদস্য (${samityEligibility.categoryBadgeBn}) — ৩ মাস পূর্ণ হয়নি`
+                        : 'সাধারণ সদস্য আবেদন ফি'}
+                    </span>
+                    <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                      {samityEligibility.isSamityTierMember
+                        ? `জমা: ${toBanglaDigits(samityEligibility.paidMonthsCount)}/৩ মাস`
+                        : 'নন-ইনভেস্টর সদস্য'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between font-bold">
+                    <span>আপনার বর্তমান মেইন ব্যালেন্স:</span>
+                    <span className="font-mono font-black">
+                      ৳{liveUserBalance.toLocaleString('bn-BD')}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between font-bold">
+                    <span>এজেন্ট আবেদন ফি (সাবমিটে কাটা হবে):</span>
+                    <span className="font-mono font-black text-rose-700">
+                      ৳{AGENT_APPLICATION_FEE.toLocaleString('bn-BD')}
+                    </span>
+                  </div>
+                  {samityEligibility.isSamityTierMember ? (
+                    <p className="text-[10px] font-bold text-amber-900 pt-1.5 border-t border-black/10 leading-snug">
+                      ℹ️ আপনি সমবায় সমিতির {samityEligibility.categoryBadgeBn} সদস্য হলেও বর্তমানে আপনার {toBanglaDigits(samityEligibility.paidMonthsCount)} মাসের কিস্তি জমা আছে। ফ্রি এজেন্ট আবেদনের জন্য ন্যূনতম ৩ মাসের কিস্তি পরিশোধ থাকতে হবে — অন্যথায় ৳{AGENT_APPLICATION_FEE} ফি দিয়ে আবেদন করুন।
+                    </p>
+                  ) : liveUserBalance < AGENT_APPLICATION_FEE ? (
+                    <p className="text-[10px] font-black text-rose-700 pt-1.5 border-t border-rose-200 leading-snug">
+                      ⚠️ আপনি BNB সমবায় সমিতির (ওনার/শেয়ার হোল্ডার/ইনভেস্টর/সাপোর্টার) ৩ মাসের সঞ্চয়ী সদস্য নন, তাই এজেন্ট আবেদনের জন্য মেইন ব্যালেন্সে কমপক্ষে ৳{AGENT_APPLICATION_FEE} টাকা থাকতে হবে।
+                    </p>
+                  ) : (
+                    <p className="text-[10px] font-semibold text-emerald-800 pt-1.5 border-t border-emerald-200 leading-snug">
+                      ✓ আবেদন সাবমিট করার সাথে সাথে মেইন ব্যালেন্স থেকে ৳{AGENT_APPLICATION_FEE} কাটা হবে (আবেদন বাতিল হলে টাকা ফেরত পাবেন)। সমবায় সমিতির ওনার/শেয়ার হোল্ডার/ইনভেস্টর/সাপোর্টারদের ৩ মাসের টাকা জমা থাকলে ফ্রি আবেদন করা যায়।
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('map')}
+                  className="py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black rounded-xl text-xs transition cursor-pointer"
+                >
+                  ← ম্যাপে ফিরুন
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting || (effectiveApplicationFee > 0 && liveUserBalance < effectiveApplicationFee)}
+                  className="sm:col-span-2 py-3 bg-[#0D9488] hover:bg-[#0B7A70] disabled:bg-slate-300 disabled:text-slate-600 text-white font-black rounded-xl text-xs transition-all duration-200 flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-emerald-700/15"
+                >
+                  {isSubmitting ? (
+                    <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : isSamityInvestorFree ? (
+                    <span>ফ্রি এজেন্ট আবেদন দাখিল করুন (৳০ ফি) 🚀</span>
+                  ) : (
+                    <span>আবেদন দাখিল করুন (৳{AGENT_APPLICATION_FEE} ফি সহ) 🚀</span>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
-          <div className="flex-grow overflow-hidden relative mr-1">
-            <marquee className="text-[12px] font-bold text-white leading-none py-0.5 tracking-wide" behavior="scroll" direction="left" scrollamount="4">
-              {appConfig?.agentTicker || "BNB এজেন্ট ও প্রতিনিধি পোর্টাল ডিরেক্টরিতে স্বাগতম। নিকটস্থ এজেন্টদের লাইভ লোকেশন দেখুন ও যোগাযোগ করুন।"}
-            </marquee>
-          </div>
         </div>
-      </header>
-
-
+      )}
 
       {/* ================= MAIN CONTENT CANVAS ================= */}
+      {activeTab !== 'apply' && (
       <main className="p-4 space-y-4">
 
         {/* TAB 1: LANDING & AGENT MAP */}
         {activeTab === 'map' && (
           <div className="space-y-4 animate-fade-in text-left">
             
-            {/* Real Google Maps Integration Component (Only Public Data Passed) */}
+            {/* Real Google Maps Integration Component (With Agent Profile Photos & Fullscreen Mode) */}
             <div id="agent-google-map-container">
               <GoogleAgentMap
                 agents={processedAgents
                   .filter((a: any) => a.approvalStatus === 'approved')
-                  .map((a: any) => ({
-                    id: a.id,
-                    agentCode: a.agentCode,
-                    badgeLabel: a.badgeLabel,
-                    name: a.name,
-                    country: a.country || 'Bangladesh',
-                    city: a.city || a.district || '',
-                    address:
-                      a.address ||
-                      [a.postOffice, a.thana, a.district, a.city, a.country]
-                        .filter(Boolean)
-                        .join(', '),
-                    openingHours: a.openingHours || 'সকাল ৯:০০ - রাত ১০:০০',
-                    phone: a.phone || '',
-                    lat: Number(a.realLat || a.lat || 0),
-                    lng: Number(a.realLng || a.lng || 0),
-                    distanceKm: userLocation ? a.distanceKm : null,
-                  }))}
+                  .map((a: any) => {
+                    const schedStatus = getLiveScheduleStatus(a.weeklySchedule, a.openingHours);
+                    return {
+                      id: a.id,
+                      agentCode: a.agentCode,
+                      badgeLabel: a.badgeLabel,
+                      name: a.name,
+                      country: a.country || 'Bangladesh',
+                      city: a.city || a.district || '',
+                      address:
+                        a.address ||
+                        [a.postOffice, a.thana, a.district, a.city, a.country]
+                          .filter(Boolean)
+                          .join(', '),
+                      openingHours: a.openingHours || 'সকাল ৯:০০ - রাত ১০:০০',
+                      scheduleStatusLabel: a.weeklySchedule ? schedStatus.statusLabel : undefined,
+                      scheduleState: a.weeklySchedule ? schedStatus.state : 'unknown',
+                      todayHours: schedStatus.todayHours,
+                      closedDaysLabel: schedStatus.closedDaysLabel,
+                      phone: a.phone || '',
+                      whatsapp: a.whatsapp || a.phone || '',
+                      img: a.img || '',
+                      lat: Number(a.realLat || a.lat || 0),
+                      lng: Number(a.realLng || a.lng || 0),
+                      distanceKm: userLocation ? a.distanceKm : null,
+                    };
+                  })}
                 mapType={mapType}
                 onMapTypeChange={(type) => {
                   setMapType(type);
@@ -2116,318 +3316,153 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                 userLocation={userLocation}
                 onRequestUserLocation={handleRequestUserLocation}
                 locatingUser={isLocating}
+                isFullscreen={isMapFullscreen}
+                onFullscreenChange={setIsMapFullscreen}
               />
             </div>
 
+            {/* Nearest Agent Quick Discovery Card for Ordinary Members */}
+            {processedAgents.length > 0 && (
+              <div className="bg-white border border-emerald-200 rounded-3xl p-3.5 shadow-xs space-y-2.5">
+                {userLocation && processedAgents[0]?.distanceKm != null ? (
+                  (() => {
+                    const nearest = processedAgents[0];
+                    const nLat = nearest.realLat !== undefined ? nearest.realLat : nearest.lat;
+                    const nLng = nearest.realLng !== undefined ? nearest.realLng : nearest.lng;
+                    const distText =
+                      nearest.distanceKm! < 1
+                        ? `${toBanglaDigits(Math.round(nearest.distanceKm! * 1000))} মিটার`
+                        : `${toBanglaDigits(nearest.distanceKm!.toFixed(1))} কি.মি.`;
+                    return (
+                      <div className="space-y-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-black text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                            📍 আপনার সবচেয়ে কাছের এজেন্ট (টাকা উত্তোলন / দেখা করুন)
+                          </span>
+                          <span className="text-[10px] font-black text-[#1E3A8A] bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full shrink-0">
+                            {distText} দূরে
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <img
+                            src={nearest.img}
+                            alt={nearest.name}
+                            referrerPolicy="no-referrer"
+                            className="w-12 h-12 rounded-full object-cover border-2 border-[#0D9488] shrink-0 shadow-xs"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <h4 className="text-xs font-black text-slate-900 truncate">{nearest.name}</h4>
+                            <p className="text-[10px] text-slate-600 font-semibold truncate">
+                              {nearest.address || nearest.city}
+                            </p>
+                            {nearest.estTime && (
+                              <p className="text-[10px] text-emerald-700 font-black">
+                                ⏱️ যেতে সময়: {nearest.estTime} ({nearest.travelType})
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setHighlightedAgentId(nearest.id);
+                              document
+                                .getElementById('agent-google-map-container')
+                                ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            }}
+                            className="py-1.5 px-2 bg-[#0D9488] hover:bg-[#0B7A70] text-white text-[10px] font-black rounded-xl cursor-pointer transition text-center"
+                          >
+                            ম্যাপে দেখুন
+                          </button>
+                          <a
+                            href={`https://www.google.com/maps/dir/?api=1&origin=${userLocation.lat},${userLocation.lng}&destination=${nLat},${nLng}&travelmode=driving`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="py-1.5 px-2 bg-[#1E3A8A] hover:bg-blue-900 text-white text-[10px] font-black rounded-xl transition text-center flex items-center justify-center gap-1"
+                          >
+                            <Navigation className="w-3 h-3 shrink-0" />
+                            <span>সরাসরি যান</span>
+                          </a>
+                          <a
+                            href={`tel:${nearest.phone}`}
+                            className="py-1.5 px-2 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black rounded-xl transition text-center flex items-center justify-center gap-1"
+                          >
+                            <Phone className="w-3 h-3 shrink-0" />
+                            <span>কল করুন</span>
+                          </a>
+                        </div>
+                      </div>
+                    );
+                  })()
+                ) : (
+                  <div className="flex items-center justify-between gap-2.5">
+                    <div className="min-w-0">
+                      <h4 className="text-[11px] font-black text-slate-900">
+                        কাছের এজেন্ট ও দূরত্ব দেখতে চান?
+                      </h4>
+                      <p className="text-[10px] text-slate-600 font-semibold leading-snug">
+                        জিপিএস চালু করলে কোন এজেন্ট কতটুকু দূরে আছে তা সাথে সাথে দেখতে পাবেন।
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleRequestUserLocation}
+                      disabled={isLocating}
+                      className="px-3 py-2 bg-[#0D9488] hover:bg-[#0B7A70] text-white text-[10px] font-black rounded-xl shrink-0 cursor-pointer transition"
+                    >
+                      {isLocating ? 'খুঁজছে...' : '📍 দূরত্ব দেখুন'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
 
-            {/* ================= AGENT APPLICATION COLLAPSIBLE CONTAINER ================= */}
+
+            {/* ================= AGENT APPLICATION NAVIGATION BUTTON CARD (Opens Dedicated Full-Screen Page) ================= */}
             <div className="bg-white border border-slate-150 rounded-3xl p-4 shadow-3xs transition-all duration-250">
-              <button 
-                onClick={() => setShowApplyForm(!showApplyForm)}
-                className="w-full flex items-center justify-between text-left focus:outline-none cursor-pointer"
+              <button
+                type="button"
+                onClick={() => {
+                  setErrorMessage('');
+                  setSuccessMessage('');
+                  setActiveTab('apply');
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className="w-full flex items-center justify-between text-left focus:outline-none cursor-pointer group"
               >
                 <div className="flex items-center gap-2.5">
-                  <div className="p-2.5 bg-emerald-50 rounded-2xl text-[#0D9488]">
+                  <div className="p-2.5 bg-emerald-50 rounded-2xl text-[#0D9488] group-hover:bg-emerald-100 transition">
                     <Briefcase className="w-5 h-5 shrink-0" />
                   </div>
                   <div>
                     <h3 className="text-xs font-black text-slate-800">এজেন্ট হতে আগ্রহী..? (ভর্তির আবেদন)</h3>
                     <p className="text-[10px] text-[#0D9488] font-bold mt-0.5">
-                      {showApplyForm ? 'ফর্মটি বন্ধ করতে এখানে ক্লিক করুন' : 'আবেদনপত্র পূরণ করতে এখানে ক্লিক করুন'}
+                      {isSamityInvestorFree
+                        ? `${samityEligibility.categoryBadgeBn} (৩+ মাস কিস্তি) — ফ্রি (৳০) আবেদন`
+                        : 'সাধারণ সদস্য ৳১০০ (সমিতির ৩+ মাস কিস্তিতে ফ্রি) • আবেদন করতে ক্লিক করুন'}
                     </p>
                   </div>
                 </div>
-                <div className="p-1.5 bg-slate-50 hover:bg-slate-100 rounded-full text-slate-500 transition-colors">
-                  {showApplyForm ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                <div className="p-1.5 bg-emerald-50 group-hover:bg-emerald-100 rounded-full text-[#0D9488] transition-colors">
+                  <ChevronRight className="w-4 h-4" />
                 </div>
               </button>
-
-              {showApplyForm && (
-                <div className="mt-4 pt-4 border-t border-slate-100 space-y-4">
-                  <div className="bg-gradient-to-r from-[#0D9488] to-teal-800 rounded-2xl p-4 text-white space-y-1">
-                    <h3 className="text-xs font-black text-white flex items-center gap-1.5">
-                      <Briefcase className="w-4.5 h-4.5 text-emerald-250 shrink-0" />
-                      BNB কো-অপারেটিভ এজেন্ট আবেদনপত্র
-                    </h3>
-                    <p className="text-[10px] text-emerald-100 font-semibold leading-relaxed">
-                      আপনার এলাকার ক্ষুদ্র ক্ষুদ্র সঞ্চয়কে গতিশীল করতে এবং রেমিট্যান্স কালেকশনে BNB এজেন্ট হিসেবে ক্যারিয়ার শুরু করুন। নিচের ফর্মটি সতর্কতার সাথে পূরণ করুন।
-                    </p>
-                  </div>
-
-                  {/* Success and Error Indicators */}
-                  {successMessage && (
-                    <div className="bg-emerald-50 border border-emerald-150 p-3.5 rounded-2xl text-center space-y-1.5 animate-bounce">
-                      <CheckCircle className="w-7 h-7 text-emerald-600 mx-auto" />
-                      <p className="text-xs text-emerald-850 font-extrabold leading-normal">{successMessage}</p>
-                    </div>
-                  )}
-
-                  {errorMessage && (
-                    <div className="bg-rose-50 border border-rose-100 p-3 rounded-2xl text-[11px] text-rose-700 font-bold leading-normal">
-                      ⚠️ {errorMessage}
-                    </div>
-                  )}
-
-                  <form onSubmit={handleApplySubmit} className="space-y-3.5">
-                    <div className="space-y-3.5">
-                      {/* 1. Name */}
-                      <div>
-                        <label className="block text-[9.5px] font-black text-slate-750 uppercase tracking-wider mb-1">1. আবেদনকারীর পূর্ণ নাম</label>
-                        <input
-                          type="text"
-                          required
-                          value={fullName}
-                          onChange={(e) => setFullName(e.target.value)}
-                          placeholder="উদাঃ সাজ্জাদুল ইসলাম"
-                          className="block w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-[#0D9488] focus:bg-white focus:outline-none font-medium text-slate-800"
-                        />
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        {/* 2. Mobile Number */}
-                        <div>
-                          <label className="block text-[9.5px] font-black text-slate-755 uppercase tracking-wider mb-1">2. সচল মোবাইল নম্বর</label>
-                          <input
-                            type="tel"
-                            required
-                            value={phoneNumber}
-                            onChange={(e) => setPhoneNumber(e.target.value)}
-                            placeholder="উদাঃ +88017XXXXXXXX"
-                            className="block w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-[#0D9488] focus:bg-white focus:outline-none font-mono text-slate-800 font-bold"
-                          />
-                        </div>
-
-                        {/* 3. WhatsApp Number */}
-                        <div>
-                          <label className="block text-[9.5px] font-black text-slate-755 uppercase tracking-wider mb-1">3. হোয়াটসঅ্যাপ নম্বর</label>
-                          <input
-                            type="tel"
-                            value={whatsNumber}
-                            onChange={(e) => setWhatsNumber(e.target.value)}
-                            placeholder="উদাঃ +88017XXXXXXXX"
-                            className="block w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-[#0D9488] focus:bg-white focus:outline-none font-mono text-slate-800 font-bold"
-                          />
-                        </div>
-                      </div>
-
-                      {/* GPS Autodetect Section */}
-                      <div className="bg-slate-50 border border-slate-150 p-3.5 rounded-2xl space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-black text-slate-700">📍 জিপিএস ম্যাপ থেকে অটো ঠিকানা নির্বাচন</span>
-                          <span className="text-[9px] font-extrabold px-2 py-0.5 rounded-full border text-emerald-700 bg-emerald-50 border-emerald-200">
-                            অটো জিপিএস সুবিধা
-                          </span>
-                        </div>
-                        <p className="text-[9.5px] text-slate-500 font-medium leading-normal">
-                          কোনো ভুল ঠিকানা এড়াতে জিপিএস ম্যাপ থেকে জেলা ও থানা অটোমেটিক সিলেক্ট হয়। নিচের বাটনে চাপ দিলে আপনার লাইভ থানা ও জেলা ইনস্ট্যান্ট বসে যাবে।
-                        </p>
-                        <button
-                          type="button"
-                          onClick={handleAutoFetchAddress}
-                          disabled={isFetchingAddress}
-                          className="w-full flex items-center justify-center gap-2 py-2 px-3.5 bg-[#0D9488] hover:bg-[#0B7A70] disabled:bg-slate-200 text-white disabled:text-slate-400 rounded-xl font-bold text-xs transition cursor-pointer shadow-3xs hover:shadow-2xs active:scale-[0.98]"
-                        >
-                          {isFetchingAddress ? (
-                            <>
-                              <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0" />
-                              <span>ম্যাপ থেকে লোকেশন সনাক্ত হচ্ছে...</span>
-                            </>
-                          ) : (
-                            <>
-                              <MapPin className="w-4 h-4 text-white shrink-0 animate-pulse" />
-                              <span>📍 ম্যাপ থেকে অটো জেলা ও থানা আপডেট করুন</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-
-                      {/* Manual Shop Location / Google Maps Link Input */}
-                      <div className="bg-[#F0FDFA] border border-teal-200 p-3.5 rounded-2xl space-y-2">
-                        <div className="flex items-center justify-between">
-                          <label className="text-[10px] font-black text-teal-900 flex items-center gap-1">
-                            <MapPin className="w-3.5 h-3.5 text-[#0D9488]" />
-                            <span>📍 আপনার দোকান বা বাসার লোকেশন লিখে সেট করুন (Manual Address)</span>
-                          </label>
-                          <span className="text-[8.5px] font-extrabold text-teal-700 bg-teal-100/80 px-2 py-0.5 rounded-full border border-teal-200">
-                            অটো ম্যাপ পিন
-                          </span>
-                        </div>
-                        <p className="text-[9.5px] text-teal-800 font-medium leading-normal">
-                          আপনি এখানে আপনার ব্যবসার সঠিক লোকেশনটি লিখে দিন। সিস্টেম স্বয়ংক্রিয়ভাবে ম্যাপে এই লোকেশনটি আপনার ব্যানারে লাইভ দেখাবে। (উদাঃ মিরপুর ১০, ঢাকা বা গুগল ম্যাপ লিংক)
-                        </p>
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            required
-                            value={shopMapLink}
-                            onChange={async (e) => {
-                              const val = e.target.value;
-                              setShopMapLink(val);
-                              if (val.trim().length > 5) {
-                                await geocodeTextOrLink(val);
-                              }
-                            }}
-                            placeholder="দোকান বা বাসার লোকেশন লিখে সেট করুন (উদাঃ মিরপুর ১০, ঢাকা)"
-                            className="block w-full px-3 py-2 bg-white border border-teal-200 rounded-xl text-xs focus:ring-2 focus:ring-[#0D9488] focus:bg-white focus:outline-none font-black text-slate-800 placeholder:font-normal"
-                          />
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              if (!shopMapLink.trim()) {
-                                console.warn('অনুগ্রহ করে সঠিক গুগল ম্যাপ লিংক অথবা জিপিএস কোঅর্ডিনেট পেস্ট করুন।');
-                                return;
-                              }
-                              const result = await geocodeTextOrLink(shopMapLink);
-                              if (result) {
-                                console.log('ম্যাপ লিংক থেকে ঠিকানা চিহ্নিত হয়েছে');
-                              } else {
-                                console.log('দোকানের গুগল ম্যাপ লিংক নিবন্ধিত হয়েছে');
-                              }
-                            }}
-                            className="px-3 py-2 bg-[#0D9488] hover:bg-[#0B7A70] text-white rounded-xl text-xs font-bold whitespace-nowrap cursor-pointer transition shadow-3xs"
-                          >
-                            যাচাই করুন
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <label className="block text-[9.5px] font-black text-slate-750 uppercase tracking-wider">3. লিখিত লোকেশন (ম্যানুয়ালি লিখুন) *</label>
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            value={writtenLocation}
-                            onChange={(e) => setWrittenLocation(e.target.value)}
-                            placeholder="যেমনঃ খড়কী, যশোর সদর, যশোর"
-                            className="block w-full px-3.5 py-2.5 bg-white border border-slate-200 text-slate-900 font-bold rounded-xl text-xs focus:border-[#0D9488] outline-none transition-all"
-                          />
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              if (!writtenLocation.trim()) {
-                                alert('প্রথমে লোকেশনটি লিখুন।');
-                                return;
-                              }
-                              const result = await geocodeTextOrLink(writtenLocation);
-                              if (result) {
-                                alert('লোকেশন থেকে ঠিকানা সফলভাবে সনাক্ত হয়েছে!');
-                              } else {
-                                alert('দুঃখিত, এই লোকেশনটি ম্যাপে খুঁজে পাওয়া যায়নি। অনুগ্রহ করে আরও বিস্তারিত লিখুন।');
-                              }
-                            }}
-                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black whitespace-nowrap cursor-pointer transition shadow-3xs"
-                          >
-                            ম্যাপে খুঁজুন
-                          </button>
-                        </div>
-                        <p className="text-[8.5px] text-slate-500 font-semibold mt-1">
-                          *এখানে আপনার এজেন্টের অবস্থান লিখিত আকারে দিন। সিস্টেম ম্যাপে এটি প্রদর্শন করবে।
-                        </p>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        {/* 4. District */}
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="block text-[9.5px] font-black text-slate-750 uppercase tracking-wider">4. নিজ জেলা / ডিভিশন</label>
-                            <span className="text-[8px] font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
-                              🔒 অটো জিপিএস / লিংক
-                            </span>
-                          </div>
-                          <input
-                            type="text"
-                            required
-                            readOnly
-                            value={district}
-                            placeholder="অটো জিপিএস বা লিংক দিলে অটো আসবে..."
-                            className="block w-full px-3.5 py-2.5 bg-emerald-50/70 border border-emerald-200 text-emerald-950 font-black rounded-xl text-xs cursor-not-allowed select-none transition-all"
-                          />
-                          <p className="text-[8.5px] text-teal-700 font-semibold mt-1">
-                            📍 জিপিএস/ম্যাপ লিংক থেকে অটো প্রাপ্ত
-                          </p>
-                        </div>
-
-                        {/* 5. Local Area / Thana */}
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="block text-[9.5px] font-black text-slate-755 uppercase tracking-wider">5. থানা / স্থানীয় এলাকা</label>
-                            <span className="text-[8px] font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
-                              🔒 অটো জিপিএস / লিংক
-                            </span>
-                          </div>
-                          <input
-                            type="text"
-                            required
-                            readOnly
-                            value={areaName}
-                            placeholder="অটো জিপিএস বা লিংক দিলে অটো আসবে..."
-                            className="block w-full px-3.5 py-2.5 bg-emerald-50/70 border border-emerald-200 text-emerald-950 font-black rounded-xl text-xs cursor-not-allowed select-none transition-all"
-                          />
-                          <p className="text-[8.5px] text-teal-700 font-semibold mt-1">
-                            📍 জিপিএস/ম্যাপ লিংক থেকে অটো প্রাপ্ত
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* 7. Experience */}
-                      <div>
-                        <label className="block text-[9.5px] font-black text-slate-750 uppercase tracking-wider mb-1">7. পূর্ববর্তী কাজের অভিজ্ঞতা</label>
-                        <select
-                          value={experience}
-                          onChange={(e) => setExperience(e.target.value)}
-                          className="block w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-[#0D9488] focus:bg-white focus:outline-none text-slate-800 font-bold"
-                        >
-                          <option value="নেই">কোনো অভিজ্ঞতা নেই</option>
-                          <option value="1 বছর">1 বছর বা তার কম</option>
-                          <option value="3+ বছর">1 থেকে 3 বছর পর্যন্ত</option>
-                          <option value="5+ বছর">5 বছরের বা তার বেশি অভিজ্ঞতা আছে</option>
-                        </select>
-                      </div>
-
-                      {/* 8. Motivation */}
-                      <div>
-                        <label className="block text-[9.5px] font-black text-slate-750 uppercase tracking-wider mb-1">8. কেন আপনি আমাদের এজেন্ট হতে চান?</label>
-                        <textarea
-                          rows={3}
-                          value={motivation}
-                          onChange={(e) => setMotivation(e.target.value)}
-                          placeholder="সংক্ষেপে আপনার প্রেষণা বা উদ্দেশ্য বর্ণনা করুন..."
-                          className="block w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-[#0D9488] focus:bg-white focus:outline-none font-medium text-slate-800"
-                        />
-                      </div>
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={isSubmitting}
-                      className="w-full py-3 bg-[#0D9488] hover:bg-[#0B7A70] disabled:bg-slate-300 text-white font-black rounded-xl text-xs transition-all duration-200 flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-emerald-700/15"
-                    >
-                      {isSubmitting ? (
-                        <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      ) : (
-                        <>
-                          <span>এজেন্ট আবেদন দাখিল করুন 🚀</span>
-                        </>
-                      )}
-                    </button>
-                  </form>
-                </div>
-              )}
             </div>
 
-            {/* ================= SEARCH & FILTERS ================= */}
+            {/* ================= SEARCH & FILTERS (Clean, Simple & Professional) ================= */}
             <div className="space-y-2.5">
               <div className="flex justify-between items-center px-1">
-                <h3 className="text-xs font-black text-slate-500 uppercase tracking-wider font-sans">এজেন্ট তালিকা (বিশ্বজুড়ে)</h3>
-                <span className="text-[10px] font-black text-[#0D9488] bg-sky-50 border border-slate-100 px-2 py-0.5 rounded-full font-bold">
+                <h3 className="text-xs font-black text-emerald-100 uppercase tracking-wider font-sans">এজেন্ট তালিকা (বিশ্বজুড়ে)</h3>
+                <span className="text-[10px] font-black text-[#0D9488] bg-white px-2.5 py-0.5 rounded-full shadow-xs">
                   {processedAgents.length} জন সক্রিয় ম্যাপ
                 </span>
               </div>
 
               <div className="flex gap-2 relative">
                 {/* Search Bar */}
-                <div className="bg-white border border-slate-200 rounded-2.5xl px-3 py-1.5 flex items-center gap-2 flex-grow shadow-3xs">
+                <div className="bg-white border border-slate-200 rounded-2.5xl px-3 py-2 flex items-center gap-2 flex-grow shadow-xs">
                   <Search className="w-4 h-4 text-slate-400 shrink-0" />
                   <input 
                     type="text"
@@ -2438,8 +3473,9 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                   />
                   {searchQuery && (
                     <button 
+                      type="button"
                       onClick={() => setSearchQuery('')}
-                      className="text-xs text-slate-400 hover:text-slate-600 font-bold px-1"
+                      className="text-xs text-slate-400 hover:text-slate-600 font-bold px-1 cursor-pointer"
                     >
                       ×
                     </button>
@@ -2448,8 +3484,9 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
 
                 {/* Filter Tab Button */}
                 <button 
+                  type="button"
                   onClick={() => setShowFilterDropdown(!showFilterDropdown)}
-                  className={`px-3 bg-white border rounded-2.5xl flex items-center gap-1.5 text-xs font-sans font-black shadow-3xs cursor-pointer ${showFilterDropdown ? 'border-[#0D9488] text-[#0D9488]' : 'border-slate-200 text-slate-600 hover:text-slate-800'}`}
+                  className={`px-3.5 bg-white border rounded-2.5xl flex items-center gap-1.5 text-xs font-sans font-black shadow-xs cursor-pointer ${showFilterDropdown ? 'border-[#0D9488] text-[#0D9488]' : 'border-slate-200 text-slate-600 hover:text-slate-800'}`}
                 >
                   <Filter className="w-3.5 h-3.5" /> ফিল্টার
                 </button>
@@ -2461,19 +3498,24 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                     {[
                       { key: 'all', label: 'সব সক্রিয় দেশ' },
                       { key: 'Bangladesh', label: '🇧🇩 বাংলাদেশ' },
-                      { key: 'United States', label: '🇺🇸 যুক্তরাজ্য / USA' },
-                      { key: 'UAE', label: '🇦🇪 সংযুক্ত আরব আমিরাত' },
-                      { key: 'United Kingdom', label: '🇬🇧 গ্রেট ব্রিটেন (UK)' },
+                      { key: 'Saudi Arabia', label: '🇸🇦 সৌদি আরব' },
+                      { key: 'UAE', label: '🇦🇪 দুবাই / UAE' },
+                      { key: 'Qatar', label: '🇶🇦 কাতার' },
+                      { key: 'Oman', label: '🇴🇲 ওমান' },
+                      { key: 'Kuwait', label: '🇰🇼 কুয়েত' },
+                      { key: 'Malaysia', label: '🇲🇾 মালয়েশিয়া' },
                       { key: 'Singapore', label: '🇸🇬 সিঙ্গাপুর' },
-                      { key: 'Malaysia', label: '🇲🇾 মালয়েশিয়া' }
+                      { key: 'United States', label: '🇺🇸 যুক্তরাষ্ট্র' },
+                      { key: 'United Kingdom', label: '🇬🇧 যুক্তরাজ্য' }
                     ].map((opt, _idx) => (
                       <button 
                         key={`${opt.key}-${_idx}`}
+                        type="button"
                         onClick={() => {
                           setSelectedCountryFilter(opt.key);
                           setShowFilterDropdown(false);
                         }}
-                        className={`w-full text-left px-2 py-1.5 rounded-lg text-xs leading-none flex items-center justify-between font-bold ${selectedCountryFilter === opt.key ? 'bg-emerald-50 text-emerald-800' : 'text-slate-600 hover:bg-slate-50'}`}
+                        className={`w-full text-left px-2 py-1.5 rounded-lg text-xs leading-none flex items-center justify-between font-bold cursor-pointer ${selectedCountryFilter === opt.key ? 'bg-emerald-50 text-emerald-800' : 'text-slate-600 hover:bg-slate-50'}`}
                       >
                         <span>{opt.label}</span>
                         {selectedCountryFilter === opt.key && <span className="text-emerald-600 text-[10px]">✓</span>}
@@ -2484,177 +3526,158 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
               </div>
             </div>
 
-            {/* Quick Country & Distance Pill Filter Bar */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 pt-1 no-scrollbar text-[10px] font-bold">
-              <button 
-                onClick={() => setSelectedCountryFilter('all')}
-                className={`px-2.5 py-1 rounded-full whitespace-nowrap transition cursor-pointer ${selectedCountryFilter === 'all' ? 'bg-slate-800 text-white shadow-3xs' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
-              >
-                সব দেশ ({agentsList.length})
-              </button>
-              <button 
-                onClick={() => setSelectedCountryFilter('Bangladesh')}
-                className={`px-2.5 py-1 rounded-full whitespace-nowrap transition cursor-pointer ${selectedCountryFilter === 'Bangladesh' ? 'bg-emerald-700 text-white shadow-3xs' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
-              >
-                🇧🇩 বাংলাদেশ
-              </button>
-              <button 
-                onClick={() => { setSelectedCountryFilter('Saudi Arabia'); setMapType('world'); }}
-                className={`px-2.5 py-1 rounded-full whitespace-nowrap transition cursor-pointer ${selectedCountryFilter === 'Saudi Arabia' ? 'bg-emerald-700 text-white shadow-3xs' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
-              >
-                🇸🇦 সৌদি আরব
-              </button>
-              <button 
-                onClick={() => { setSelectedCountryFilter('UAE'); setMapType('world'); }}
-                className={`px-2.5 py-1 rounded-full whitespace-nowrap transition cursor-pointer ${selectedCountryFilter === 'UAE' ? 'bg-emerald-700 text-white shadow-3xs' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
-              >
-                🇦🇪 দুবাই / UAE
-              </button>
-              <button 
-                onClick={() => { setSelectedCountryFilter('Qatar'); setMapType('world'); }}
-                className={`px-2.5 py-1 rounded-full whitespace-nowrap transition cursor-pointer ${selectedCountryFilter === 'Qatar' ? 'bg-emerald-700 text-white shadow-3xs' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
-              >
-                🇶🇦 কাতার
-              </button>
-              <button 
-                onClick={() => { setSelectedCountryFilter('Oman'); setMapType('world'); }}
-                className={`px-2.5 py-1 rounded-full whitespace-nowrap transition cursor-pointer ${selectedCountryFilter === 'Oman' ? 'bg-emerald-700 text-white shadow-3xs' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
-              >
-                🇴🇲 ওমান
-              </button>
-              <button 
-                onClick={() => { setSelectedCountryFilter('Kuwait'); setMapType('world'); }}
-                className={`px-2.5 py-1 rounded-full whitespace-nowrap transition cursor-pointer ${selectedCountryFilter === 'Kuwait' ? 'bg-emerald-700 text-white shadow-3xs' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
-              >
-                🇰🇼 কুয়েত
-              </button>
-              <button 
-                onClick={() => { setSelectedCountryFilter('Malaysia'); setMapType('world'); }}
-                className={`px-2.5 py-1 rounded-full whitespace-nowrap transition cursor-pointer ${selectedCountryFilter === 'Malaysia' ? 'bg-emerald-700 text-white shadow-3xs' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
-              >
-                🇲🇾 মালয়েশিয়া
-              </button>
-              <button 
-                onClick={() => { setSelectedCountryFilter('Singapore'); setMapType('world'); }}
-                className={`px-2.5 py-1 rounded-full whitespace-nowrap transition cursor-pointer ${selectedCountryFilter === 'Singapore' ? 'bg-emerald-700 text-white shadow-3xs' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
-              >
-                🇸🇬 সিঙ্গাপুর
-              </button>
-            </div>
-
             {/* ================= ACTIVE AGENTS GRID ================= */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {processedAgents.map((agent, idx) => {
-                const agentLat = agent.realLat !== undefined ? agent.realLat : agent.lat;
-                const agentLng = agent.realLng !== undefined ? agent.realLng : agent.lng;
-                const isSelected = highlightedAgentId === agent.id;
-                const displayAddress =
-                  agent.address ||
-                  [agent.postOffice, agent.thana, agent.district, agent.city]
-                    .filter(Boolean)
-                    .join(', ');
+            {processedAgents.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {processedAgents.map((agent, idx) => {
+                  const agentLat = agent.realLat !== undefined ? agent.realLat : agent.lat;
+                  const agentLng = agent.realLng !== undefined ? agent.realLng : agent.lng;
+                  const isSelected = highlightedAgentId === agent.id;
+                  const displayAddress =
+                    agent.address ||
+                    [agent.postOffice, agent.thana, agent.district, agent.city]
+                      .filter(Boolean)
+                      .join(', ');
 
-                const focusAgentOnMap = () => {
-                  setHighlightedAgentId(agent.id);
-                  const isBD =
-                    (agent.country || '').toLowerCase().includes('bangladesh') ||
-                    (agent.country || '').includes('বাংলাদেশ');
-                  if (!isBD && mapType === 'bangladesh') {
-                    setMapType('world');
-                  }
-                  setZoomLevel(1.5);
-                  document
-                    .getElementById('agent-google-map-container')
-                    ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                };
+                  const focusAgentOnMap = () => {
+                    setHighlightedAgentId(agent.id);
+                    const isBD =
+                      (agent.country || '').toLowerCase().includes('bangladesh') ||
+                      (agent.country || '').includes('বাংলাদেশ');
+                    if (!isBD && mapType === 'bangladesh') {
+                      setMapType('world');
+                    }
+                    setZoomLevel(1.5);
+                    document
+                      .getElementById('agent-google-map-container')
+                      ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  };
 
-                return (
-                  <div
-                    id={`agent-card-${agent.id}`}
-                    key={`${agent.id}-${idx}`}
-                    onClick={focusAgentOnMap}
-                    className={`bg-white rounded-2.5xl p-3.5 flex flex-col justify-between transition-all duration-200 text-left group relative overflow-hidden cursor-pointer ${
-                      isSelected
-                        ? 'border-2 border-orange-500 ring-2 ring-orange-400/50 bg-orange-50/20 shadow-md'
-                        : 'border border-slate-200 hover:shadow-md shadow-3xs'
-                    }`}
-                  >
-                    {/* Top Row: Badge (Agent Point + ID or Official Center) & Distance (only if GPS active) */}
-                    <div className="flex items-center justify-between gap-2 mb-2">
-                      <span className="inline-flex items-center gap-1 text-[9.5px] font-black px-2.5 py-0.5 rounded-full bg-blue-50 text-[#1E3A8A] border border-blue-200">
-                        {agent.badgeLabel || `এজেন্ট পয়েন্ট • ${agent.agentCode || 'AG-2041'}`}
-                      </span>
-
-                      {userLocation && agent.distanceKm != null && !isNaN(agent.distanceKm) && (
-                        <span className="inline-flex items-center gap-1 text-[9.5px] font-black px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 shrink-0">
-                          📍 {agent.distanceKm < 1
-                            ? `${toBanglaDigits(Math.round(agent.distanceKm * 1000))} মিটার`
-                            : `${toBanglaDigits(agent.distanceKm.toFixed(1))} কি.মি.`}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Agent Name */}
-                    <h4
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        focusAgentOnMap();
-                      }}
-                      className="text-xs sm:text-[13px] font-black text-slate-900 hover:text-[#1E3A8A] leading-snug truncate cursor-pointer"
+                  return (
+                    <div
+                      id={`agent-card-${agent.id}`}
+                      key={`${agent.id}-${idx}`}
+                      onClick={focusAgentOnMap}
+                      className={`bg-white rounded-2.5xl p-3.5 flex flex-col justify-between transition-all duration-200 text-left group relative overflow-hidden cursor-pointer ${
+                        isSelected
+                          ? 'border-2 border-orange-500 ring-2 ring-orange-400/50 bg-orange-50/20 shadow-md'
+                          : 'border border-slate-200 hover:shadow-md shadow-3xs'
+                      }`}
                     >
-                      {agent.name}
-                    </h4>
+                      {/* Top Row: Badge (Agent Point + ID or Official Center) & Distance */}
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <span className="inline-flex items-center gap-1 text-[9.5px] font-black px-2.5 py-0.5 rounded-full bg-blue-50 text-[#1E3A8A] border border-blue-200">
+                          {agent.badgeLabel || `এজেন্ট পয়েন্ট • ${agent.agentCode || 'AG-2041'}`}
+                        </span>
 
-                    {/* Public Details: Address, Opening Hours, Phone Number */}
-                    <div className="space-y-1.5 my-2.5 font-sans text-[10px] text-slate-700">
-                      <div className="flex items-start gap-1.5 font-semibold leading-snug">
-                        <MapPin className="w-3.5 h-3.5 text-[#0D9488] shrink-0 mt-0.5" />
-                        <span>{displayAddress || agent.city}</span>
+                        {userLocation && agent.distanceKm != null && !isNaN(agent.distanceKm) && (
+                          <span className="inline-flex items-center gap-1 text-[9.5px] font-black px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 shrink-0">
+                            📍 {agent.distanceKm < 1
+                              ? `${toBanglaDigits(Math.round(agent.distanceKm * 1000))} মিটার`
+                              : `${toBanglaDigits(agent.distanceKm.toFixed(1))} কি.মি.`}
+                            {agent.estTime ? ` • ${agent.estTime}` : ''}
+                          </span>
+                        )}
                       </div>
 
-                      <div className="flex items-center gap-1.5 font-semibold text-slate-600">
-                        <Calendar className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                        <span>খোলার সময়: {agent.openingHours || 'সকাল ৯:০০ - রাত ১০:০০'}</span>
+                      {/* Agent Avatar + Name */}
+                      <div className="flex items-center gap-2.5">
+                        <img
+                          src={agent.img}
+                          alt={agent.name}
+                          referrerPolicy="no-referrer"
+                          className="w-10 h-10 rounded-full object-cover border-2 border-[#0D9488] shrink-0 shadow-2xs"
+                        />
+                        <h4
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            focusAgentOnMap();
+                          }}
+                          className="text-xs sm:text-[13px] font-black text-slate-900 hover:text-[#1E3A8A] leading-snug truncate cursor-pointer flex-1"
+                        >
+                          {agent.name}
+                        </h4>
                       </div>
 
-                      <div className="flex items-center gap-1.5 font-mono font-extrabold text-slate-800">
-                        <Phone className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                        <span>{agent.phone}</span>
+                      {/* Public Details: Address, Opening Hours, Phone Number */}
+                      <div className="space-y-1.5 my-2.5 font-sans text-[10px] text-slate-700">
+                        <div className="flex items-start gap-1.5 font-semibold leading-snug">
+                          <MapPin className="w-3.5 h-3.5 text-[#0D9488] shrink-0 mt-0.5" />
+                          <span>{displayAddress || agent.city}</span>
+                        </div>
+
+                        {(() => {
+                          const liveSched = getLiveScheduleStatus(agent.weeklySchedule, agent.openingHours);
+                          return (
+                            <div className="space-y-1 bg-slate-50 border border-slate-200/70 rounded-xl px-2.5 py-1.5">
+                              <div className="flex items-center justify-between gap-1.5 flex-wrap">
+                                <span className="flex items-center gap-1 font-bold text-slate-700">
+                                  <Calendar className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                  <span>আজ ({liveSched.todayDayLabel}):</span>
+                                </span>
+                                {agent.weeklySchedule && (
+                                  <span
+                                    className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${
+                                      liveSched.state === 'open'
+                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                        : liveSched.state === 'break'
+                                          ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                          : 'bg-rose-50 text-rose-700 border-rose-200'
+                                    }`}
+                                  >
+                                    {liveSched.statusLabel}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[10px] font-semibold text-slate-600 leading-snug">
+                                {liveSched.todayHours || agent.openingHours || 'সকাল ৯:০০ - রাত ১০:০০'}
+                              </p>
+                              {liveSched.closedDaysLabel && (
+                                <p className="text-[9.5px] font-bold text-rose-600 leading-none">
+                                  📅 সাপ্তাহিক অবস্থা: {liveSched.closedDaysLabel}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })()}
+
+                        <div className="flex items-center gap-1.5 font-mono font-extrabold text-slate-800">
+                          <Phone className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          <span>{agent.phone}</span>
+                        </div>
+                      </div>
+
+                      {/* Action Buttons: "কল করুন" & "গুগল ম্যাপ পথ" */}
+                      <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100">
+                        <a
+                          href={`tel:${agent.phone}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="py-2 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black rounded-xl flex items-center justify-center gap-1.5 transition text-center shadow-2xs cursor-pointer"
+                        >
+                          <Phone className="w-3 h-3 shrink-0" />
+                          <span>কল করুন</span>
+                        </a>
+
+                        <a
+                          href={`https://www.google.com/maps/dir/?api=1&${userLocation ? `origin=${userLocation.lat},${userLocation.lng}&` : ''}destination=${agentLat},${agentLng}&travelmode=driving`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="py-2 px-2.5 bg-[#1E3A8A] hover:bg-blue-900 text-white text-[10px] font-black rounded-xl flex items-center justify-center gap-1.5 transition text-center shadow-2xs cursor-pointer"
+                        >
+                          <Navigation className="w-3 h-3 shrink-0" />
+                          <span>দিকনির্দেশনা (Map)</span>
+                        </a>
                       </div>
                     </div>
-
-                    {/* Action Buttons: "কল করুন" & "দিকনির্দেশনা (Map)" */}
-                    <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100">
-                      <a
-                        href={`tel:${agent.phone}`}
-                        onClick={(e) => e.stopPropagation()}
-                        className="py-2 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black rounded-xl flex items-center justify-center gap-1.5 transition text-center shadow-2xs cursor-pointer"
-                      >
-                        <Phone className="w-3 h-3 shrink-0" />
-                        <span>কল করুন</span>
-                      </a>
-
-                      <a
-                        href={`https://www.google.com/maps/dir/?api=1&destination=${agentLat},${agentLng}&travelmode=driving`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="py-2 px-2.5 bg-[#1E3A8A] hover:bg-blue-900 text-white text-[10px] font-black rounded-xl flex items-center justify-center gap-1.5 transition text-center shadow-2xs cursor-pointer"
-                      >
-                        <Navigation className="w-3 h-3 shrink-0" />
-                        <span>দিকনির্দেশনা (Map)</span>
-                      </a>
-                    </div>
-                  </div>
-                );
-              })}
-              
-              {processedAgents.length === 0 && (
-                <div className="col-span-2 bg-slate-50 border border-slate-150 rounded-2.5xl p-6 text-center text-slate-400 text-xs font-bold font-sans">
-                  কোনো এজেন্ট খুঁজে পাওয়া যায়নি। অনুসন্ধান শব্দ পরিবর্তন করুন।
-                </div>
-              )}
-            </div>
+                  );
+                })}
+              </div>
+            ) : searchQuery.trim().length > 0 ? (
+              <div className="bg-white/95 border border-slate-200 rounded-2xl px-4 py-3 text-center text-slate-600 text-xs font-bold">
+                “{searchQuery}” নামে কোনো সক্রিয় এজেন্ট খুঁজে পাওয়া যায়নি।
+              </div>
+            ) : null}
 
             {/* ================= 4 INFO METRICS ROW ================= */}
             <div className="grid grid-cols-4 gap-2 my-2">
@@ -2769,8 +3792,8 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                           </div>
                         </div>
 
-                        {/* Admin Action Bar */}
-                        {(user.role === 'admin' || user.role === 'sub_admin') && (
+                        {/* Admin Action Bar (Strictly inside /admin) */}
+                        {isStandaloneAdminRoute() && (user.role === 'admin' || user.role === 'sub_admin') && (
                           <div className="bg-amber-50 border border-amber-200/60 p-2.5 rounded-xl space-y-1.5">
                             <p className="text-[8.5px] font-black text-amber-900 uppercase">🛡️ প্রশাসনিক আবেদন নিয়ন্ত্রণ প্যানেল</p>
                             {isPending ? (
@@ -2832,43 +3855,417 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
                 BNB কো-অপারেটিভ আন্তর্জাতিক এজেন্ট কার্ড
               </h2>
 
-              {/* Digital Agent Identity Card */}
-              <div className="bg-gradient-to-br from-indigo-950 via-slate-900 to-emerald-950 text-white rounded-3xl p-4.5 border border-white/10 relative overflow-hidden shadow-lg aspect-[1.58/1] flex flex-col justify-between">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-[#0D9488]/10 rounded-full blur-2xl pointer-events-none" />
-                <div className="absolute -bottom-8 -left-8 w-24 h-24 bg-sky-500/10 rounded-full blur-xl pointer-events-none" />
-                
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h3 className="text-sm font-black text-slate-100 font-sans tracking-tight mb-0.5">BNB Business Co-operative Ltd.</h3>
-                    <p className="text-[7.5px] text-[#22C55E] uppercase font-black tracking-widest font-mono">OFFICIAL GLOBAL AGENT</p>
-                  </div>
-                  {/* Flag / status symbol */}
-                  <span className="text-2xl">🇧🇩</span>
-                </div>
+              {/* Digital Agent Identity Card (16:9 YouTube Thumbnail Size — 100% Auto-Populated from Profile & Application Form) */}
+              {(() => {
+                const cardName = String(
+                  myAgentProfile?.name ||
+                    myLatestApplication?.userName ||
+                    effectiveUserProfile.name ||
+                    'সম্মানিত সদস্য'
+                ).trim();
+                const cardPhone = String(
+                  myAgentProfile?.phone ||
+                    myLatestApplication?.phone ||
+                    effectiveUserProfile.phone ||
+                    'নম্বর যুক্ত নেই'
+                ).trim();
+                const rawPhoneDigits = cardPhone.replace(/\D/g, '');
+                const defaultSerial = rawPhoneDigits
+                  ? `AG-${rawPhoneDigits.slice(-4).padStart(4, '2')}`
+                  : `BNB-AGT-${user.uid?.substring(0, 5).toUpperCase()}`;
+                const cardSerial = String(
+                  myAgentProfile?.agentCode ||
+                    myLatestApplication?.agentCode ||
+                    effectiveUserProfile.agentCode ||
+                    effectiveUserProfile.memberId ||
+                    defaultSerial
+                ).trim();
+                const cardDistrict = String(
+                  myAgentProfile?.district ||
+                    myLatestApplication?.district ||
+                    effectiveUserProfile.district ||
+                    ''
+                ).trim();
+                const cardThana = String(
+                  myAgentProfile?.thana ||
+                    myLatestApplication?.thana ||
+                    myLatestApplication?.area ||
+                    effectiveUserProfile.thana ||
+                    ''
+                ).trim();
+                const cardVillageOrShop = String(
+                  myAgentProfile?.postOffice ||
+                    myLatestApplication?.postOffice ||
+                    effectiveUserProfile.village ||
+                    myLatestApplication?.writtenLocation ||
+                    myAgentProfile?.address ||
+                    myLatestApplication?.address ||
+                    effectiveUserProfile.writtenLocation ||
+                    effectiveUserProfile.address ||
+                    ''
+                ).trim();
 
-                <div className="flex items-center gap-3 mt-4">
-                  <div className="w-12 h-12 rounded-2xl bg-white/10 border border-white/10 flex items-center justify-center text-xl shrink-0 overflow-hidden">
-                    <img 
-                      src={resolveAgentAvatar(user, user.name || 'সম্মানিত সদস্য')} 
-                      className="w-full h-full object-cover shrink-0" 
-                      referrerPolicy="no-referrer"
-                    />
-                  </div>
-                  <div>
-                    <h4 className="text-[11.5px] font-black text-white leading-tight font-sans">{user.name || 'সম্মানিত সদস্য'}</h4>
-                    <p className="text-[8px] text-slate-350 leading-tight block truncate mt-0.5">District Agent (Candidate)</p>
-                    <p className="text-[8px] text-yellow-350 font-mono mt-0.5">ID: BNB-AGT-TEMP-{user.uid?.substring(0, 5).toUpperCase()}</p>
-                  </div>
-                </div>
+                const locationSegments = Array.from(
+                  new Set(
+                    [cardVillageOrShop, cardThana, cardDistrict]
+                      .map((s) => s.trim())
+                      .filter(Boolean)
+                  )
+                );
+                const cardFullLocation =
+                  locationSegments.length > 0
+                    ? locationSegments.join(', ')
+                    : 'ফর্মে ঠিকানা যুক্ত করলে এখানে দেখাবে';
 
-                <div className="flex justify-between items-end border-t border-white/10 pt-2.5 text-[7px] text-slate-400 font-bold uppercase tracking-widest">
-                  <span>VALIDITY: LIFETIME CO-OP</span>
-                  <span className="text-emerald-450 flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
-                    PENDING APPROVAL
-                  </span>
-                </div>
-              </div>
+                const rawProfileImg =
+                  (liveUserPhoto && !liveUserPhoto.includes('1534528741775-53994a69daeb') ? liveUserPhoto : '') ||
+                  myAgentProfile?.img ||
+                  myLatestApplication?.photoURL ||
+                  myLatestApplication?.img ||
+                  resolveAgentAvatar({ ...effectiveUserProfile, img: liveUserPhoto }, cardName);
+
+                const appStatus = myAgentProfile
+                  ? 'approved'
+                  : String(myLatestApplication?.status || '').toLowerCase();
+
+                return (
+                  <div className="w-full aspect-video bg-gradient-to-br from-[#071739] via-[#0B1E36] to-[#063B2D] text-white rounded-2xl p-3.5 sm:p-4.5 border border-emerald-400/25 relative overflow-hidden shadow-xl flex flex-col justify-between">
+                    <div className="absolute -top-10 -right-10 w-36 h-36 bg-emerald-400/15 rounded-full blur-2xl pointer-events-none" />
+                    <div className="absolute -bottom-10 -left-10 w-32 h-32 bg-sky-400/15 rounded-full blur-2xl pointer-events-none" />
+
+                    {/* Top Row: Company Branding & Country / Serial Pill */}
+                    <div className="relative z-10 flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <h3 className="text-xs sm:text-sm font-black text-white tracking-tight leading-none truncate">
+                          BNB Business Co-operative Ltd.
+                        </h3>
+                        <p className="text-[8px] sm:text-[9px] text-emerald-400 uppercase font-black tracking-widest font-mono mt-1">
+                          {myAgentProfile?.badgeLabel || 'OFFICIAL BNB AGENT ID'}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className="px-2 py-0.5 rounded-md bg-white/10 border border-white/15 font-mono text-[9px] sm:text-[10px] font-black text-amber-300">
+                          {cardSerial}
+                        </span>
+                        <span className="text-lg sm:text-xl leading-none">🇧🇩</span>
+                      </div>
+                    </div>
+
+                    {/* Middle Row: Profile Photo + Auto-Populated Name, Serial, Phone & Location */}
+                    <div className="relative z-10 flex items-center gap-3 sm:gap-3.5 my-auto">
+                      <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-white/10 border-2 border-emerald-400/60 overflow-hidden shrink-0 shadow-lg flex items-center justify-center">
+                        <img
+                          src={rawProfileImg}
+                          alt={cardName}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <h4 className="text-xs sm:text-sm font-black text-white leading-tight truncate">
+                          {cardName}
+                        </h4>
+
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[9.5px] sm:text-[10.5px] font-bold">
+                          <span className="text-amber-300 font-mono truncate">
+                            সিরিয়াল: {cardSerial}
+                          </span>
+                          <span className="text-emerald-300 font-mono truncate">
+                            📞 {cardPhone}
+                          </span>
+                        </div>
+
+                        <div className="flex items-start gap-1 text-[9px] sm:text-[10px] text-slate-200 font-semibold leading-snug">
+                          <MapPin className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" />
+                          <span className="line-clamp-2">
+                            {cardFullLocation}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Bottom Row: Auto Location Breakdown Chips + Live Approval Status */}
+                    <div className="relative z-10 flex items-center justify-between gap-2 border-t border-white/10 pt-2 text-[8px] sm:text-[8.5px] font-bold tracking-wide">
+                      <span className="text-slate-300 truncate">
+                        {[cardDistrict && `জেলা: ${cardDistrict}`, cardThana && `থানা: ${cardThana}`]
+                          .filter(Boolean)
+                          .join(' • ') || 'AUTO SYNCED FROM FORM'}
+                      </span>
+                      <span className="flex items-center gap-1.5 shrink-0 uppercase tracking-wider font-black">
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            appStatus === 'approved'
+                              ? 'bg-emerald-400 animate-pulse'
+                              : appStatus === 'pending'
+                                ? 'bg-amber-400 animate-pulse'
+                                : 'bg-sky-400'
+                          }`}
+                        />
+                        <span
+                          className={
+                            appStatus === 'approved'
+                              ? 'text-emerald-300'
+                              : appStatus === 'pending'
+                                ? 'text-amber-300'
+                                : 'text-sky-300'
+                          }
+                        >
+                          {appStatus === 'approved'
+                            ? 'VERIFIED ACTIVE AGENT'
+                            : appStatus === 'pending'
+                              ? 'PENDING APPROVAL'
+                              : 'PROFILE CARD'}
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ================= WHATSAPP BUSINESS STYLE AGENT SCHEDULE & DOUBLE BREAK EDITOR ================= */}
+              {(() => {
+                const livePreview = getLiveScheduleStatus(weeklySchedule);
+                return (
+                  <div className="bg-gradient-to-b from-emerald-50/70 to-white border border-emerald-200 rounded-3xl p-4 shadow-3xs space-y-3.5">
+                    <div className="flex items-start justify-between gap-2 border-b border-emerald-100 pb-2.5">
+                      <div className="flex items-start gap-2">
+                        <div className="p-2 bg-emerald-100 text-emerald-700 rounded-xl shrink-0">
+                          <Clock className="w-4.5 h-4.5" />
+                        </div>
+                        <div>
+                          <h3 className="text-xs font-black text-emerald-950">
+                            কাজের সময়সূচি ও সাপ্তাহিক বন্ধ (WhatsApp স্টাইল)
+                          </h3>
+                          <p className="text-[10px] text-slate-600 font-semibold leading-snug mt-0.5">
+                            দোকান বা সেবা চালু/বন্ধের সময়, দুপুরের বিরতি (ডাবল শিফট) এবং শুক্রবার বা যেকোনো দিনের সাপ্তাহিক বন্ধ নির্ধারণ করুন।
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Live Schedule Status Preview */}
+                    <div className="bg-white border border-emerald-200 rounded-2xl p-3 space-y-1.5">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <span className="text-[10px] font-black text-slate-700">
+                          আজ ({livePreview.todayDayLabel}) লাইভ অবস্থা:
+                        </span>
+                        <span
+                          className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border ${
+                            livePreview.state === 'open'
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : livePreview.state === 'break'
+                                ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                : 'bg-rose-50 text-rose-700 border-rose-200'
+                          }`}
+                        >
+                          {livePreview.statusLabel}
+                        </span>
+                      </div>
+                      <p className="text-[10.5px] font-bold text-slate-800">
+                        🕒 {livePreview.todayHours}
+                      </p>
+                      <p className="text-[10px] font-bold text-rose-600">
+                        📅 {livePreview.closedDaysLabel}
+                      </p>
+                    </div>
+
+                    {/* Quick Actions Row */}
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={applyFirstOpenDayToAllOpenDays}
+                        className="flex-1 min-w-[140px] py-2 px-3 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 rounded-xl text-[10px] font-black transition cursor-pointer text-center"
+                      >
+                        ⚡ সব খোলা দিনে একই সময় দিন
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateDaySchedule('fri', { enabled: !weeklySchedule.fri.enabled })}
+                        className={`py-2 px-3 rounded-xl text-[10px] font-black border transition cursor-pointer ${
+                          !weeklySchedule.fri.enabled
+                            ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                            : 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700'
+                        }`}
+                      >
+                        {!weeklySchedule.fri.enabled ? 'শুক্রবার: বন্ধ (চালু করুন)' : 'শুক্রবার: খোলা (বন্ধ করুন)'}
+                      </button>
+                    </div>
+
+                    {/* 7-Day WhatsApp Business Schedule Rows */}
+                    <div className="space-y-2.5">
+                      {WEEK_DAYS.map(({ key, labelBn }) => {
+                        const dayCfg = weeklySchedule[key];
+                        return (
+                          <div
+                            key={key}
+                            className={`rounded-2xl border p-3 transition ${
+                              dayCfg.enabled
+                                ? 'bg-white border-emerald-200 shadow-4xs'
+                                : 'bg-slate-50 border-slate-200'
+                            }`}
+                          >
+                            {/* Day Header + Open/Close Toggle */}
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span
+                                  className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                                    dayCfg.enabled ? 'bg-emerald-500' : 'bg-rose-400'
+                                  }`}
+                                />
+                                <span className="text-xs font-black text-slate-900">{labelBn}</span>
+                                <span
+                                  className={`text-[9.5px] font-bold px-2 py-0.5 rounded-full ${
+                                    dayCfg.enabled
+                                      ? 'bg-emerald-50 text-emerald-700'
+                                      : 'bg-rose-50 text-rose-700'
+                                  }`}
+                                >
+                                  {dayCfg.enabled ? 'খোলা' : 'সাপ্তাহিক বন্ধ'}
+                                </span>
+                              </div>
+
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={dayCfg.enabled}
+                                onClick={() => updateDaySchedule(key, { enabled: !dayCfg.enabled })}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer shrink-0 ${
+                                  dayCfg.enabled ? 'bg-[#0D9488]' : 'bg-slate-300'
+                                }`}
+                              >
+                                <span
+                                  className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                                    dayCfg.enabled ? 'translate-x-6' : 'translate-x-1'
+                                  }`}
+                                />
+                              </button>
+                            </div>
+
+                            {/* Time Pickers when Day is Open */}
+                            {dayCfg.enabled ? (
+                              <div className="mt-2.5 pt-2.5 border-t border-slate-100 space-y-2.5">
+                                {/* Shift 1 */}
+                                <div className="space-y-1">
+                                  <span className="text-[9.5px] font-black text-emerald-800 block">
+                                    ১ম শিফট (খোলা থেকে বিরতি/বন্ধ):
+                                  </span>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                      <label className="text-[8.5px] font-bold text-slate-500 block mb-0.5">
+                                        শুরু ({formatTimeBn(dayCfg.slot1Start)})
+                                      </label>
+                                      <input
+                                        type="time"
+                                        value={dayCfg.slot1Start}
+                                        onChange={(e) => updateDaySchedule(key, { slot1Start: e.target.value })}
+                                        className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-[11px] font-mono font-black text-slate-800 focus:ring-1 focus:ring-[#0D9488] outline-none"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="text-[8.5px] font-bold text-slate-500 block mb-0.5">
+                                        শেষ ({formatTimeBn(dayCfg.slot1End)})
+                                      </label>
+                                      <input
+                                        type="time"
+                                        value={dayCfg.slot1End}
+                                        onChange={(e) => updateDaySchedule(key, { slot1End: e.target.value })}
+                                        className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-[11px] font-mono font-black text-slate-800 focus:ring-1 focus:ring-[#0D9488] outline-none"
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Double Break / Shift 2 Toggle */}
+                                <div className="flex items-center justify-between gap-2 bg-amber-50/70 border border-amber-200/70 rounded-xl px-2.5 py-1.5">
+                                  <span className="text-[10px] font-black text-amber-900">
+                                    ☕ দুপুরের বিরতি ও ২য় শিফট (ডাবল ব্রেক)
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => updateDaySchedule(key, { hasSecondSlot: !dayCfg.hasSecondSlot })}
+                                    className={`text-[9.5px] font-black px-2.5 py-0.5 rounded-lg border cursor-pointer transition ${
+                                      dayCfg.hasSecondSlot
+                                        ? 'bg-amber-600 text-white border-amber-600'
+                                        : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    {dayCfg.hasSecondSlot ? 'চালু আছে ✓' : '+ ২য় শিফট যোগ করুন'}
+                                  </button>
+                                </div>
+
+                                {/* Shift 2 if Double Break enabled */}
+                                {dayCfg.hasSecondSlot && (
+                                  <div className="space-y-1 pl-2 border-l-2 border-amber-300">
+                                    <span className="text-[9.5px] font-black text-amber-900 block">
+                                      ২য় শিফট (বিরতির পর পুনরায় খোলা):
+                                    </span>
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <div>
+                                        <label className="text-[8.5px] font-bold text-slate-500 block mb-0.5">
+                                          শুরু ({formatTimeBn(dayCfg.slot2Start)})
+                                        </label>
+                                        <input
+                                          type="time"
+                                          value={dayCfg.slot2Start}
+                                          onChange={(e) => updateDaySchedule(key, { slot2Start: e.target.value })}
+                                          className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-[11px] font-mono font-black text-slate-800 focus:ring-1 focus:ring-[#0D9488] outline-none"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="text-[8.5px] font-bold text-slate-500 block mb-0.5">
+                                          শেষ ({formatTimeBn(dayCfg.slot2End)})
+                                        </label>
+                                        <input
+                                          type="time"
+                                          value={dayCfg.slot2End}
+                                          onChange={(e) => updateDaySchedule(key, { slot2End: e.target.value })}
+                                          className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-[11px] font-mono font-black text-slate-800 focus:ring-1 focus:ring-[#0D9488] outline-none"
+                                        />
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <p className="mt-1.5 text-[10px] font-bold text-rose-600">
+                                🚫 এই দিনে সেবা বন্ধ থাকবে — ম্যাপ ও এজেন্ট কার্ডে সাপ্তাহিক বন্ধ দেখাবে।
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {scheduleErrorMsg && (
+                      <div className="bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-[10.5px] font-bold text-rose-700">
+                        ⚠️ {scheduleErrorMsg}
+                      </div>
+                    )}
+
+                    {scheduleSuccessMsg && (
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-[10.5px] font-bold text-emerald-800 flex items-center gap-1.5">
+                        <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span>{scheduleSuccessMsg}</span>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={handleSaveAgentSchedule}
+                      disabled={isSavingSchedule}
+                      className="w-full py-3 bg-[#0D9488] hover:bg-[#0B7A70] disabled:bg-slate-300 text-white rounded-2xl text-xs font-black flex items-center justify-center gap-2 transition shadow-sm cursor-pointer"
+                    >
+                      {isSavingSchedule ? (
+                        <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <CheckCircle className="w-4 h-4 shrink-0" />
+                      )}
+                      <span>সময়সূচি সেভ করুন 💾</span>
+                    </button>
+                  </div>
+                );
+              })()}
 
               <div className="bg-slate-50 border border-slate-150 p-3.5 rounded-2xl text-[10px] text-slate-600 leading-relaxed font-semibold">
                 <p className="font-black text-slate-800 text-[11px] mb-1">ℹ️ অনুমোদন প্রক্রিয়াঃ</p>
@@ -2969,8 +4366,10 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
         )}
 
       </main>
+      )}
 
-      {/* ================= STICKY BOTTOM TABS FOOTER (Matches screenshot exactly) ================= */}
+      {/* ================= STICKY BOTTOM TABS FOOTER (Hidden when dedicated Full-Screen Apply page is open) ================= */}
+      {activeTab !== 'apply' && (
       <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-150 py-1.5 z-40 max-w-lg mx-auto shadow-md">
         <div className="grid grid-cols-4 gap-1 text-center">
           {/* Tab 1: হোম */}
@@ -3014,6 +4413,7 @@ const assignUniqueAgentCoordinates = (list: Agent[]): Agent[] => {
           </button>
         </div>
       </footer>
+      )}
 
     </div>
   );

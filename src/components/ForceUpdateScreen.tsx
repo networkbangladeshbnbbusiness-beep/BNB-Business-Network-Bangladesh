@@ -29,36 +29,18 @@ export default function ForceUpdateScreen({ appConfig, currentUser, onBypassAdmi
     >
       {/* Top Section - Logo & Branding */}
       <div className="w-full max-w-md pt-8 flex flex-col items-center">
-        {isAdmin ? (
-          <div 
-            onClick={onBypassAdmin}
-            className="cursor-pointer transform active:scale-95 transition"
-          >
-            {appConfig.logoUrl ? (
-              <img 
-                src={appConfig.logoUrl} 
-                alt="BNB Logo" 
-                className="h-12 w-auto object-contain drop-shadow-[0_0_15px_rgba(212,175,55,0.3)]"
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <BNBLogo className="h-12 w-auto drop-shadow-[0_0_15px_rgba(212,175,55,0.3)]" />
-            )}
-          </div>
-        ) : (
-          <div>
-            {appConfig.logoUrl ? (
-              <img 
-                src={appConfig.logoUrl} 
-                alt="BNB Logo" 
-                className="h-12 w-auto object-contain drop-shadow-[0_0_15px_rgba(212,175,55,0.3)]"
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <BNBLogo className="h-12 w-auto drop-shadow-[0_0_15px_rgba(212,175,55,0.3)]" />
-            )}
-          </div>
-        )}
+        <div>
+          {appConfig.logoUrl ? (
+            <img 
+              src={appConfig.logoUrl} 
+              alt="BNB Logo" 
+              className="h-12 w-auto object-contain drop-shadow-[0_0_15px_rgba(212,175,55,0.3)]"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <BNBLogo className="h-12 w-auto drop-shadow-[0_0_15px_rgba(212,175,55,0.3)]" />
+          )}
+        </div>
 
         <h2 className="text-white text-xs font-black tracking-[0.2em] uppercase mt-2 font-sans">
           BNB BUSINESS
@@ -179,16 +161,6 @@ export default function ForceUpdateScreen({ appConfig, currentUser, onBypassAdmi
           <Lock className="w-3 h-3 text-slate-500" />
           <span>আপডেট না করলে অ্যাপ ব্যবহার করতে পারবেন না</span>
         </div>
-
-        {/* Back door for admins */}
-        {isAdmin && (
-          <button 
-            onClick={onBypassAdmin}
-            className="text-[9.5px] font-semibold text-slate-500 hover:text-slate-300 underline transition cursor-pointer"
-          >
-            🛠️ bypass as admin
-          </button>
-        )}
       </div>
     </div>
   );

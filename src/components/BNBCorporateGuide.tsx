@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { User, AppConfig } from '../types';
 import { db } from '../lib/firebase';
 import { doc, updateDoc } from 'firebase/firestore';
+import { isStandaloneAdminRoute } from '../lib/adminRoute';
 import { 
   ChevronLeft, 
   BookOpen, 
@@ -37,7 +38,7 @@ export default function BNBCorporateGuide({
   appConfig, 
   onUpdateConfig 
 }: BNBCorporateGuideProps) {
-  const isAdmin = user?.role === 'admin' || user?.role === 'sub_admin';
+  const isAdmin = isStandaloneAdminRoute() && (user?.role === 'admin' || user?.role === 'sub_admin');
 
   // Toggle expanded category boxes
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);

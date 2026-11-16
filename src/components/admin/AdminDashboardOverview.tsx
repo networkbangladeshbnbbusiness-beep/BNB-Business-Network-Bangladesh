@@ -35,6 +35,9 @@ import TelecomAdmin from '../TelecomAdmin';
 import BNBSalaryAdmin from '../BNBSalaryAdmin';
 import { HistoryRetentionSettings } from '../HistoryRetentionSettings';
 import { runWalletEndToEndTests, TestResultItem } from '../../lib/walletTests';
+import { AdminDashboardSectionAuditMatrix } from './AdminSectionAuditBar';
+import { isAdminAccountRole, isSuperAdminUser, isUserAdminCurrentlyOnline } from '../../lib/adminAccessControl';
+import { getAdminPortalUrl } from '../../config/api';
 import { 
   ExternalLink,
   ShieldCheck, 
@@ -123,7 +126,8 @@ import {
   Copy,
   Calendar,
   ChevronLeft,
-  CalendarDays
+  CalendarDays,
+  Crown
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import LeafletActiveMap from '../LeafletActiveMap';
@@ -458,7 +462,11 @@ export function AdminDashboardOverview(props: any) {
     key,
     updatedConfig,
     handleGoBack,
-    adminTab
+    adminTab,
+    isSuperAdmin,
+    adminSessions,
+    setShowAdminTeamModal,
+    currentUser
   } = props;
 
   return (
@@ -718,6 +726,62 @@ export function AdminDashboardOverview(props: any) {
               );
             })()}
 
+
+              {/* 👑 Super Admin Exclusive: Live Admin Team, Online Logins & Permanent Ban Control */}
+              {(isSuperAdmin || isSuperAdminUser(currentUser)) && typeof setShowAdminTeamModal === 'function' && (() => {
+                const activeAdminList = users.filter((u: User) => isAdminAccountRole(u) && !u.isAdminBanned);
+                const bannedAdminList = users.filter((u: User) => u.isAdminBanned === true);
+                const onlineAdmins = activeAdminList.filter((u: User) => isUserAdminCurrentlyOnline(u, adminSessions || []));
+                return (
+                  <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border border-amber-400/40 rounded-2xl p-3 sm:p-3.5 text-white shadow-md mb-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-left">
+                    <div className="space-y-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/40 text-[10px] font-black">
+                          <Crown className="w-3 h-3 text-amber-400" />
+                          সুপার এডমিন কন্ট্রোল
+                        </span>
+                        <span className="text-xs sm:text-sm font-black text-white">
+                          মোট এডমিন: {activeAdminList.length} জন • এখন লগইন: {onlineAdmins.length} জন • ব্যানকৃত: {bannedAdminList.length} জন
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                        {onlineAdmins.length > 0 ? onlineAdmins.slice(0, 5).map((adm: User) => (
+                          <span
+                            key={adm.uid}
+                            className="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-500/20 text-emerald-200 border border-emerald-400/40 px-2 py-0.5 rounded-full"
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                            {adm.name || adm.phone}
+                          </span>
+                        )) : (
+                          <span className="text-[10px] text-slate-300 font-semibold">এই মুহূর্তে অন্য কোনো এডমিন অনলাইনে নেই</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const adminUrl = getAdminPortalUrl();
+                          copyTextToClipboard(adminUrl, 'এডমিন প্যানেল লিংক');
+                        }}
+                        className="px-2.5 py-2 bg-white/10 hover:bg-white/20 text-emerald-200 border border-white/15 rounded-xl text-[11px] font-black transition cursor-pointer flex items-center gap-1"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>লিংক কপি</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowAdminTeamModal(true)}
+                        className="px-3 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-xl text-[11px] font-black transition cursor-pointer shadow-sm flex items-center gap-1"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>এডমিন মনিটর ও ব্যান</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* ✨ 3 x 4 = 12 Box Financial Dashboard & Balance Control */}
               <div className="bg-white border border-slate-200/90 rounded-3xl p-4 sm:p-5 shadow-xs text-left mb-4 font-sans space-y-4">
@@ -1145,7 +1209,13 @@ export function AdminDashboardOverview(props: any) {
                 </div>
               </div>
 
-
+              {/* ✨ ALTERNATIVE 3 x 4 = 12 SECTION AUDIT & SEPARATE EXPENSE CONTROL MATRIX (Matching Green Box Style!) */}
+              <AdminDashboardSectionAuditMatrix
+                sectionAuditEngine={props.sectionAuditEngine}
+                openSectionAuditModal={props.openSectionAuditModal}
+                setAdminTab={setAdminTab}
+                setViewingGrid={setViewingGrid}
+              />
 
               {/* 4. Grid Header (Green Circle Bottom) */}
               <div className="flex justify-between items-center pr-1 mt-1 text-left">
@@ -1161,6 +1231,14 @@ export function AdminDashboardOverview(props: any) {
                     onClick={() => { setAdminTab('samity'); setViewingGrid(false); }}
                     className="bg-white border border-slate-200 hover:border-emerald-400 rounded-2xl p-2.5 sm:p-3 flex flex-col justify-between hover:shadow-md transition-all duration-200 cursor-pointer text-center items-center group active:scale-95 min-h-[130px] sm:min-h-[145px] shadow-2xs relative overflow-hidden"
                   >
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); props.openSectionAuditModal?.('samity', 'ledger'); }}
+                      className="absolute top-1.5 left-1.5 bg-emerald-50 hover:bg-emerald-600 text-emerald-800 hover:text-white border border-emerald-200 text-[7.5px] sm:text-[8.5px] font-black px-1.5 py-0.5 rounded-md transition cursor-pointer z-10 shadow-2xs"
+                      title="সমবায় অডিট ও খরচের খাতা"
+                    >
+                      📊 অডিট
+                    </button>
                     {users.filter(u => u.samityStatus === 'pending' || u.approved === false).length > 0 && (
                       <span className="absolute top-1.5 right-1.5 bg-amber-500 text-slate-950 text-[8px] font-black px-1.5 py-0.5 rounded-full animate-pulse shadow-xs z-10">
                         {users.filter(u => u.samityStatus === 'pending' || u.approved === false).length} পেন্ডিং
@@ -1193,6 +1271,14 @@ export function AdminDashboardOverview(props: any) {
                     onClick={() => { setAdminTab('safedeals_admin'); setViewingGrid(false); }}
                     className="bg-white border border-slate-200 hover:border-emerald-400 rounded-2xl p-2.5 sm:p-3 flex flex-col justify-between hover:shadow-md transition-all duration-200 cursor-pointer text-center items-center group active:scale-95 min-h-[130px] sm:min-h-[145px] shadow-2xs relative overflow-hidden"
                   >
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); props.openSectionAuditModal?.('safedeals_admin', 'ledger'); }}
+                      className="absolute top-1.5 left-1.5 bg-emerald-50 hover:bg-emerald-600 text-emerald-800 hover:text-white border border-emerald-200 text-[7.5px] sm:text-[8.5px] font-black px-1.5 py-0.5 rounded-md transition cursor-pointer z-10 shadow-2xs"
+                      title="নিরাপদ লেনদেন অডিট ও খরচের খাতা"
+                    >
+                      📊 অডিট
+                    </button>
                     <div className="w-11 h-11 sm:w-12 sm:h-12 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl flex items-center justify-center text-white shadow-md shadow-emerald-100 group-hover:scale-105 transition-transform shrink-0 relative overflow-hidden">
                       {appConfig?.sectionIcons?.safedeals ? (
                         <img src={appConfig.sectionIcons.safedeals} alt="Safe Deals" className="w-full h-full object-cover rounded-2xl" referrerPolicy="no-referrer" />
@@ -1220,6 +1306,14 @@ export function AdminDashboardOverview(props: any) {
                     onClick={() => { setAdminTab('qard_admin'); setViewingGrid(false); }}
                     className="bg-white border border-slate-200 hover:border-rose-400 rounded-2xl p-2.5 sm:p-3 flex flex-col justify-between hover:shadow-md transition-all duration-200 cursor-pointer text-center items-center group active:scale-95 min-h-[130px] sm:min-h-[145px] shadow-2xs relative overflow-hidden"
                   >
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); props.openSectionAuditModal?.('qard_admin', 'ledger'); }}
+                      className="absolute top-1.5 left-1.5 bg-rose-50 hover:bg-rose-600 text-rose-800 hover:text-white border border-rose-200 text-[7.5px] sm:text-[8.5px] font-black px-1.5 py-0.5 rounded-md transition cursor-pointer z-10 shadow-2xs"
+                      title="কর্জে হাসানা অডিট ও খরচের খাতা"
+                    >
+                      📊 অডিট
+                    </button>
                     <div className="w-11 h-11 sm:w-12 sm:h-12 bg-gradient-to-br from-rose-500 to-red-500 rounded-2xl flex items-center justify-center text-white shadow-md shadow-rose-100 group-hover:scale-105 transition-transform shrink-0 relative overflow-hidden">
                       {appConfig?.sectionIcons?.qard ? (
                         <img src={appConfig.sectionIcons.qard} alt="Qard" className="w-full h-full object-cover rounded-2xl" referrerPolicy="no-referrer" />
@@ -1247,6 +1341,14 @@ export function AdminDashboardOverview(props: any) {
                     onClick={() => { setAdminTab('bank_admin'); setViewingGrid(false); }}
                     className="bg-white border border-slate-200 hover:border-amber-400 rounded-2xl p-2.5 sm:p-3 flex flex-col justify-between hover:shadow-md transition-all duration-200 cursor-pointer text-center items-center group active:scale-95 min-h-[130px] sm:min-h-[145px] shadow-2xs relative overflow-hidden"
                   >
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); props.openSectionAuditModal?.('bank_admin', 'ledger'); }}
+                      className="absolute top-1.5 left-1.5 bg-amber-50 hover:bg-amber-600 text-amber-900 hover:text-white border border-amber-200 text-[7.5px] sm:text-[8.5px] font-black px-1.5 py-0.5 rounded-md transition cursor-pointer z-10 shadow-2xs"
+                      title="BNB লেনদেন অডিট ও খরচের খাতা"
+                    >
+                      📊 অডিট
+                    </button>
                     <div className="w-11 h-11 sm:w-12 sm:h-12 bg-gradient-to-br from-amber-500 to-orange-600 rounded-2xl flex items-center justify-center text-white shadow-md shadow-amber-100 group-hover:scale-105 transition-transform shrink-0 relative overflow-hidden">
                       {appConfig?.sectionIcons?.bank ? (
                         <img src={appConfig.sectionIcons.bank} alt="Bank" className="w-full h-full object-cover rounded-2xl" referrerPolicy="no-referrer" />
@@ -1274,6 +1376,14 @@ export function AdminDashboardOverview(props: any) {
                     onClick={() => { setAdminTab('telecom'); setViewingGrid(false); }}
                     className="bg-white border border-slate-200 hover:border-cyan-400 rounded-2xl p-2.5 sm:p-3 flex flex-col justify-between hover:shadow-md transition-all duration-200 cursor-pointer text-center items-center group active:scale-95 min-h-[130px] sm:min-h-[145px] shadow-2xs relative overflow-hidden"
                   >
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); props.openSectionAuditModal?.('telecom', 'ledger'); }}
+                      className="absolute top-1.5 left-1.5 bg-sky-50 hover:bg-sky-600 text-sky-900 hover:text-white border border-sky-200 text-[7.5px] sm:text-[8.5px] font-black px-1.5 py-0.5 rounded-md transition cursor-pointer z-10 shadow-2xs"
+                      title="টেলিকম অডিট ও খরচের খাতা"
+                    >
+                      📊 অডিট
+                    </button>
                     <div className="w-11 h-11 sm:w-12 sm:h-12 bg-gradient-to-br from-cyan-500 to-teal-600 rounded-2xl flex items-center justify-center text-white shadow-md shadow-cyan-100 group-hover:scale-105 transition-transform shrink-0 relative overflow-hidden">
                       {appConfig?.sectionIcons?.telecom ? (
                         <img src={appConfig.sectionIcons.telecom} alt="Telecom" className="w-full h-full object-cover rounded-2xl" referrerPolicy="no-referrer" />
@@ -1301,6 +1411,14 @@ export function AdminDashboardOverview(props: any) {
                     onClick={() => { setAdminTab('ration_admin'); setViewingGrid(false); }}
                     className="bg-white border border-slate-200 hover:border-yellow-400 rounded-2xl p-2.5 sm:p-3 flex flex-col justify-between hover:shadow-md transition-all duration-200 cursor-pointer text-center items-center group active:scale-95 min-h-[130px] sm:min-h-[145px] shadow-2xs relative overflow-hidden"
                   >
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); props.openSectionAuditModal?.('ration_admin', 'ledger'); }}
+                      className="absolute top-1.5 left-1.5 bg-amber-50 hover:bg-amber-600 text-amber-900 hover:text-white border border-amber-200 text-[7.5px] sm:text-[8.5px] font-black px-1.5 py-0.5 rounded-md transition cursor-pointer z-10 shadow-2xs"
+                      title="রেশন কার্ড অডিট ও খরচের খাতা"
+                    >
+                      📊 অডিট
+                    </button>
                     <div className="w-11 h-11 sm:w-12 sm:h-12 bg-gradient-to-br from-yellow-500 to-amber-600 rounded-2xl flex items-center justify-center text-white shadow-md shadow-yellow-100 group-hover:scale-105 transition-transform shrink-0 relative overflow-hidden">
                       {appConfig?.sectionIcons?.ration ? (
                         <img src={appConfig.sectionIcons.ration} alt="Ration" className="w-full h-full object-cover rounded-2xl" referrerPolicy="no-referrer" />
@@ -1328,6 +1446,14 @@ export function AdminDashboardOverview(props: any) {
                     onClick={() => { setAdminTab('salary_admin'); setViewingGrid(false); }}
                     className="bg-white border border-slate-200 hover:border-teal-400 rounded-2xl p-2.5 sm:p-3 flex flex-col justify-between hover:shadow-md transition-all duration-200 cursor-pointer text-center items-center group active:scale-95 min-h-[130px] sm:min-h-[145px] shadow-2xs relative overflow-hidden"
                   >
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); props.openSectionAuditModal?.('salary_admin', 'ledger'); }}
+                      className="absolute top-1.5 left-1.5 bg-teal-50 hover:bg-teal-600 text-teal-900 hover:text-white border border-teal-200 text-[7.5px] sm:text-[8.5px] font-black px-1.5 py-0.5 rounded-md transition cursor-pointer z-10 shadow-2xs"
+                      title="সেলারি পে অডিট ও খরচের খাতা"
+                    >
+                      📊 অডিট
+                    </button>
                     <div className="w-11 h-11 sm:w-12 sm:h-12 bg-gradient-to-br from-teal-600 to-emerald-800 rounded-2xl flex items-center justify-center text-white shadow-md shadow-teal-100 group-hover:scale-105 transition-transform shrink-0 relative overflow-hidden">
                       {appConfig?.sectionIcons?.salary ? (
                         <img src={appConfig.sectionIcons.salary} alt="Salary" className="w-full h-full object-cover rounded-2xl" referrerPolicy="no-referrer" />
@@ -1355,6 +1481,14 @@ export function AdminDashboardOverview(props: any) {
                     onClick={() => { setAdminTab('safi_admin'); setViewingGrid(false); }}
                     className="bg-white border border-slate-200 hover:border-amber-400 rounded-2xl p-2.5 sm:p-3 flex flex-col justify-between hover:shadow-md transition-all duration-200 cursor-pointer text-center items-center group active:scale-95 min-h-[130px] sm:min-h-[145px] shadow-2xs relative overflow-hidden"
                   >
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); props.openSectionAuditModal?.('safi_admin', 'ledger'); }}
+                      className="absolute top-1.5 left-1.5 bg-amber-50 hover:bg-amber-600 text-amber-900 hover:text-white border border-amber-200 text-[7.5px] sm:text-[8.5px] font-black px-1.5 py-0.5 rounded-md transition cursor-pointer z-10 shadow-2xs"
+                      title="al safi অডিট ও খরচের খাতা"
+                    >
+                      📊 অডিট
+                    </button>
                     <div className="w-11 h-11 sm:w-12 sm:h-12 bg-gradient-to-br from-amber-500 to-orange-500 rounded-2xl flex items-center justify-center text-white shadow-md shadow-amber-100 group-hover:scale-105 transition-transform shrink-0 relative overflow-hidden">
                       {appConfig?.sectionIcons?.safi ? (
                         <img src={appConfig.sectionIcons.safi} alt="Safi" className="w-full h-full object-cover rounded-2xl" referrerPolicy="no-referrer" />
@@ -1382,6 +1516,14 @@ export function AdminDashboardOverview(props: any) {
                     onClick={() => { setAdminTab('auto_recharge_admin'); setViewingGrid(false); }}
                     className="bg-white border border-slate-200 hover:border-sky-400 rounded-2xl p-2.5 sm:p-3 flex flex-col justify-between hover:shadow-md transition-all duration-200 cursor-pointer text-center items-center group active:scale-95 min-h-[130px] sm:min-h-[145px] shadow-2xs relative overflow-hidden"
                   >
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); props.openSectionAuditModal?.('auto_recharge_admin', 'ledger'); }}
+                      className="absolute top-1.5 left-1.5 bg-sky-50 hover:bg-sky-600 text-sky-900 hover:text-white border border-sky-200 text-[7.5px] sm:text-[8.5px] font-black px-1.5 py-0.5 rounded-md transition cursor-pointer z-10 shadow-2xs"
+                      title="অটো রিচার্জ অডিট ও খরচের খাতা"
+                    >
+                      📊 অডিট
+                    </button>
                     <div className="w-11 h-11 sm:w-12 sm:h-12 bg-gradient-to-br from-sky-500 to-blue-600 rounded-2xl flex items-center justify-center text-white shadow-md shadow-sky-100 group-hover:scale-105 transition-transform shrink-0 relative overflow-hidden">
                       {appConfig?.sectionIcons?.auto_recharge ? (
                         <img src={appConfig.sectionIcons.auto_recharge} alt="Auto Recharge" className="w-full h-full object-cover rounded-2xl" referrerPolicy="no-referrer" />
@@ -1409,6 +1551,14 @@ export function AdminDashboardOverview(props: any) {
                     onClick={() => { setAdminTab('bill_pay_admin'); setViewingGrid(false); }}
                     className="bg-white border border-slate-200 hover:border-purple-400 rounded-2xl p-2.5 sm:p-3 flex flex-col justify-between hover:shadow-md transition-all duration-200 cursor-pointer text-center items-center group active:scale-95 min-h-[130px] sm:min-h-[145px] shadow-2xs relative overflow-hidden"
                   >
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); props.openSectionAuditModal?.('bill_pay_admin', 'ledger'); }}
+                      className="absolute top-1.5 left-1.5 bg-purple-50 hover:bg-purple-600 text-purple-900 hover:text-white border border-purple-200 text-[7.5px] sm:text-[8.5px] font-black px-1.5 py-0.5 rounded-md transition cursor-pointer z-10 shadow-2xs"
+                      title="বিল পে অডিট ও খরচের খাতা"
+                    >
+                      📊 অডিট
+                    </button>
                     <div className="w-11 h-11 sm:w-12 sm:h-12 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-2xl flex items-center justify-center text-white shadow-md shadow-purple-100 group-hover:scale-105 transition-transform shrink-0 relative overflow-hidden">
                       {appConfig?.sectionIcons?.bill_pay ? (
                         <img src={appConfig.sectionIcons.bill_pay} alt="Bill Pay" className="w-full h-full object-cover rounded-2xl" referrerPolicy="no-referrer" />
@@ -1436,6 +1586,14 @@ export function AdminDashboardOverview(props: any) {
                     onClick={() => { setAdminTab('agent_admin'); setViewingGrid(false); }}
                     className="bg-white border border-slate-200 hover:border-amber-400 rounded-2xl p-2.5 sm:p-3 flex flex-col justify-between hover:shadow-md transition-all duration-200 cursor-pointer text-center items-center group active:scale-95 min-h-[130px] sm:min-h-[145px] shadow-2xs relative overflow-hidden"
                   >
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); props.openSectionAuditModal?.('agent_admin', 'ledger'); }}
+                      className="absolute top-1.5 left-1.5 bg-amber-50 hover:bg-amber-600 text-amber-900 hover:text-white border border-amber-200 text-[7.5px] sm:text-[8.5px] font-black px-1.5 py-0.5 rounded-md transition cursor-pointer z-10 shadow-2xs"
+                      title="এজেন্ট অডিট ও খরচের খাতা"
+                    >
+                      📊 অডিট
+                    </button>
                     {adminAgentRequests.filter(r => r.status === 'pending').length > 0 && (
                       <span className="absolute top-1.5 right-1.5 bg-amber-500 text-slate-950 text-[8px] font-black px-1.5 py-0.5 rounded-full animate-pulse shadow-xs z-10">
                         {adminAgentRequests.filter(r => r.status === 'pending').length} পেন্ডিং
@@ -1468,6 +1626,14 @@ export function AdminDashboardOverview(props: any) {
                     onClick={() => { setAdminTab('notices'); setViewingGrid(false); }}
                     className="bg-white border border-slate-200 hover:border-indigo-400 rounded-2xl p-2.5 sm:p-3 flex flex-col justify-between hover:shadow-md transition-all duration-200 cursor-pointer text-center items-center group active:scale-95 min-h-[130px] sm:min-h-[145px] shadow-2xs relative overflow-hidden"
                   >
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); props.openSectionAuditModal?.('notices', 'ledger'); }}
+                      className="absolute top-1.5 left-1.5 bg-indigo-50 hover:bg-indigo-600 text-indigo-900 hover:text-white border border-indigo-200 text-[7.5px] sm:text-[8.5px] font-black px-1.5 py-0.5 rounded-md transition cursor-pointer z-10 shadow-2xs"
+                      title="আমাদের লক্ষ্য কর্পোরেট অডিট ও খরচের খাতা"
+                    >
+                      📊 অডিট
+                    </button>
                     <div className="w-11 h-11 sm:w-12 sm:h-12 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-2xl flex items-center justify-center text-white shadow-md shadow-indigo-100 group-hover:scale-105 transition-transform shrink-0 relative overflow-hidden">
                       {appConfig?.sectionIcons?.about ? (
                         <img src={appConfig.sectionIcons.about} alt="About" className="w-full h-full object-cover rounded-2xl" referrerPolicy="no-referrer" />

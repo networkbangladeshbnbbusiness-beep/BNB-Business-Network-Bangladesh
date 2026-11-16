@@ -3183,6 +3183,22 @@ export function AdminBottomModals(props: any) {
 
               {/* Grid of 12 Ledgers */}
               <div className="p-4 overflow-y-auto flex-1 space-y-4">
+                <div className="bg-gradient-to-r from-[#008769] to-teal-900 text-white p-3.5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-sm">
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-black">📊 ১২টি সেকশনের পৃথক লাভ, লস ও খরচের খাতা</h4>
+                    <p className="text-[11px] text-teal-100 font-medium">প্রত্যেক সেকশনের আলাদা খরচ যোগ, এডিট, ডিলিট ও ম্যানুয়াল ব্যালেন্স টিউন করুন</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      props.setShowSection12ReportModal?.(false);
+                      props.openSectionAuditModal?.('samity', 'ledger');
+                    }}
+                    className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs px-4 py-2 rounded-xl transition cursor-pointer shrink-0 shadow-xs"
+                  >
+                    ১২ সেকশন অডিট খাতা খুলুন →
+                  </button>
+                </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
                   {ledgers.map((l) => (
                     <div

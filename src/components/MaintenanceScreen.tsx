@@ -165,23 +165,10 @@ export default function MaintenanceScreen({ appConfig, currentUser, onBypassAdmi
           <span className="block mt-0.5 text-slate-200">আপনাদের সহযোগিতার জন্য ধন্যবাদ।</span>
         </div>
 
-        {/* Dynamic Admin access gate */}
-        {isAdmin ? (
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={onBypassAdmin}
-            className="w-full py-3 bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-black text-xs rounded-2xl tracking-wide flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-amber-500/10 hover:shadow-amber-500/20 active:scale-98 transition duration-300"
-          >
-            <Settings className="w-4 h-4 animate-spin-slow" />
-            🛠️ অ্যাডমিন কন্ট্রোল প্যানেলে প্রবেশ করুন
-          </motion.button>
-        ) : (
-          <div className="flex items-center gap-1.5 text-[10px] text-slate-300 font-bold bg-slate-900/80 py-1 px-3 rounded-full border border-slate-700">
-            <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />
-            <span>সিস্টেম সিকিউরিটি এনফোর্সড সচল</span>
-          </div>
-        )}
+        <div className="flex items-center gap-1.5 text-[10px] text-slate-300 font-bold bg-slate-900/80 py-1 px-3 rounded-full border border-slate-700">
+          <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />
+          <span>সিস্টেম সিকিউরিটি এনফোর্সড সচল</span>
+        </div>
       </div>
     </div>
   );

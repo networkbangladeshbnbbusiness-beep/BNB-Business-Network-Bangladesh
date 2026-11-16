@@ -542,9 +542,11 @@ async function startServer() {
   const app = express();
   const portArgIdx = process.argv.indexOf('--port');
   const cliPort = portArgIdx !== -1 && process.argv[portArgIdx + 1] ? parseInt(process.argv[portArgIdx + 1], 10) : null;
+  const hasLocalAiStudioProxy = fs.existsSync('/etc/nginx/nginx.conf') && fs.existsSync('/app/control-plane-api');
   const envPort = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
-  // Environment constraints: Dev server must run on port 3000 (8080 is reserved for Nginx ingress proxy)
-  const PORT = cliPort || (envPort === 8080 ? 3000 : envPort) || 3000;
+  // In AI Studio Dev container, Nginx listens on 8080 and proxies to 3000.
+  // In Cloud Run / Shared App (ais-pre-*) / Firebase App Hosting, Cloud Run routes directly to PORT (8080).
+  const PORT = cliPort || (hasLocalAiStudioProxy && envPort === 8080 ? 3000 : envPort) || 3000;
 
   // Middleware for body parsing
   app.use(express.json());
@@ -563,6 +565,10 @@ async function startServer() {
       return res.sendStatus(204);
     }
     next();
+  });
+
+  app.get('/healthz', (_req, res) => {
+    res.status(200).json({ ok: true, port: PORT });
   });
 
   // Authoritative Target Firestore Database ID
@@ -587,12 +593,18 @@ async function startServer() {
     }
     firebaseApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
     db = getFirestore(firebaseApp, TARGET_DATABASE_ID);
+    // Run backend auth probe asynchronously so it never delays server port startup
     try {
       const serverAuth = getAuth(firebaseApp);
-      await signInWithEmailAndPassword(serverAuth, 'server-probe@bnb-internal.com', 'ProbePass123!');
-      console.log('[Server] Authenticated backend Firestore session as:', serverAuth.currentUser?.uid);
+      signInWithEmailAndPassword(serverAuth, 'server-probe@bnb-internal.com', 'ProbePass123!')
+        .then(() => {
+          console.log('[Server] Authenticated backend Firestore session as:', serverAuth.currentUser?.uid);
+        })
+        .catch((authErr: any) => {
+          console.warn('[Server] Backend Firebase Auth warning:', authErr?.message || authErr);
+        });
     } catch (authErr: any) {
-      console.warn('[Server] Backend Firebase Auth warning:', authErr?.message || authErr);
+      console.warn('[Server] Backend Firebase Auth init warning:', authErr?.message || authErr);
     }
     console.log('[Server] Primary Modular Firestore connected with target database:', TARGET_DATABASE_ID);
   } catch (err: any) {
@@ -2102,8 +2114,12 @@ async function startServer() {
           status: 'success',
           paymentMethod: 'BNB Transfer Gateway',
           description: note || `BNB-to-BNB Received from ${senderData.name || cleanSenderUid} (${senderData.phone || ''})`,
+          phone: senderData.phone || '',
           senderUid: cleanSenderUid,
+          senderId: senderData.memberId || '',
           senderName: senderData.name || '',
+          senderPhone: senderData.phone || '',
+          senderNumber: senderData.phone || '',
           createdAt: nowIso,
           processed: true
         });
@@ -2461,7 +2477,10 @@ async function startServer() {
             targetPhone: senderData.phone || '',
             accountNumber: senderData.memberId || senderData.phone || '',
             senderUid: cleanUserId,
+            senderId: senderData.memberId || '',
             senderName: senderData.name || '',
+            senderPhone: senderData.phone || '',
+            senderNumber: senderData.phone || '',
             transactionId: `${finalTxId}-R`,
             trxId: finalTxId,
             requestId: cleanRequestId,
@@ -7102,7 +7121,28 @@ COMMON TROUBLESHOOTING & HOW-TO GUIDES:
     `);
   });
 
-  // Dedicated Web App Manifest for Standalone Admin Software (/admin) in production
+  // Explicit FCM Service Worker endpoint so it never falls back to index.html (text/html)
+  app.get('/firebase-messaging-sw.js', (_req, res) => {
+    res.setHeader('Content-Type', 'application/javascript; charset=UTF-8');
+    res.setHeader('Service-Worker-Allowed', '/');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    const candidatePaths = [
+      path.join(process.cwd(), 'public', 'firebase-messaging-sw.js'),
+      path.join(process.cwd(), 'dist', 'firebase-messaging-sw.js'),
+      path.join(__dirname, 'public', 'firebase-messaging-sw.js'),
+      path.join(__dirname, 'dist', 'firebase-messaging-sw.js'),
+    ];
+    for (const swPath of candidatePaths) {
+      if (fs.existsSync(swPath)) {
+        return res.status(200).send(fs.readFileSync(swPath, 'utf-8'));
+      }
+    }
+    return res.status(200).send(
+      "self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('activate',(e)=>e.waitUntil(self.clients.claim()));"
+    );
+  });
+
+  // Dedicated Web App Manifest for Standalone Admin Software (/admin)
   app.get('/manifest-admin.json', (_req, res) => {
     res.setHeader('Content-Type', 'application/manifest+json; charset=UTF-8');
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
@@ -7113,8 +7153,8 @@ COMMON TROUBLESHOOTING & HOW-TO GUIDES:
       start_url: '/admin?standalone=1',
       scope: '/',
       display: 'standalone',
-      background_color: '#020617',
-      theme_color: '#064e3b',
+      background_color: '#ffffff',
+      theme_color: '#06822e',
       orientation: 'portrait-primary',
       icons: [
         {
@@ -7128,6 +7168,12 @@ COMMON TROUBLESHOOTING & HOW-TO GUIDES:
           sizes: '512x512',
           type: 'image/png',
           purpose: 'any maskable'
+        },
+        {
+          src: '/app_icon.png',
+          sizes: '512x512',
+          type: 'image/png',
+          purpose: 'any'
         }
       ]
     });

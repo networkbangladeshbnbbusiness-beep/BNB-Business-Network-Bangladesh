@@ -74,7 +74,7 @@ export const DEFAULT_QARD_CONFIG = {
     month2Ratio: 0,
     month3Ratio: 0,
     title: "⚡ সমবায় ইনস্ট্যান্ট অটো-ঋণ (২৪/৭ অটোমেটিক)",
-    description: "শুধুমাত্র সমবায় সমিতির একাউন্টধারীদের জন্য এডমিন অনুমতি ছাড়া ২৪/৭ অটোমেটিক। অনার ৭০%, শেয়ারহোল্ডার ৬০%, ইনভেস্টর ৫০%। মেয়াদ ১ মাস (৩০ দিন)। ৩০ দিন পর প্রতি ১,০০০ টাকায় প্রতিদিন ১০ টাকা জরিমানা। পরিশোধের ৬০ দিন পর আবার নেওয়া যাবে।"
+    description: "শুধুমাত্র সমবায় সমিতির একাউন্টধারীদের জন্য এডমিন অনুমতি ছাড়া ২৪/৭ অটোমেটিক। অনার ৭০%, শেয়ারহোল্ডার ৬০%, ইনভেস্টর ৫০%। সর্বোচ্চ মেয়াদ ১ মাস (৩০ দিন) — পূর্বের ৩ মাস মেয়াদ বাতিল। ১ মাসের মধ্যে টাকা ফেরত না দিলে আজীবনের জন্য ব্লক করা হবে (আর কখনোই ঋণ নিতে পারবে না)।"
   },
   goldLoanConfig: {
     enabled: true,
@@ -284,6 +284,20 @@ export const DEFAULT_CONFIG: AppConfig = {
   telecomTicker: "টেলিকম ফ্লেক্সিলোড ও সুপার ফাস্ট ড্রাইভ অফার গাইডঃ সব অপারেটরের ইনস্ট্যান্ট ক্যাশব্যাক ও বেস্ট ডিসকাউন্টেড অফার ড্রাইভ প্যাকেজ সমূহ সচল রয়েছে। অটোমেটেড রিচার্জ ১০ সেকেন্ড থেকে ৫ মিনিটের মধ্যে সচলভাবে সম্পন্ন হয়।",
   safiTicker: "প্রিমিয়াম Safi ব্র্যান্ডের শতভাগ খাঁটি পণ্য সম্ভার! আমাদের নিজস্ব তত্ত্বাবধানে প্রস্তুতকৃত ভেজালমুক্ত প্রিমিয়াম পণ্যসমূহ সরাসরি মেইন ব্যালেন্স থেকে সহজেই ক্রয় করুন।",
   escrowTicker: "BNB নিরাপদ লেনদেনঃ যেকোনো প্রোডাক্ট কুরিয়ার কন্ডিশনে ক্রয়ের পূর্বে এসক্রো ডিল বুকিং করে আপনার মেইন ব্যালেন্সের পেমেন্ট নিরাপদ করুন।",
+  safeDealsConfig: {
+    enabled: true,
+    feeMode: 'free',
+    feePercent: 0,
+    feeFixed: 0,
+    feeBearer: 'buyer',
+    minAmount: 100,
+    maxAmount: 500000,
+    supportWhatsapp: '01865911728',
+    allowBuyerSend: true,
+    allowSellerCancel: true,
+    allowBuyerDispute: true,
+    rulesSummary: 'নিরাপদ লেনদেন এসক্রো সেবার মাধ্যমে ক্রেতা ও বিক্রেতার টাকা সুরক্ষিত থাকে। পণ্য হাতে পেয়ে ক্রেতা নিশ্চিত করলে বিক্রেতার ওয়ালেটে টাকা জমা হয়।'
+  },
   rationTicker: "কো-অপারেটিভ ডিজিটাল রেশন কার্ড সেবাঃ ভর্তুকি মূল্যে নিত্যপ্রয়োজনীয় চাল, ডাল, তেল ও অন্যান্য পণ্যসামগ্রী ক্রয়ের সুবিধা উপভোগ করুন।",
   exchangeRatePerThousand: 1150,
   mobileRechargePercent: 2.0,
@@ -499,11 +513,35 @@ export async function loadAppConfig(): Promise<AppConfig> {
       data.escrowTicker = "BNB নিরাপদ লেনদেনঃ যেকোনো প্রোডাক্ট কুরিয়ার কন্ডিশনে ক্রয়ের পূর্বে এসক্রো ডিল বুকিং করে আপনার মেইন ব্যালেন্সের পেমেন্ট নিরাপদ করুন।";
     }
 
+    if (!data.safeDealsConfig) {
+      data.safeDealsConfig = { ...(DEFAULT_CONFIG.safeDealsConfig as any) };
+    } else {
+      data.safeDealsConfig = { ...(DEFAULT_CONFIG.safeDealsConfig as any), ...data.safeDealsConfig };
+    }
+
     return { ...DEFAULT_CONFIG, ...cachedLocal, ...data, sectionIcons: iconsData, customGridIcons: iconsData } as AppConfig;
   } catch (err) {
     console.warn("Failed to load DB config, using cached/default values:", err);
     return { ...DEFAULT_CONFIG, ...cachedLocal } as AppConfig;
   }
+}
+
+export function computeSafeDealsFee(
+  amount: number,
+  cfg?: AppConfig['safeDealsConfig'] | null
+): number {
+  const amt = Math.max(0, Number(amount) || 0);
+  if (!cfg || cfg.feeMode === 'free' || amt <= 0) return 0;
+  const pct = Math.max(0, Number(cfg.feePercent) || 0);
+  const fix = Math.max(0, Number(cfg.feeFixed) || 0);
+  if (cfg.feeMode === 'percent') {
+    return Math.round(((amt * pct) / 100) * 100) / 100;
+  }
+  if (cfg.feeMode === 'fixed') {
+    return Math.round(fix * 100) / 100;
+  }
+  // 'both'
+  return Math.round((((amt * pct) / 100) + fix) * 100) / 100;
 }
 
 export function sanitizeConfig(obj: any): any {

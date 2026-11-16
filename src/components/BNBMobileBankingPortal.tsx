@@ -120,6 +120,8 @@ export const BNBMobileBankingPortal: React.FC<BNBMobileBankingPortalProps> = ({
     else if (tx.type === 'add_money' || tx.type === 'deposit') label = 'অ্যাড মানি';
     else if (tx.type === 'bill_pay') label = 'বিল পে / ইউটিলিটি';
 
+    const isRecv = tx.type === 'received_transfer' || (tx.type === 'deposit' && (tx.description?.includes('হতে') || tx.description?.includes('প্রাপ্তি')));
+
     setReceiptModalData({
       typeLabel: tx.typeLabel || label,
       transactionId: formatShortTrxId(tx.transactionId || tx.trxId || tx.id),
@@ -127,9 +129,15 @@ export const BNBMobileBankingPortal: React.FC<BNBMobileBankingPortalProps> = ({
       fee: tx.charge || 0,
       totalAmount: tx.totalDeducted || (tx.amount + (tx.charge || 0)),
       status: tx.status === 'success' || tx.status === 'approved' ? 'success' : tx.status === 'failed' || tx.status === 'rejected' ? 'failed' : 'pending',
-      beneficiaryName: tx.userName || tx.receiverName || tx.beneficiaryName || 'BNB সদস্য',
-      beneficiaryAccount: tx.receiverId || tx.memberId || tx.beneficiaryAccount || 'N/A',
-      senderPhone: tx.phone || tx.senderPhone || user.phone,
+      beneficiaryName: isRecv
+        ? (tx.senderName || tx.userName || 'BNB সদস্য প্রেরক')
+        : (tx.receiverName || tx.userName || tx.beneficiaryName || 'BNB সদস্য'),
+      beneficiaryAccount: isRecv
+        ? (tx.senderId || tx.memberId || 'N/A')
+        : (tx.receiverId || tx.memberId || tx.beneficiaryAccount || 'N/A'),
+      senderPhone: isRecv
+        ? (tx.senderPhone || tx.senderNumber || tx.phone || user.phone)
+        : (tx.phone || tx.senderPhone || user.phone),
       transactionDate: tx.createdAt ? new Date(tx.createdAt).toLocaleString('bn-BD', { day: 'numeric', month: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: true }) : new Date().toLocaleString('en-US')
     });
     setIsReceiptOpen(true);
