@@ -12,11 +12,42 @@ import android.view.WindowManager;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import androidx.activity.OnBackPressedCallback;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
+    private int lastTopDp = 0;
+    private int lastBottomDp = 0;
+
+    private void pushSafeAreaInsetsToWebView() {
+        try {
+            if (getBridge() == null || getBridge().getWebView() == null) return;
+            final WebView webView = getBridge().getWebView();
+            final int topDp = Math.max(lastTopDp, 34);
+            final int bottomDp = lastBottomDp;
+            final String js = "(function(){" +
+                "try{" +
+                "var r=document.documentElement;" +
+                "if(r&&r.style){" +
+                "r.style.setProperty('--native-safe-top','" + topDp + "px');" +
+                "r.style.setProperty('--native-safe-bottom','" + bottomDp + "px');" +
+                "r.classList.add('is-android');" +
+                "}" +
+                "}catch(e){}" +
+                "})();";
+            webView.post(new Runnable() {
+                @Override
+                public void run() {
+                    webView.evaluateJavascript(js, null);
+                }
+            });
+        } catch (Exception ignored) {}
+    }
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         final int splashGreen = Color.parseColor("#06822e");
@@ -74,8 +105,23 @@ public class MainActivity extends BridgeActivity {
             Window window = getWindow();
             if (window != null) {
                 window.setBackgroundDrawable(new ColorDrawable(splashGreen));
-                if (window.getDecorView() != null) {
-                    window.getDecorView().setBackgroundColor(splashGreen);
+                View decor = window.getDecorView();
+                if (decor != null) {
+                    decor.setBackgroundColor(splashGreen);
+                    ViewCompat.setOnApplyWindowInsetsListener(decor, (v, windowInsets) -> {
+                        Insets sysInsets = windowInsets.getInsets(
+                            WindowInsetsCompat.Type.statusBars()
+                            | WindowInsetsCompat.Type.displayCutout()
+                            | WindowInsetsCompat.Type.navigationBars()
+                        );
+                        float density = getResources().getDisplayMetrics().density;
+                        if (density <= 0f) density = 1f;
+                        lastTopDp = (int) Math.ceil(sysInsets.top / density);
+                        lastBottomDp = (int) Math.ceil(sysInsets.bottom / density);
+                        pushSafeAreaInsetsToWebView();
+                        return windowInsets;
+                    });
+                    ViewCompat.requestApplyInsets(decor);
                 }
             }
             if (getBridge() != null && getBridge().getWebView() != null) {
@@ -88,18 +134,38 @@ public class MainActivity extends BridgeActivity {
                     ((View) webView.getParent()).setBackgroundColor(splashGreen);
                 }
 
-                // Purge any stale cached index.html from WebView disk cache
+                // Purge any stale cached index.html/css from WebView disk cache on upgrade
                 SharedPreferences prefs = getSharedPreferences("bnb_native_prefs", Context.MODE_PRIVATE);
-                if (!prefs.getBoolean("cache_purged_v56", false)) {
+                if (!prefs.getBoolean("cache_purged_v60", false)) {
                     webView.clearCache(true);
-                    prefs.edit().putBoolean("cache_purged_v56", true).apply();
+                    prefs.edit().putBoolean("cache_purged_v60", true).apply();
                 }
                 WebSettings settings = webView.getSettings();
                 if (settings != null) {
                     settings.setCacheMode(WebSettings.LOAD_DEFAULT);
                 }
+
+                // Ensure native insets are re-applied after initial HTML/JS hydration
+                webView.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        pushSafeAreaInsetsToWebView();
+                    }
+                }, 400);
+                webView.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        pushSafeAreaInsetsToWebView();
+                    }
+                }, 1500);
             }
         } catch (Exception ignored) {}
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        pushSafeAreaInsetsToWebView();
     }
 
     private void setupDarkGreenSystemBars() {

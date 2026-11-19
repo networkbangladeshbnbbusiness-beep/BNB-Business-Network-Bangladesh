@@ -11883,10 +11883,10 @@ export default function AdminPanel(props: AdminPanelProps) {
   };
 
     return (
-    <div className="w-full min-h-screen bg-slate-50 flex flex-col relative font-sans text-left" id="admin-panel-root">
+    <div className="w-full min-h-screen bg-slate-50 flex flex-col relative font-sans text-left overflow-x-hidden" id="admin-panel-root">
       {/* 1. Unified Safe-Area Sticky Top Header Bar (Matches User Dashboard Status-Bar Clearance) */}
       <header className="bg-[#0b6623] text-white sticky top-0 z-40 shadow-md font-sans select-none w-full max-w-full overflow-x-hidden box-border pt-safe">
-        <div className="px-2 sm:px-3.5 pt-1.5 pb-2">
+        <div className="px-2 sm:px-3.5 pt-2 pb-2">
           <div className="bg-[#00a884] rounded-2xl px-2.5 sm:px-3.5 py-1.5 sm:py-2 flex items-center justify-between gap-2 text-white shadow-sm border border-teal-400/30">
           {/* Left Side: Back Arrow, Member Pill, Pending Pill */}
           <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">

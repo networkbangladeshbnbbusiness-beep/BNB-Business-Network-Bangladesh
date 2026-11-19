@@ -162,12 +162,13 @@ body {
 
 /* Safe Area Inset Utilities and Global Layout Rules for Android & iOS */
 :root {
-  --safe-area-top: env(safe-area-inset-top, 0px);
-  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-top: max(env(safe-area-inset-top, 0px), var(--native-safe-top, 0px));
+  --safe-area-bottom: max(env(safe-area-inset-bottom, 0px), var(--native-safe-bottom, 0px));
 }
 
 html.is-android {
-  --safe-area-top: max(env(safe-area-inset-top, 0px), 28px);
+  --safe-area-top: max(env(safe-area-inset-top, 0px), var(--native-safe-top, 36px));
+  --safe-area-bottom: max(env(safe-area-inset-bottom, 0px), var(--native-safe-bottom, 12px));
 }
 
 .pt-safe {
@@ -188,6 +189,7 @@ html.is-android {
 
 /* Global top header / top bar safe-area padding across all screens */
 header,
+header.pt-safe,
 .rounded-b-\[28px\].from-\[\#0b6623\],
 .sticky.top-0.z-20,
 .sticky.top-0.z-30,
