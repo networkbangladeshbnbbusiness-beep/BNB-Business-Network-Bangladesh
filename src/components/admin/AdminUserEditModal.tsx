@@ -407,8 +407,8 @@ function AdminUserEditModalContent(props: any) {
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex flex-col justify-between overflow-hidden animate-fade-in font-sans text-xs">
-      {/* Top Header Bar (Compact & Sticky) */}
-      <div className="bg-slate-900 border-b border-emerald-800/80 px-3 py-2 text-white flex items-center justify-between shadow-md shrink-0">
+      {/* Top Header Bar (Compact & Sticky with Safe Area) */}
+      <header className="bg-slate-900 border-b border-emerald-800/80 px-3 pb-2 pt-safe text-white flex items-center justify-between shadow-md shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <button
             type="button"
@@ -458,7 +458,7 @@ function AdminUserEditModalContent(props: any) {
             বাতিল
           </button>
         </div>
-      </div>
+      </header>
 
       {/* Main Scrollable Content Body - Ultra Compact & Dense Layout */}
       <div className="flex-1 overflow-y-auto w-full max-w-5xl mx-auto p-2 sm:p-3 space-y-2.5 pb-20 scrollbar-thin">

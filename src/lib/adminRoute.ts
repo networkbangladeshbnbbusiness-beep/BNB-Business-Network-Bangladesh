@@ -1,10 +1,10 @@
-import { Capacitor } from '@capacitor/core';
-
-const STUDIO_USER_PREVIEW_KEY = 'bnb_studio_user_preview';
-
 /**
- * True ONLY when built with VITE_APP_VARIANT=admin (used exclusively by the dedicated Admin APK workflow).
- * Standard Web builds & User Play Store AAB/APK ALWAYS compile with VITE_APP_VARIANT=user.
+ * Route and Variant Isolation between User Software and Standalone Admin Software.
+ *
+ * CRITICAL SECURITY POLICY:
+ * - Standard Web builds & User Play Store AAB/APK ALWAYS compile with VITE_APP_VARIANT=user.
+ * - The User Software contains ZERO admin routes, buttons, menus, or preview switches.
+ * - Dedicated Standalone Admin Software (APK workflow) compiles strictly with VITE_APP_VARIANT=admin.
  */
 export function isAdminBuildVariant(): boolean {
   try {
@@ -15,97 +15,42 @@ export function isAdminBuildVariant(): boolean {
 }
 
 /**
- * True ONLY in the AI Studio workspace/dev preview host (never in APK, never on production domains).
- */
-export function isAiStudioDevHost(): boolean {
-  if (typeof window === 'undefined') return false;
-  try {
-    if (Capacitor.isNativePlatform()) return false;
-  } catch {}
-  const host = window.location.hostname.toLowerCase();
-  return (
-    host.startsWith('ais-dev-') ||
-    host === 'localhost' ||
-    host === '127.0.0.1'
-  );
-}
-
-/**
- * True ONLY when an authenticated admin inside AI Studio Preview switches to User Dashboard preview.
- */
-export function isStudioUserPreviewActive(): boolean {
-  if (!isAiStudioDevHost()) return false;
-  try {
-    return sessionStorage.getItem(STUDIO_USER_PREVIEW_KEY) === 'true';
-  } catch {
-    return false;
-  }
-}
-
-export function setStudioUserPreviewActive(active: boolean): void {
-  if (typeof window === 'undefined') return;
-  try {
-    if (active && isAiStudioDevHost()) {
-      sessionStorage.setItem(STUDIO_USER_PREVIEW_KEY, 'true');
-    } else {
-      sessionStorage.removeItem(STUDIO_USER_PREVIEW_KEY);
-    }
-  } catch {}
-}
-
-/**
- * Route isolation between User Software and Standalone Admin Software.
- * - Dedicated Admin APK builds (VITE_APP_VARIANT=admin) ALWAYS run as Standalone Admin Software.
- * - Standard Native Play Store User AAB/APK builds NEVER expose the Admin Panel.
- * - Explicit user mode (?app=user, /user, or studio user preview) loads User Software.
- * - Dedicated /admin paths (on dev & production) always load the Admin Panel Login.
- * - AI Studio Preview / Dev environment (ais-dev-* / localhost) defaults to Admin Panel Login.
+ * Strictly true ONLY when running inside the dedicated Standalone Admin build (VITE_APP_VARIANT=admin).
+ * Never returns true in User builds regardless of URL path, query string, hostname, or logged-in account.
  */
 export function isStandaloneAdminRoute(): boolean {
-  if (isAdminBuildVariant()) {
-    return true;
-  }
+  return isAdminBuildVariant();
+}
 
+/**
+ * Detects direct attempts to open an admin URL (/admin, /admin-panel, ?app=admin, #admin, admin.*)
+ * inside the User Software so the router/guard immediately blocks access and displays 403 Denied.
+ */
+export function isAdminAccessBlockedUrl(): boolean {
+  if (isAdminBuildVariant()) return false;
   if (typeof window === 'undefined') return false;
-
-  try {
-    if (Capacitor.isNativePlatform()) return false;
-  } catch {}
-
-  if (isStudioUserPreviewActive()) {
-    return false;
-  }
 
   const path = window.location.pathname.toLowerCase();
   const search = window.location.search.toLowerCase();
   const hash = window.location.hash.toLowerCase();
   const host = window.location.hostname.toLowerCase();
 
-  if (
-    search.includes('app=user') ||
-    search.includes('user=true') ||
-    path === '/user' ||
-    path.startsWith('/user/')
-  ) {
-    return false;
+  let hasAdminQuery = false;
+  try {
+    const params = new URLSearchParams(search);
+    hasAdminQuery = params.get('app') === 'admin' || params.get('admin') === 'true';
+  } catch {
+    hasAdminQuery = search.includes('app=admin') || search.includes('admin=true');
   }
 
-  if (
+  return (
     path === '/admin' ||
     path.startsWith('/admin/') ||
     path.startsWith('/admin-panel') ||
     path.startsWith('/admin-software') ||
-    search.includes('app=admin') ||
-    search.includes('admin=true') ||
+    hasAdminQuery ||
     hash === '#admin' ||
+    hash.startsWith('#/admin') ||
     host.startsWith('admin.')
-  ) {
-    return true;
-  }
-
-  if (isAiStudioDevHost()) {
-    return true;
-  }
-
-  return false;
+  );
 }

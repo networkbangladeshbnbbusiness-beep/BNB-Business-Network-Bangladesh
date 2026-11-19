@@ -121,7 +121,7 @@ export const BNBTelecomScreen = React.memo(function BNBTelecomScreen({
   allNotices = []
 }: BNBTelecomScreenProps) {
   
-  const [activeSubView, setActiveSubView] = useState<'main' | 'admin'>('main');
+  const [activeSubView, setActiveSubView] = useState<'main'>('main');
   const [addBalanceMsg, setAddBalanceMsg] = useState<{ text: string; type: 'error' | 'success' } | null>(null);
 
   const pushedViewRef = React.useRef<string>('main');

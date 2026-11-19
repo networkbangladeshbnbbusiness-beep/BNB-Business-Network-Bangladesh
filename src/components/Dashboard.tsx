@@ -243,8 +243,6 @@ interface DashboardProps {
   user: User;
   onLogout: (toRegister?: boolean) => void;
   onOpenDrawer: () => void;
-  onTriggerAdmin: () => void;
-  onTriggerBap: () => void;
   activeTab: string;
   setActiveTab: (tab: string) => void;
   setSelectedAction: (act: string | null) => void;
@@ -505,8 +503,6 @@ export const Dashboard = React.memo(function Dashboard({
   user, 
   onLogout, 
   onOpenDrawer, 
-  onTriggerAdmin,
-  onTriggerBap,
   activeTab,
   setActiveTab,
   selectedAction,
@@ -1046,11 +1042,6 @@ const getTxt = (key: string, fallback: string) => {
   };
 
   // Push notifications states
-  const [logoClickCount, setLogoClickCount] = useState(0);
-  const [showSecretPinPrompt, setShowSecretPinPrompt] = useState(false);
-  const [secretPinInput, setSecretPinInput] = useState('');
-  const [secretPinError, setSecretPinError] = useState('');
-  const [isSecretAdminOpen, setIsSecretAdminOpen] = useState(false);
   const [allPushes, setAllPushes] = useState<any[]>([]);
   const [newPushTitle, setNewPushTitle] = useState('');
   const [newPushBody, setNewPushBody] = useState('');
@@ -1205,7 +1196,6 @@ const getTxt = (key: string, fallback: string) => {
         chat: 'লাইভ চ্যাট (সাপোর্ট রুম)',
         agent: 'BNB এজেন্ট (ক্যারিয়ার পোর্টাল)',
         about: 'আমাদের সম্পর্কে (পরিচিতি)',
-        bap: 'বাংলাদেশ এডমিন প্যানেল',
         hisab: 'BNB হিসাব খাতা',
         bill_pay: 'BNB বিল পে',
         salary: 'BNB স্যালারি পে',
@@ -1274,10 +1264,9 @@ const getTxt = (key: string, fallback: string) => {
     if (showCreateCardModal) { setShowCreateCardModal(false); return true; }
     if (showMaintenanceModal) { setShowMaintenanceModal(false); return true; }
     if (showDemoAuthPrompt) { setShowDemoAuthPrompt(false); return true; }
-    if (showSecretPinPrompt) { setShowSecretPinPrompt(false); return true; }
     if (showNotificationsModal) { setShowNotificationsModal(false); return true; }
     return false;
-  }, Boolean(showAddDealModal || showCreateCardModal || showMaintenanceModal || showDemoAuthPrompt || showSecretPinPrompt || showNotificationsModal), 40);
+  }, Boolean(showAddDealModal || showCreateCardModal || showMaintenanceModal || showDemoAuthPrompt || showNotificationsModal), 40);
 
   // Active section (one of 12 main service sections) back handler (Priority 18: runs only when internal section subviews/modals have returned false)
   useBackHandler(() => {
@@ -3871,7 +3860,7 @@ const getTxt = (key: string, fallback: string) => {
       return;
     }
     
-    const maxLimit = liveUser.role === 'admin' ? 10000 : liveUser.memberGroup === 'need' ? 2000 : 5000;
+    const maxLimit = liveUser.memberGroup === 'need' ? 2000 : 5000;
     if (amountNum > maxLimit) {
       alert(`আপনার বর্তমান গ্রুপ অনুযায়ী সর্বোচ্চ ঋণসীমা ৳ ${maxLimit.toLocaleString('en-US')} BDT।`);
       return;
@@ -4125,7 +4114,7 @@ const getTxt = (key: string, fallback: string) => {
             </div>
           </div>
 
-          {/* Right: Bell & Admin Button */}
+          {/* Right: Notification Bell */}
           <div className="flex items-center gap-1.5 shrink-0">
             {(() => {
               const bellNotifications = userNotifications.filter(n => !isGeneralTransactionNotif(n));
@@ -5945,9 +5934,7 @@ const getTxt = (key: string, fallback: string) => {
           !showNotificationsModal &&
           !selectedReceiptTx &&
           !showMaintenanceModal &&
-          !showDemoAuthPrompt &&
-          !showSecretPinPrompt &&
-          !isSecretAdminOpen
+          !showDemoAuthPrompt
         }
         language={appLanguage === 'en' ? 'en' : 'bn'}
       />

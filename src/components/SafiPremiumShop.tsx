@@ -9,6 +9,7 @@ import {
 import { User as UserType, AppConfig, getEffectiveBalance } from '../types';
 import { db } from '../lib/firebase';
 import { useBackHandler } from '../lib/navigationManager';
+import { isStandaloneAdminRoute } from '../lib/adminRoute';
 import { collection, addDoc, doc, updateDoc, onSnapshot, setDoc, deleteDoc, runTransaction } from 'firebase/firestore';
 import SafiProductDetailsModal from './SafiProductDetailsModal';
 import SafiAdminProductModal from './SafiAdminProductModal';
@@ -71,8 +72,8 @@ export const SafiPremiumShop = React.memo(function SafiPremiumShop({
   syncLiveProfile,
   isAdminMode = false
 }: SafiPremiumShopProps) {
-  // Session Admin permissions (Only active when opened inside Admin Panel via isAdminMode prop)
-  const isAdmin = Boolean(isAdminMode);
+  // Session Admin permissions (Only active when opened inside Standalone Admin Panel via isAdminMode prop)
+  const isAdmin = Boolean(isAdminMode) && isStandaloneAdminRoute();
 
   // Navigation tabs: 'home' | 'shop' | 'vacation_sale' | 'cart' | 'account' | 'favorites'
   const [activeTab, setActiveTab] = useState<'home' | 'shop' | 'vacation_sale' | 'cart' | 'account' | 'favorites'>('home');

@@ -1792,9 +1792,9 @@ export const SamityScreen = React.memo(function SamityScreen({
     }
   };
 
-  // Sync admin users and transactions in real-time
+  // Sync admin users and transactions in real-time ONLY in Standalone Admin View
   useEffect(() => {
-    if (user.role !== 'admin' && user.role !== 'sub_admin') return;
+    if (!isStandaloneAdminRoute() || !isAdminView || (user.role !== 'admin' && user.role !== 'sub_admin')) return;
 
     setAdminLoading(true);
 
@@ -2795,7 +2795,7 @@ export const SamityScreen = React.memo(function SamityScreen({
     }
 
     const now = new Date();
-    const isDec25 = (now.getMonth() === 11 && now.getDate() === 25) || user.role === 'admin';
+    const isDec25 = (now.getMonth() === 11 && now.getDate() === 25);
     const isExitApproved = user.samityDeactivateStatus === 'approved' || user.samityDeactivateStatus === 'released';
     const canWithdraw = isDec25 || isExitApproved;
 

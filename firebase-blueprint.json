@@ -1,5 +1,53 @@
 {
   "entities": {
+    "AdminRegistry": {
+      "title": "AdminRegistry",
+      "description": "Server-managed registry of active authenticated Firebase UIDs authorized for Admin Software access",
+      "type": "object",
+      "properties": {
+        "firebaseAuthUid": { "type": "string", "description": "Firebase Authentication UID" },
+        "adminUserId": { "type": "string", "description": "Firestore user document ID of the admin" },
+        "email": { "type": "string", "description": "Verified admin email" },
+        "role": { "type": "string", "enum": ["admin", "sub_admin"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["firebaseAuthUid", "adminUserId", "role", "updatedAt"]
+    },
+    "AdminSession": {
+      "title": "AdminSession",
+      "description": "Active admin login session metadata and heartbeat log",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string" },
+        "adminId": { "type": "string" },
+        "adminName": { "type": "string" },
+        "role": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sessionId", "adminId", "isActive", "createdAt"]
+    },
+    "AdminNotification": {
+      "title": "AdminNotification",
+      "description": "Notifications submitted by members for administrative review",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "userId": { "type": "string" },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "createdAt"]
+    },
+    "SystemConfig": {
+      "title": "SystemConfig",
+      "description": "Global application settings, feature flags, banners, and fee schedules managed exclusively by admins",
+      "type": "object",
+      "properties": {
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
     "User": {
       "title": "User",
       "description": "User account registration with balance, savings, due loans and setup PIN",
@@ -8,9 +56,9 @@
         "uid": { "type": "string", "description": "Auth user ID" },
         "name": { "type": "string", "description": "Human name of user" },
         "phone": { "type": "string", "description": "BNB network user phone number" },
-        "memberId": { "type": "string", "description": "Formated ID like SM-10001" },
+        "memberId": { "type": "string", "description": "Formated ID like BNB00000001" },
         "pin": { "type": "string", "description": "4-digit or 5-digit security pin" },
-        "role": { "type": "string", "enum": ["user", "admin"], "description": "Role of the user" },
+        "role": { "type": "string", "enum": ["user", "member", "agent", "sub_admin", "admin"], "description": "Role of the user" },
         "balance": { "type": "number", "description": "Wallet total balance" },
         "savings": { "type": "number", "description": "Savings fund" },
         "dueLoan": { "type": "number", "description": "Current due loan" },
@@ -31,12 +79,12 @@
         "userId": { "type": "string" },
         "userName": { "type": "string" },
         "memberId": { "type": "string" },
-        "type": { "type": "string", "description": "deposit, loan_repayment, loan_disbursment, interest, telecom_recharge, shop_purchase, bill_pay, etc." },
-        "typeLabel": { "type": "string", "description": "Bengali title representation e.g. সঞ্চয় জমা" },
+        "type": { "type": "string" },
+        "typeLabel": { "type": "string" },
         "amount": { "type": "number" },
         "status": { "type": "string", "enum": ["pending", "success", "failed"] },
         "description": { "type": "string" },
-        "billImage": { "type": "string", "description": "Base64 or image URL of the utility bill receipt" },
+        "billImage": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "userId", "userName", "type", "typeLabel", "amount", "status", "createdAt"]
@@ -59,12 +107,12 @@
       "type": "object",
       "properties": {
         "id": { "type": "string" },
-        "title": { "type": "string", "description": "Package name e.g. 50GB INTERNET" },
-        "operator": { "type": "string", "description": "GP, Robi, Airtel, Banglalink, Teletalk, Skitto, Brilliant, Alaap" },
-        "category": { "type": "string", "enum": ["internet", "minute", "bundle"], "description": "Categorization of offers" },
-        "validity": { "type": "string", "description": "Package validity like 30 Days" },
-        "price": { "type": "number", "description": "Cost in BDT" },
-        "isHot": { "type": "boolean", "description": "To feature the offer with HOT flag badge" },
+        "title": { "type": "string" },
+        "operator": { "type": "string" },
+        "category": { "type": "string", "enum": ["internet", "minute", "bundle"] },
+        "validity": { "type": "string" },
+        "price": { "type": "number" },
+        "isHot": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "title", "operator", "category", "validity", "price", "isHot", "createdAt"]
@@ -80,6 +128,19 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "title", "body", "createdAt"]
+    },
+    "UserNotification": {
+      "title": "UserNotification",
+      "description": "Per-member real-time inbox notifications",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "createdAt"]
     },
     "BapReport": {
       "title": "BapReport",
@@ -191,25 +252,17 @@
       "description": "High precision real-time GPS position per user/agent",
       "type": "object",
       "properties": {
-        "userId": { "type": "string", "description": "User or agent ID" },
-        "name": { "type": "string", "description": "Agent name" },
-        "phone": { "type": "string", "description": "Contact phone number" },
-        "memberId": { "type": "string", "description": "Formatted member ID" },
-        "role": { "type": "string", "description": "Agent or member role" },
-        "latitude": { "type": "number", "description": "Exact GPS latitude" },
-        "longitude": { "type": "number", "description": "Exact GPS longitude" },
-        "accuracy": { "type": "number", "description": "GPS accuracy in meters" },
-        "altitude": { "type": "number", "description": "GPS altitude in meters" },
-        "heading": { "type": "number", "description": "Movement direction in degrees" },
-        "speed": { "type": "number", "description": "Movement speed in m/s" },
-        "lastUpdated": { "type": "string", "description": "Formatted timestamp" },
-        "lastUpdatedTs": { "type": "number", "description": "Epoch timestamp in milliseconds" },
-        "isOnline": { "type": "boolean", "description": "Online presence flag" },
-        "isSharingLocation": { "type": "boolean", "description": "Location broadcast flag" },
-        "profileImage": { "type": "string", "description": "Avatar image URL" },
-        "city": { "type": "string", "description": "City or area" },
-        "district": { "type": "string", "description": "District" },
-        "country": { "type": "string", "description": "Country name" }
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "memberId": { "type": "string" },
+        "role": { "type": "string" },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "accuracy": { "type": "number" },
+        "lastUpdated": { "type": "string" },
+        "lastUpdatedTs": { "type": "number" },
+        "isOnline": { "type": "boolean" }
       },
       "required": ["userId", "name", "phone", "latitude", "longitude", "accuracy", "lastUpdated", "lastUpdatedTs", "isOnline"]
     },
@@ -278,7 +331,7 @@
       "description": "Per-section admin financial audit and dedicated expense/profit/loss ledger entries across the 12 core admin sections",
       "type": "object",
       "properties": {
-        "sectionKey": { "type": "string", "description": "Active admin section identifier (samity, safedeals_admin, qard_admin, bank_admin, telecom, ration_admin, salary_admin, safi_admin, auto_recharge_admin, bill_pay_admin, agent_admin, notices)" },
+        "sectionKey": { "type": "string" },
         "entryType": { "type": "string", "enum": ["expense", "profit", "loss", "revenue"] },
         "title": { "type": "string" },
         "amount": { "type": "number" },
@@ -290,76 +343,375 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["sectionKey", "entryType", "title", "amount", "entryDate", "createdAt"]
+    },
+    "PaymentRecord": {
+      "title": "PaymentRecord",
+      "description": "SMS gateway detected payments, incoming SMS, ZiniPay invoices, and deposit verification records",
+      "type": "object",
+      "properties": {
+        "trxId": { "type": "string" },
+        "amount": { "type": "number" },
+        "status": { "type": "string" },
+        "isProcessed": { "type": "boolean" },
+        "isUsed": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ServiceRecord": {
+      "title": "ServiceRecord",
+      "description": "Generic member service application, order, or catalog item across BNB cooperative services",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
     }
   },
   "firestore": {
+    "admins/{uid}": {
+      "schema": "AdminRegistry",
+      "description": "Server-managed active admin Firebase UID registry for Firestore RBAC"
+    },
+    "admin_secrets/{secretId}": {
+      "schema": "SystemConfig",
+      "description": "Server-only sensitive API secrets and signing keys"
+    },
+    "admin_sessions/{sessionId}": {
+      "schema": "AdminSession",
+      "description": "Admin-only login session tracking and remote logout signals"
+    },
+    "admin_broadcast_logs/{logId}": {
+      "schema": "AdminNotification",
+      "description": "Admin-only broadcast dispatch history logs"
+    },
+    "admin_notifications/{notifId}": {
+      "schema": "AdminNotification",
+      "description": "Member-submitted alerts for admin review; write-only create for members, read/manage for admins"
+    },
+    "company_expenses/{expenseId}": {
+      "schema": "SectionAudit",
+      "description": "Admin-only company expense ledger"
+    },
+    "system_reset_logs/{logId}": {
+      "schema": "SectionAudit",
+      "description": "Admin-only system reset audit trail"
+    },
+    "duplicate_transactions/{txId}": {
+      "schema": "Transaction",
+      "description": "Admin-only quarantined duplicate transactions"
+    },
+    "failed_transactions/{txId}": {
+      "schema": "Transaction",
+      "description": "Admin-only failed transaction error logs"
+    },
+    "sms_logs/{logId}": {
+      "schema": "PaymentRecord",
+      "description": "Admin-only raw SMS gateway logs"
+    },
+    "archived_duplicate_users/{userId}": {
+      "schema": "User",
+      "description": "Admin-only archived duplicate user records"
+    },
+    "system_settings/{docId}": {
+      "schema": "SystemConfig",
+      "description": "Global system configuration; read for authenticated users, write for admins"
+    },
+    "app_config/{docId}": {
+      "schema": "SystemConfig",
+      "description": "App configuration, member serial counter, and qard charity fund totals"
+    },
+    "detected_payments/{docId}": {
+      "schema": "PaymentRecord",
+      "description": "SMS gateway detected payments; single-doc lookup for matching, list/create/delete for admins"
+    },
+    "incoming_sms/{docId}": {
+      "schema": "PaymentRecord",
+      "description": "Incoming payment SMS records; single-doc lookup for matching, list/create/delete for admins"
+    },
+    "zinipay_invoices/{invoiceId}": {
+      "schema": "PaymentRecord",
+      "description": "ZiniPay checkout invoices; single-doc status lookup for members, write/list for admins"
+    },
+    "deposits/{depositId}": {
+      "schema": "PaymentRecord",
+      "description": "Verified deposit settlement records"
+    },
+    "unique_emails/{emailKey}": {
+      "schema": "ServiceRecord",
+      "description": "Server-managed email uniqueness index"
+    },
+    "unique_phones/{phoneKey}": {
+      "schema": "ServiceRecord",
+      "description": "Server-managed phone uniqueness index"
+    },
+    "ledger_idempotency/{key}": {
+      "schema": "ServiceRecord",
+      "description": "Server-managed financial transaction idempotency keys"
+    },
+    "uid_mappings/{uid}": {
+      "schema": "ServiceRecord",
+      "description": "Merged legacy UID redirect mappings"
+    },
+    "email_otps/{emailKey}": {
+      "schema": "OtpSession",
+      "description": "Email OTP verification records"
+    },
+    "otp_verifications/{otpId}": {
+      "schema": "OtpSession",
+      "description": "Server-only OTP verification store"
+    },
+    "otp_codes/{codeId}": {
+      "schema": "OtpSession",
+      "description": "Server-only OTP code store"
+    },
     "otp_sessions/{sessionId}": {
       "schema": "OtpSession",
-      "description": "Stores active and verified OTP verification sessions for secure workflows"
+      "description": "Server-only active and verified OTP verification sessions"
     },
-    "device_release_requests/{requestId}": {
-      "schema": "DeviceReleaseRequest",
-      "description": "Stores user device reset / zero-device complaints and requests"
+    "otp_requests/{reqId}": {
+      "schema": "OtpSession",
+      "description": "Server-only OTP dispatch queue"
     },
     "users/{userId}": {
       "schema": "User",
-      "description": "Stores cooperative user records including security PIN configurations"
-    },
-    "transactions/{transactionId}": {
-      "schema": "Transaction",
-      "description": "Stores user transactions of the BNB cooperative"
-    },
-    "notices/{noticeId}": {
-      "schema": "Notice",
-      "description": "Broadcasting of cooperative notifications"
-    },
-    "offers/{offerId}": {
-      "schema": "Offer",
-      "description": "Dynamic store of telecom data packs and minute offers"
-    },
-    "push_notifications/{notificationId}": {
-      "schema": "PushNotification",
-      "description": "Stores push notifications sent by the owner"
-    },
-    "bap_reports/{reportId}": {
-      "schema": "BapReport",
-      "description": "Stores warning and fraud reports published in the BNB Admin Panel (BAP)"
-    },
-    "bap_groups/{groupId}": {
-      "schema": "BapGroup",
-      "description": "Stores registered other WhatsApp groups for national directory"
-    },
-    "bap_admin_requests/{requestId}": {
-      "schema": "BapAdminRequest",
-      "description": "Group Admin verification enrollment requests"
-    },
-    "hisab_transactions/{transactionId}": {
-      "schema": "LedgerTransaction",
-      "description": "Stores individual user business accounting/ledger transactions"
-    },
-    "hisab_notes/{noteId}": {
-      "schema": "LedgerNote",
-      "description": "Stores individual user notebook stickies and to-do checklists"
-    },
-    "money_exchange_deals/{dealId}": {
-      "schema": "MoneyExchangeDeal",
-      "description": "Stores escrow money exchange deals"
-    },
-    "agentLocations/{userId}": {
-      "schema": "AgentLocation",
-      "description": "Real-time single latest high-precision GPS position per agent/user"
-    },
-    "samity_investments/{investmentId}": {
-      "schema": "SamityInvestment",
-      "description": "Stores company portfolio investments like gold, real estate, farm projects and transparency Facebook-style posts"
+      "description": "Cooperative user records; admin role and ban fields protected against non-admin escalation"
     },
     "users/{userId}/fcmTokens/{tokenId}": {
       "schema": "FcmToken",
-      "description": "Stores user device FCM tokens"
+      "description": "User device FCM tokens"
+    },
+    "transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Immutable-deletion financial transaction ledger"
+    },
+    "wallet_ledger/{entryId}": {
+      "schema": "Transaction",
+      "description": "Wallet debit/credit ledger entries"
+    },
+    "user_notifications/{notifId}": {
+      "schema": "UserNotification",
+      "description": "Member inbox notifications"
+    },
+    "mandatory_notice_responses/{respId}": {
+      "schema": "ServiceRecord",
+      "description": "Member mandatory notice acknowledgement records"
+    },
+    "install_tracking/{installId}": {
+      "schema": "ServiceRecord",
+      "description": "Device installation count tracking records"
+    },
+    "notices/{noticeId}": {
+      "schema": "Notice",
+      "description": "Admin-published cooperative notices"
+    },
+    "offers/{offerId}": {
+      "schema": "Offer",
+      "description": "Admin-published telecom data packs and minute offers"
+    },
+    "products/{productId}": {
+      "schema": "ServiceRecord",
+      "description": "Admin-managed Super Shop product catalog"
+    },
+    "safi_categories/{catId}": {
+      "schema": "ServiceRecord",
+      "description": "Admin-managed Safi brand categories"
+    },
+    "safi_products/{prodId}": {
+      "schema": "ServiceRecord",
+      "description": "Admin-managed Safi brand products"
+    },
+    "ration_items/{itemId}": {
+      "schema": "ServiceRecord",
+      "description": "Admin-managed ration shop items"
+    },
+    "remittance_rates/{rateId}": {
+      "schema": "ServiceRecord",
+      "description": "Admin-managed live remittance exchange rates"
+    },
+    "edu_posts/{postId}": {
+      "schema": "ServiceRecord",
+      "description": "Admin-published educational and corporate guide posts"
+    },
+    "samity_investments/{investmentId}": {
+      "schema": "SamityInvestment",
+      "description": "Admin-published company portfolio investments"
+    },
+    "samity_fund_custody/{custodyId}": {
+      "schema": "ServiceRecord",
+      "description": "Admin-published Samity fund custody disclosures"
+    },
+    "push_notifications/{notificationId}": {
+      "schema": "PushNotification",
+      "description": "Admin-published broadcast push notifications"
+    },
+    "agents/{agentId}": {
+      "schema": "ServiceRecord",
+      "description": "Approved BNB agents directory"
+    },
+    "bap_agents/{agentId}": {
+      "schema": "ServiceRecord",
+      "description": "Approved BNB BAP agents directory"
+    },
+    "device_release_requests/{requestId}": {
+      "schema": "DeviceReleaseRequest",
+      "description": "Member device reset / zero-device requests"
+    },
+    "phone_change_requests/{requestId}": {
+      "schema": "ServiceRecord",
+      "description": "Member phone change requests"
+    },
+    "app_lock_requests/{requestId}": {
+      "schema": "ServiceRecord",
+      "description": "Member app lock recovery requests"
+    },
+    "samity_applications/{appId}": {
+      "schema": "ServiceRecord",
+      "description": "Member Samity membership applications"
+    },
+    "gold_loans/{loanId}": {
+      "schema": "ServiceRecord",
+      "description": "Member Qard Hasana gold loan records"
+    },
+    "safe_deals/{dealId}": {
+      "schema": "ServiceRecord",
+      "description": "Safe Deals escrow listings"
+    },
+    "safe_deal_orders/{orderId}": {
+      "schema": "ServiceRecord",
+      "description": "Safe Deals escrow orders"
+    },
+    "escrow_disputes/{disputeId}": {
+      "schema": "ServiceRecord",
+      "description": "Safe Deals escrow dispute records"
+    },
+    "escrow_deals/{dealId}": {
+      "schema": "ServiceRecord",
+      "description": "Legacy escrow deals records"
+    },
+    "money_exchange_deals/{dealId}": {
+      "schema": "MoneyExchangeDeal",
+      "description": "Escrow money exchange deals"
+    },
+    "exchange_orders/{orderId}": {
+      "schema": "ServiceRecord",
+      "description": "Money exchange order records"
+    },
+    "shop_orders/{orderId}": {
+      "schema": "ServiceRecord",
+      "description": "Super Shop and Safi product orders"
+    },
+    "ration_cards/{cardId}": {
+      "schema": "ServiceRecord",
+      "description": "Member ration cards and applications"
+    },
+    "ration_orders/{orderId}": {
+      "schema": "ServiceRecord",
+      "description": "Member ration purchase orders"
+    },
+    "recharge_orders/{orderId}": {
+      "schema": "ServiceRecord",
+      "description": "Telecom recharge orders"
+    },
+    "telecom_orders/{orderId}": {
+      "schema": "ServiceRecord",
+      "description": "Telecom pack orders"
+    },
+    "loan_applications/{appId}": {
+      "schema": "ServiceRecord",
+      "description": "Member loan applications"
+    },
+    "qard_applications/{appId}": {
+      "schema": "ServiceRecord",
+      "description": "Member Qard Hasana applications"
+    },
+    "courier_orders/{orderId}": {
+      "schema": "ServiceRecord",
+      "description": "Courier parcel booking orders"
+    },
+    "courier_riders/{riderId}": {
+      "schema": "ServiceRecord",
+      "description": "Courier rider profiles and applications"
+    },
+    "agent_requests/{reqId}": {
+      "schema": "ServiceRecord",
+      "description": "Member agent registration requests"
+    },
+    "agent_applications/{appId}": {
+      "schema": "ServiceRecord",
+      "description": "Member agent onboarding applications"
+    },
+    "agent_reports/{reportId}": {
+      "schema": "ServiceRecord",
+      "description": "Member reports against agents"
+    },
+    "agentLocations/{userId}": {
+      "schema": "AgentLocation",
+      "description": "Real-time GPS position per agent/user"
+    },
+    "hisab_customers/{customerId}": {
+      "schema": "ServiceRecord",
+      "description": "Member business ledger customer records"
+    },
+    "hisab_transactions/{transactionId}": {
+      "schema": "LedgerTransaction",
+      "description": "Member business ledger transactions"
+    },
+    "hisab_notes/{noteId}": {
+      "schema": "LedgerNote",
+      "description": "Member notebook stickies and to-do checklists"
+    },
+    "support_chats/{chatId}": {
+      "schema": "ServiceRecord",
+      "description": "Member support chat messages"
+    },
+    "user_reports/{reportId}": {
+      "schema": "ServiceRecord",
+      "description": "Member submitted app/user reports"
+    },
+    "corporate_feedbacks/{feedbackId}": {
+      "schema": "ServiceRecord",
+      "description": "Member corporate guide feedback submissions"
+    },
+    "bap_reports/{reportId}": {
+      "schema": "BapReport",
+      "description": "Warning and fraud reports published in BAP"
+    },
+    "bap_groups/{groupId}": {
+      "schema": "BapGroup",
+      "description": "Registered WhatsApp groups for BAP directory"
+    },
+    "bap_admin_requests/{requestId}": {
+      "schema": "BapAdminRequest",
+      "description": "BAP group admin verification enrollment requests"
+    },
+    "edu_bookmarks/{bookmarkId}": {
+      "schema": "ServiceRecord",
+      "description": "Member educational post bookmarks"
+    },
+    "edu_read_logs/{logId}": {
+      "schema": "ServiceRecord",
+      "description": "Member educational post read logs"
+    },
+    "share_transfers/{transferId}": {
+      "schema": "ServiceRecord",
+      "description": "Member Samity share transfer records"
+    },
+    "salary_configs/{userId}": {
+      "schema": "ServiceRecord",
+      "description": "Auto salary pay configuration per business account"
+    },
+    "salary_employees/{empId}": {
+      "schema": "ServiceRecord",
+      "description": "Auto salary pay employee roster"
+    },
+    "salary_payments/{paymentId}": {
+      "schema": "ServiceRecord",
+      "description": "Auto salary pay disbursement records"
     },
     "section_audits/{auditId}": {
       "schema": "SectionAudit",
-      "description": "Stores per-section admin expense, profit, loss, and revenue audit entries"
+      "description": "Admin-only per-section expense, profit, loss, and revenue audit entries"
     }
   }
 }

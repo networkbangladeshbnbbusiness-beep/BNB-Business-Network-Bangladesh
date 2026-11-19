@@ -56,13 +56,9 @@ Date.prototype.toLocaleTimeString = function(locales?: any, options?: any): stri
   return originalDateToLocaleTimeString.call(this, targetLocale, options);
 };
 
-// Synchronize title & manifest for Standalone Admin Software (/admin) in both dev and production
+// Synchronize title for Standalone Admin Software build variant
 if (typeof window !== 'undefined' && isStandaloneAdminRoute()) {
   document.title = 'BNB এডমিন সফটওয়্যার | Admin Control Panel';
-  const manifestEl = document.getElementById('app-manifest-link') as HTMLLinkElement | null;
-  if (manifestEl) {
-    manifestEl.href = '/manifest-admin.json';
-  }
 }
 
 createRoot(document.getElementById('root')!).render(

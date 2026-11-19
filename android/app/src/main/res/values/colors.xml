@@ -5,6 +5,6 @@
     <color name="colorAccent">#06822e</color>
     <color name="statusBarColor">#06822e</color>
     <color name="navigationBarColor">#06822e</color>
-    <color name="ic_launcher_background">#06822e</color>
-    <color name="splashBackground">#06822e</color>
+    <color name="ic_launcher_background">#017b0e</color>
+    <color name="splashBackground">#017b0e</color>
 </resources>

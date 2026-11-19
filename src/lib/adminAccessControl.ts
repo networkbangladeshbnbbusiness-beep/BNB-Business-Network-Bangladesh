@@ -119,9 +119,85 @@ export function isUserAdminCurrentlyOnline(u?: User | null, sessions: AdminSessi
   return !isNaN(ts) && Date.now() - ts < 4 * 60 * 1000;
 }
 
+const ADMIN_API_TOKEN_KEY = 'bnb_admin_api_token';
+
+export function getStoredAdminToken(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    return sessionStorage.getItem(ADMIN_API_TOKEN_KEY) || localStorage.getItem(ADMIN_API_TOKEN_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+export function clearStoredAdminToken(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.removeItem(ADMIN_API_TOKEN_KEY);
+    localStorage.removeItem(ADMIN_API_TOKEN_KEY);
+  } catch {}
+}
+
+export function getAdminAuthHeaders(): Record<string, string> {
+  const token = getStoredAdminToken();
+  return token ? { Authorization: `Bearer ${token}`, 'x-admin-token': token } : {};
+}
+
+export async function registerServerAdminSession(
+  adminUser: User,
+  pin: string,
+  firebaseAuthUid?: string | null
+): Promise<{ success: boolean; adminToken?: string; error?: string }> {
+  if (!isAdminBuildVariant()) {
+    return { success: false, error: 'user_variant_blocked' };
+  }
+  try {
+    const { apiUrl } = await import('../config/api');
+    const resp = await fetch(apiUrl('/api/admin/auth/session'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        uid: adminUser.uid,
+        phone: adminUser.phone || '',
+        email: adminUser.email || '',
+        pin,
+        firebaseAuthUid: firebaseAuthUid || ''
+      })
+    });
+    const data = await resp.json().catch(() => null);
+    if (resp.ok && data?.success && data?.adminToken) {
+      try {
+        sessionStorage.setItem(ADMIN_API_TOKEN_KEY, data.adminToken);
+        localStorage.setItem(ADMIN_API_TOKEN_KEY, data.adminToken);
+      } catch {}
+      return { success: true, adminToken: data.adminToken };
+    }
+    return { success: false, error: data?.error || 'session_registration_failed' };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'network_error' };
+  }
+}
+
+export async function revokeServerAdminSession(firebaseAuthUid?: string | null): Promise<void> {
+  const token = getStoredAdminToken();
+  clearStoredAdminToken();
+  if (!token && !firebaseAuthUid) return;
+  try {
+    const { apiUrl } = await import('../config/api');
+    await fetch(apiUrl('/api/admin/auth/logout'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}`, 'x-admin-token': token } : {})
+      },
+      body: JSON.stringify({ firebaseAuthUid: firebaseAuthUid || '' })
+    });
+  } catch {}
+}
+
 export async function recordAdminLoginSession(adminUser: User): Promise<string> {
   const sessionId = getOrCreateAdminSessionId();
-  if (!adminUser?.uid || adminUser.isAdminBanned) return sessionId;
+  if (!isAdminBuildVariant() || !adminUser?.uid || adminUser.isAdminBanned) return sessionId;
 
   const nowIso = new Date().toISOString();
   const { deviceInfo, platform } = getAdminDeviceSummary();

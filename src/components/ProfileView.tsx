@@ -39,7 +39,6 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 interface ProfileViewProps {
   user: User;
   onUpdate: () => void;
-  onTriggerAdmin?: () => void;
   appConfig?: AppConfig | null;
 }
 
@@ -52,7 +51,7 @@ const PRESET_AVATARS = [
   { id: 'av6', emoji: '✨', label: 'ভিআইপি মেম্বার', bg: 'bg-cyan-100 border-cyan-250 text-cyan-700' },
 ];
 
-export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig }: ProfileViewProps) {
+export default function ProfileView({ user, onUpdate, appConfig }: ProfileViewProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [showAvatarPicker, setShowAvatarPicker] = useState(false);
   
@@ -248,7 +247,7 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
   const isVerifiedMember = Boolean(
     isProfileComplete && 
     user.status !== 'inactive' &&
-    (user.isSamityMember || user.samityStatus === 'approved' || user.samityApproved || user.role === 'admin' || user.isDemo || user.hasSetProfile)
+    (user.isSamityMember || user.samityStatus === 'approved' || user.samityApproved || user.isDemo || user.hasSetProfile)
   );
 
   useEffect(() => {
@@ -506,8 +505,8 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
     setSuccessMsg('');
 
     const isSelfEditAllowed = appConfig?.allowProfileSelfEdit !== false;
-    if (!isSelfEditAllowed && user.role !== 'admin') {
-      setErrorMsg('দুঃখিত, এডমিন প্যানেল থেকে বর্তমানে সদস্যদের নিজ তথ্য সংশোধন বন্ধ রাখা হয়েছে।');
+    if (!isSelfEditAllowed) {
+      setErrorMsg('দুঃখিত, সিস্টেম সেটিংস অনুযায়ী বর্তমানে সদস্যদের নিজ তথ্য সংশোধন বন্ধ রাখা হয়েছে।');
       setLoading(false);
       return;
     }
@@ -1934,13 +1933,9 @@ export default function ProfileView({ user, onUpdate, onTriggerAdmin, appConfig 
               <h3 className="text-[10.5px] font-black text-slate-700 uppercase tracking-wider leading-none">সদস্য পরিচিতি ও ডাটাপত্র</h3>
               <p className="text-[9px] text-slate-400 mt-1">নিবন্ধিত সমবায় তথ্যাদি ও আইডি বিবরণী</p>
             </div>
-            {appConfig?.allowProfileSelfEdit === false && user.role !== 'admin' ? (
+            {appConfig?.allowProfileSelfEdit === false ? (
               <span className="px-2.5 py-1 bg-rose-50 text-rose-800 font-extrabold border border-rose-200 rounded-lg text-[9.5px] sm:text-[10px] flex items-center gap-0.5 shadow-3xs leading-none">
-                🔒 তথ্য সংশোধন বন্ধ (Admin Off)
-              </span>
-            ) : user.hasSetProfile && appConfig?.allowProfileSelfEdit === false && user.role !== 'admin' ? (
-              <span className="px-2.5 py-1 bg-amber-50 text-amber-800 font-extrabold border border-amber-200 rounded-lg text-[9.5px] sm:text-[10px] flex items-center gap-0.5 shadow-3xs leading-none">
-                🔒 তথ্য লকড
+                🔒 তথ্য সংশোধন বন্ধ
               </span>
             ) : (
               <button 

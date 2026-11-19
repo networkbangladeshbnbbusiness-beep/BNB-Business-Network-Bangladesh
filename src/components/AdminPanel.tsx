@@ -27,12 +27,12 @@ import AdminSectionAuditBar, {
 } from './admin/AdminSectionAuditBar';
 import AdminTeamMonitorModal from './admin/AdminTeamMonitorModal';
 import {
+  getAdminAuthHeaders,
   heartbeatAdminSession,
   isAdminAccountRole,
   isSuperAdminUser,
   isUserAdminCurrentlyOnline
 } from '../lib/adminAccessControl';
-import { isAiStudioDevHost } from '../lib/adminRoute';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db } from '../lib/firebase';
 import { SAMITY_MONTHS, SAMITY_YEARS, getUniquePaidMonthsCount, normalizePaidMonthsArray, getEffectiveBalance } from '../types';
@@ -260,7 +260,6 @@ export const extractNumbersFromTx = (tx: any, targetUserPhone?: string) => {
 
 interface AdminPanelProps {
   onBack: () => void;
-  onSwitchToUserPreview?: () => void;
   currentUser: User;
   appConfig: AppConfig;
   onChangeConfig: (newConfig: AppConfig) => void;
@@ -295,7 +294,6 @@ export const isMainAdminUser = (usr: any) => Boolean(
 export default function AdminPanel(props: AdminPanelProps) {
   const { 
     onBack, 
-    onSwitchToUserPreview,
     currentUser, 
     appConfig, 
     onChangeConfig,
@@ -1683,7 +1681,8 @@ export default function AdminPanel(props: AdminPanelProps) {
       const res = await fetch(apiUrl('/api/send-targeted-push'), {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...getAdminAuthHeaders()
         },
         body: JSON.stringify(payload)
       });
@@ -4472,7 +4471,7 @@ export default function AdminPanel(props: AdminPanelProps) {
       // 5. Also call server-side Zero Device endpoint
       fetch(apiUrl('/api/admin/zero-device'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAdminAuthHeaders() },
         body: JSON.stringify({ userId, note: 'Admin Zero Device Action' })
       }).catch(() => {});
 
@@ -4535,7 +4534,7 @@ export default function AdminPanel(props: AdminPanelProps) {
 
       fetch(apiUrl('/api/admin/allow-device'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAdminAuthHeaders() },
         body: JSON.stringify({ userId, requestedDeviceId: requestedDevId })
       }).catch(() => {});
 
@@ -9655,7 +9654,7 @@ export default function AdminPanel(props: AdminPanelProps) {
         try {
           await fetch(apiUrl('/api/admin/update-user'), {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...getAdminAuthHeaders() },
             body: JSON.stringify({ userId: uId, uid: uId, updates: cleanUpdatedFields })
           });
         } catch (e) {}
@@ -11884,10 +11883,11 @@ export default function AdminPanel(props: AdminPanelProps) {
   };
 
     return (
-    <div className="w-full font-sans text-left" id="admin-panel-root">
-      <div className="space-y-4 text-left">
-        {/* 1. Slim Single-Row Top Header Bar */}
-        <div className="bg-[#00a884] rounded-2xl px-2.5 sm:px-3.5 py-1.5 sm:py-2 flex items-center justify-between gap-2 text-white shadow-md mb-2.5 border border-teal-400/30">
+    <div className="w-full min-h-screen bg-slate-50 flex flex-col relative font-sans text-left" id="admin-panel-root">
+      {/* 1. Unified Safe-Area Sticky Top Header Bar (Matches User Dashboard Status-Bar Clearance) */}
+      <header className="bg-[#0b6623] text-white sticky top-0 z-40 shadow-md font-sans select-none w-full max-w-full overflow-x-hidden box-border pt-safe">
+        <div className="px-2 sm:px-3.5 pt-1.5 pb-2">
+          <div className="bg-[#00a884] rounded-2xl px-2.5 sm:px-3.5 py-1.5 sm:py-2 flex items-center justify-between gap-2 text-white shadow-sm border border-teal-400/30">
           {/* Left Side: Back Arrow, Member Pill, Pending Pill */}
           <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
             <UnifiedBackButton 
@@ -11982,31 +11982,17 @@ export default function AdminPanel(props: AdminPanelProps) {
             >
               <RefreshCw className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" />
             </button>
-            {isAiStudioDevHost() && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (typeof onSwitchToUserPreview === 'function') {
-                    onSwitchToUserPreview();
-                  } else {
-                    onBack();
-                  }
-                }}
-                className="px-2.5 sm:px-3 py-1 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black rounded-full text-[10px] sm:text-xs flex items-center gap-1 shadow-md transition active:scale-95 cursor-pointer shrink-0 border border-amber-300"
-                title="AI Studio প্রিভিউ: ইউজার ড্যাশবোর্ডের ডিজাইন ও পরিবর্তন দেখুন"
-              >
-                <UserIcon className="w-3.5 h-3.5 text-slate-950 stroke-[2.5]" />
-                <span className="whitespace-nowrap">ইউজার ভিউ</span>
-              </button>
-            )}
           </div>
         </div>
+        </div>
+      </header>
 
+      <div className="px-1.5 sm:px-3 pt-3 pb-8 space-y-4 text-left flex-1">
         {/* Standalone Admin Software Modal (প্রোডাকশন আলাদা সফটওয়্যার কন্ট্রোল) */}
         <AnimatePresence>
           {showStandaloneSoftwareModal && (
             <div className="fixed inset-0 z-[99999] flex flex-col bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
-              <div className="h-10 shrink-0 bg-[#004a2c] w-full"></div>
+              <div className="min-h-10 pt-safe shrink-0 bg-[#004a2c] w-full"></div>
               
               <motion.div 
                 initial={{ y: "100%" }}

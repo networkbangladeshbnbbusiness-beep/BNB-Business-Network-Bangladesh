@@ -65,34 +65,6 @@ if (typeof window !== 'undefined' && db) {
   });
 }
 
-// Validate Connection to Firestore on boot as mandated by Firebase Skill
-async function testConnection() {
-  try {
-    if (db) {
-      await getDocFromServer(doc(db, 'system_settings', 'app_config'));
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      enableNetwork(db).catch(() => {});
-    }
-  }
-}
-if (typeof window !== 'undefined') {
-  testConnection();
-}
-
-export const auth = getAuth(app);
-
-let messagingInstance: any = null;
-try {
-  if (typeof window !== 'undefined') {
-    messagingInstance = getMessaging(app);
-  }
-} catch (e) {
-  // Messaging not supported in current environment/iframe
-}
-export const messaging = messagingInstance;
-
 // Sign in anonymously to bootstrap Auth UID so security rules resolve correctly
 let fallbackUid: string | null = null;
 function getOrCreateFallbackUid() {
@@ -105,6 +77,8 @@ function getOrCreateFallbackUid() {
   }
   return fallbackUid;
 }
+
+export const auth = getAuth(app);
 
 export async function ensureAuth() {
   if (!auth.currentUser) {
@@ -120,6 +94,33 @@ export async function ensureAuth() {
     return { uid: getOrCreateFallbackUid(), email: null };
   }
 }
+
+// Validate Connection to Firestore on boot as mandated by Firebase Skill
+async function testConnection() {
+  try {
+    await ensureAuth().catch(() => {});
+    if (db) {
+      await getDocFromServer(doc(db, 'system_settings', 'app_config'));
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      enableNetwork(db).catch(() => {});
+    }
+  }
+}
+if (typeof window !== 'undefined') {
+  testConnection();
+}
+
+let messagingInstance: any = null;
+try {
+  if (typeof window !== 'undefined') {
+    messagingInstance = getMessaging(app);
+  }
+} catch (e) {
+  // Messaging not supported in current environment/iframe
+}
+export const messaging = messagingInstance;
 
 export enum OperationType {
   CREATE = 'create',

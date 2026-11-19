@@ -257,7 +257,6 @@ const {
 
   // Destructure any other props passed
   const {
-    openAdminWithSecret,
     handleSaveProfile,
     handleSaveNominee,
     handleSaveSecurity,

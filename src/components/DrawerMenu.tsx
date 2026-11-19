@@ -44,7 +44,6 @@ interface DrawerMenuProps {
   onClose: () => void;
   user: User;
   onLogout: () => void;
-  onOpenAdmin: () => void;
   onSelectTab: (tab: string) => void;
   onSelectAction: (actionName: string) => void;
   onTriggerDemoAuth?: () => void;
@@ -142,7 +141,7 @@ interface DrawerMenuProps {
     },
     {
       q: 'আমার পিন বা পাসওয়ার্ড ভুলে গেলে করণীয় কী?',
-      a: 'নিরাপত্তা পিন বা পাসওয়ার্ড পরিবর্তন বা রিসেট করতে আমাদের হোয়াটসঅ্যাপ হেল্পলাইনে মেসেজ দিন (01865911728)। শুধুমাত্র এডমিন প্যানেল থেকে এডমিন যাচাই করে আপনার পিন পরিবর্তন করে দিবেন।'
+      a: 'নিরাপত্তা পিন বা পাসওয়ার্ড পরিবর্তন বা রিসেট করতে আমাদের অফিসিয়াল হোয়াটসঅ্যাপ হেল্পলাইনে মেসেজ দিন (01865911728)। সাপোর্ট টিম যাচাই করে আপনার পিন রিসেট করে দিবেন।'
     }
   ];
 
@@ -153,7 +152,6 @@ export const DrawerMenu = React.memo(function DrawerMenu({
   onClose, 
   user, 
   onLogout, 
-  onOpenAdmin,
   onSelectTab,
   onSelectAction,
   onTriggerDemoAuth,

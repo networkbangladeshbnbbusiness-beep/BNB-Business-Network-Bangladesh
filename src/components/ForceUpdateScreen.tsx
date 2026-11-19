@@ -1,23 +1,19 @@
 import React from 'react';
 import { motion } from 'motion/react';
 import { Download, ShieldCheck, Rocket, Star, ShieldAlert, Lock } from 'lucide-react';
-import { AppConfig, User } from '../types';
+import { AppConfig } from '../types';
 import { BNBLogo } from './BNBLogo';
 
 interface ForceUpdateScreenProps {
   appConfig: AppConfig;
-  currentUser: User | null;
-  onBypassAdmin: () => void;
 }
 
-export default function ForceUpdateScreen({ appConfig, currentUser, onBypassAdmin }: ForceUpdateScreenProps) {
+export default function ForceUpdateScreen({ appConfig }: ForceUpdateScreenProps) {
   const handleUpdateClick = () => {
     if (appConfig.downloadLink) {
       window.open(appConfig.downloadLink, '_blank', 'noopener,noreferrer');
     }
   };
-
-  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'sub_admin';
 
   return (
     <div 
@@ -142,7 +138,7 @@ export default function ForceUpdateScreen({ appConfig, currentUser, onBypassAdmi
         </div>
       </div>
 
-      {/* Bottom Section - Core CTA and Admin Bypass */}
+      {/* Bottom Section - Core Update CTA */}
       <div className="w-full max-w-sm pb-8 flex flex-col items-center space-y-4">
         
         {/* Core Update Action Button */}

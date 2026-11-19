@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { User, AppConfig, MemberNominee } from '../types';
+import { isAdminBuildVariant } from '../lib/adminRoute';
 import { db } from '../lib/firebase';
 import { doc, runTransaction, addDoc, collection } from 'firebase/firestore';
 import {
@@ -640,7 +641,7 @@ export default function SamityRequestForm({ user, appConfig, onClose, onSubmitSu
               <div>
                 <span className="text-slate-400 font-semibold block text-[10px]">অ্যাকাউন্ট রোল:</span>
                 <div className="text-slate-700 font-semibold bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 mt-0.5 truncate">
-                  {user.role === 'admin' ? 'এডমিন (BNB Admin)' : 'প্রিমিয়াম সদস্য'}
+                  {isAdminBuildVariant() && user.role === 'admin' ? 'এডমিন (BNB Admin)' : 'প্রিমিয়াম সদস্য'}
                 </div>
               </div>
             </div>

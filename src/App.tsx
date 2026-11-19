@@ -17,14 +17,15 @@ import DrawerMenu from './components/DrawerMenu';
 import {
   isStandaloneAdminRoute,
   isAdminBuildVariant,
-  isAiStudioDevHost,
-  isStudioUserPreviewActive,
-  setStudioUserPreviewActive
+  isAdminAccessBlockedUrl
 } from './lib/adminRoute';
 import {
+  clearStoredAdminToken,
   getOrCreateAdminSessionId,
   markAdminSessionOffline,
-  recordAdminLoginSession
+  recordAdminLoginSession,
+  registerServerAdminSession,
+  revokeServerAdminSession
 } from './lib/adminAccessControl';
 
 export { isStandaloneAdminRoute };
@@ -82,12 +83,16 @@ function isCorruptedFallbackUser(u: any): boolean {
 
 function getStoredLocalUser(): User | null {
   if (typeof window === 'undefined') return null;
-  const onAdminRoute = isStandaloneAdminRoute();
+  const onAdminRoute = isAdminBuildVariant();
   if (!onAdminRoute) {
     try {
       localStorage.removeItem('amb_standalone_admin_software');
       localStorage.removeItem('amb_admin_mode');
+      localStorage.removeItem('amb_standalone_admin_user');
+      localStorage.removeItem('bnb_admin_api_token');
       sessionStorage.removeItem('amb_admin_active_view');
+      sessionStorage.removeItem('bnb_studio_user_preview');
+      sessionStorage.removeItem('bnb_admin_api_token');
     } catch (e) {}
   }
 
@@ -131,7 +136,7 @@ function getStoredLocalUser(): User | null {
       phone: rememberedPhone,
       memberId: localStorage.getItem('bnb_user_member_id') || localStorage.getItem('amb_user_member_id') || 'BNB00000000',
       pin: localStorage.getItem('amb_user_pin') || '',
-      role: (localStorage.getItem('amb_user_role') as any) || 'user',
+      role: onAdminRoute ? ((localStorage.getItem('amb_user_role') as any) || 'user') : 'user',
       balance: storedBal,
       mainBalance: storedBal,
       savings: Number(localStorage.getItem('amb_user_savings') || '0'),
@@ -1083,14 +1088,15 @@ export default function App() {
 
   // Real-time synchronization of the app configuration settings
   useEffect(() => {
-    restoreAndSeedDatabase().catch(err => console.warn(err));
+    if (isAdminBuildVariant()) {
+      restoreAndSeedDatabase().catch(err => console.warn(err));
+    }
     const configRef = doc(db, 'system_settings', 'app_config');
     const unsub = onSnapshot(configRef, (snap) => {
       if (snap.exists()) {
         const data = snap.data() as AppConfig;
         if (data.appName && data.appName.toUpperCase().includes('MAYADIN')) {
           data.appName = 'BNB BUSINESS network Bangladesh';
-          setDoc(configRef, { appName: 'BNB BUSINESS network Bangladesh' }, { merge: true }).catch(() => {});
         }
         setAppConfig(prev => {
           const merged = {
@@ -1148,137 +1154,38 @@ export default function App() {
     };
   }, []);
 
-  // Install Count tracking (Robust, Single Source of Truth, Race-condition safe)
+  // Install Count tracking (Server-side atomic tracking so app_config remains admin-write protected)
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    
-    // We rely on our persistent getClientDeviceId() to ensure each device is counted EXACTLY ONCE.
     const uniqueDeviceId = getClientDeviceId();
     const localTrackKey = `amb_install_counted_${uniqueDeviceId}`;
-    
-    // Check both localStorage and cookie to survive partial cache clears
     const isAppInstallCounted = localStorage.getItem(localTrackKey) || document.cookie.includes(`${localTrackKey}=true`);
-    
+
     if (!isAppInstallCounted) {
-      // 1. Immediately mark locally to prevent duplicate concurrent triggers (React Strict Mode / rapid re-renders)
       localStorage.setItem(localTrackKey, 'pending');
-      
-      const updateInstallCount = async () => {
-        try {
-          // 2. Attempt an online server-side atomic transaction first to guarantee no race conditions
-          const transactionResult = await runTransaction(db, async (transaction) => {
-            const installTrackingRef = doc(db, 'install_tracking', uniqueDeviceId);
-            const snap = await transaction.get(installTrackingRef);
-            
-            if (snap.exists()) {
-              // Already exists in DB. Skip increment.
-              return false; 
-            }
-            
-            // Does not exist. Set it and increment atomic counter.
-            const configRef = doc(db, 'system_settings', 'app_config');
-            transaction.set(installTrackingRef, { 
-              installedAt: serverTimestamp(),
-              deviceId: uniqueDeviceId,
-              platform: 'capacitor_or_web'
-            }, { merge: true });
-            
-            transaction.set(configRef, { 
-              installCount: increment(1) 
-            }, { merge: true });
-            
-            return true;
-          });
-          
-          if (transactionResult) {
-            console.log('App install count verified and tracked atomically for device:', uniqueDeviceId);
-          } else {
-            console.log('App install count recovered from Firestore for device:', uniqueDeviceId);
-          }
-          
-          // 3. Mark locally as successful
-          localStorage.setItem(localTrackKey, 'true');
-          try {
-            const expires = new Date();
-            expires.setFullYear(expires.getFullYear() + 10);
-            document.cookie = `${localTrackKey}=true;expires=${expires.toUTCString()};path=/;SameSite=Lax`;
-          } catch (e) {}
-          
-        } catch (error: any) {
-          // If offline, runTransaction will throw an error (e.g. 'unavailable').
-          // We gracefully fallback to writeBatch which queues locally and syncs safely when online.
-          if (error?.code === 'unavailable' || error?.message?.includes('offline')) {
+      fetch(apiUrl('/api/track-install'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId: uniqueDeviceId, platform: 'capacitor_or_web' })
+      })
+        .then((res) => {
+          if (res.ok) {
+            localStorage.setItem(localTrackKey, 'true');
             try {
-              const batch = writeBatch(db);
-              const installTrackingRef = doc(db, 'install_tracking', uniqueDeviceId);
-              const configRef = doc(db, 'system_settings', 'app_config');
-              
-              batch.set(installTrackingRef, { 
-                installedAt: serverTimestamp(),
-                deviceId: uniqueDeviceId,
-                platform: 'capacitor_or_web'
-              }, { merge: true });
-              
-              batch.set(configRef, { 
-                installCount: increment(1) 
-              }, { merge: true });
-              
-              await batch.commit();
-              
-              // Queued successfully
-              localStorage.setItem(localTrackKey, 'true');
-              try {
-                const expires = new Date();
-                expires.setFullYear(expires.getFullYear() + 10);
-                document.cookie = `${localTrackKey}=true;expires=${expires.toUTCString()};path=/;SameSite=Lax`;
-              } catch (e) {}
-              
-              console.warn('Install count sync delayed: Client is offline (queued safely).');
-            } catch (batchErr) {
-               localStorage.removeItem(localTrackKey); // revert pending
-               console.error('Offline batch queuing failed:', batchErr);
-            }
+              const expires = new Date();
+              expires.setFullYear(expires.getFullYear() + 10);
+              document.cookie = `${localTrackKey}=true;expires=${expires.toUTCString()};path=/;SameSite=Lax`;
+            } catch (e) {}
           } else {
-            // Real error (e.g. permissions). Revert pending so it tries again next time.
             localStorage.removeItem(localTrackKey);
-            console.error('Failed to update install count atomically:', error);
           }
-        }
-      };
-      
-      updateInstallCount();
+        })
+        .catch(() => {
+          localStorage.removeItem(localTrackKey);
+        });
     }
   }, []);
 
-  // Automated Configurable History Retention Cleanup
-  useEffect(() => {
-    const retentionDays = appConfig?.historyRetentionDays ?? 365;
-    const lastRunRaw = localStorage.getItem('amb_last_retention_cleanup');
-    let shouldRun = true;
-
-    if (lastRunRaw) {
-      try {
-        const lastRun = JSON.parse(lastRunRaw);
-        const hoursSinceLastRun = (Date.now() - new Date(lastRun.executedAt).getTime()) / (1000 * 60 * 60);
-        // Throttle background cleanup to run at most once every 12 hours unless period changed
-        if (hoursSinceLastRun < 12 && lastRun.days === retentionDays) {
-          shouldRun = false;
-        }
-      } catch (e) {
-        shouldRun = true;
-      }
-    }
-
-    if (shouldRun) {
-      executeHistoryRetentionCleanup(retentionDays).then(res => {
-        if (res.totalDeleted > 0) {
-          console.log(`[RetentionSystem] Successfully auto-purged ${res.totalDeleted} expired records older than ${retentionDays} days.`);
-        }
-      }).catch(err => {
-        console.warn("[RetentionSystem] Background retention cleanup error:", err);
-      });
-    }
-  }, [appConfig?.historyRetentionDays]);
 
   // Client-Side OneSignal Push Notification Setup & Initialization
   useEffect(() => {
@@ -1411,6 +1318,36 @@ export default function App() {
   const [standaloneAdminLoading, setStandaloneAdminLoading] = useState(false);
   const [standaloneAdminError, setStandaloneAdminError] = useState('');
   const lastForceAdminLogoutRef = useRef<string>('');
+
+  // Automated Configurable History Retention Cleanup (Admin software build only)
+  useEffect(() => {
+    if (!isAdminBuildVariant() || !adminOpen) return;
+    const retentionDays = appConfig?.historyRetentionDays ?? 365;
+    const lastRunRaw = localStorage.getItem('amb_last_retention_cleanup');
+    let shouldRun = true;
+
+    if (lastRunRaw) {
+      try {
+        const lastRun = JSON.parse(lastRunRaw);
+        const hoursSinceLastRun = (Date.now() - new Date(lastRun.executedAt).getTime()) / (1000 * 60 * 60);
+        if (hoursSinceLastRun < 12 && lastRun.days === retentionDays) {
+          shouldRun = false;
+        }
+      } catch (e) {
+        shouldRun = true;
+      }
+    }
+
+    if (shouldRun) {
+      executeHistoryRetentionCleanup(retentionDays).then(res => {
+        if (res.totalDeleted > 0) {
+          console.log(`[RetentionSystem] Successfully auto-purged ${res.totalDeleted} expired records older than ${retentionDays} days.`);
+        }
+      }).catch(err => {
+        console.warn("[RetentionSystem] Background retention cleanup error:", err);
+      });
+    }
+  }, [appConfig?.historyRetentionDays, adminOpen]);
 
   // Pre-warm Admin Panel caches ONLY on the Standalone Admin Software (/admin), NEVER on User Software (/)
   useEffect(() => {
@@ -1701,23 +1638,24 @@ export default function App() {
       console.warn("Failed to update user doc with notice consent:", err);
     }
 
-    // 4. Update centralized app_config responses map in Firestore
+    // 4. Record centralized mandatory notice response via backend API
     try {
-      const configRef = doc(db, 'system_settings', 'app_config');
-      await updateDoc(configRef, {
-        [`mandatoryNoticeResponses.${currentUser.uid}`]: {
+      await fetch(apiUrl('/api/notice-consent'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           userId: currentUser.uid,
           userName: currentUser.name || 'সদস্য',
           memberId: currentUser.memberId || 'N/A',
           phone: currentUser.phone || '',
-          noticeId: noticeId,
+          noticeId,
           agreed,
           feedbackText: feedbackText || '',
           respondedAt: now
-        }
+        })
       });
     } catch (err) {
-      console.warn("Failed to update app_config with notice response:", err);
+      console.warn("Failed to sync mandatory notice response:", err);
     }
   };
 
@@ -1776,7 +1714,7 @@ export default function App() {
 
     const cleanPhone = updatedUser.phone?.replace(/\D/g, '') || '';
     const isDeveloper = cleanPhone.endsWith('01111222233') || cleanPhone.endsWith('1111222233') || updatedUser.phone === '+8801111222233' || updatedUser.uid === 'admin_master';
-    if (isDeveloper && updatedUser.role !== 'admin') {
+    if (isAdminBuildVariant() && isDeveloper && updatedUser.role !== 'admin') {
       updatedUser.role = 'admin';
       changed = true;
     }
@@ -1931,13 +1869,17 @@ export default function App() {
                 localStorage.setItem('amb_active_session_token', finalUserData.activeSessionToken);
               }
 
-              if (isStandaloneAdminRoute()) {
+              if (isAdminBuildVariant()) {
                 const hasSavedAdminSession =
                   localStorage.getItem('amb_admin_mode') === 'true' ||
                   Boolean(localStorage.getItem('amb_standalone_admin_user'));
                 if (hasSavedAdminSession && isAuthorizedAdminUser(finalUserData) && !finalUserData.isAdminBanned) {
                   localStorage.setItem('amb_admin_mode', 'true');
                   localStorage.setItem('amb_standalone_admin_user', JSON.stringify(finalUserData));
+                  const cachedAdminPin = sessionStorage.getItem('amb_verified_pin') || localStorage.getItem('amb_user_pin') || '';
+                  if (cachedAdminPin) {
+                    registerServerAdminSession(finalUserData, cachedAdminPin, authUser.uid).catch(() => {});
+                  }
                   setCurrentUser(finalUserData);
                   setIsLocked(false);
                   setAdminOpen(true);
@@ -2018,8 +1960,8 @@ export default function App() {
           uData.pin = sessionPin;
         }
 
-        // Real-time Ban & Instant Kickout Enforcement for Standalone Admin Software (/admin)
-        if (isStandaloneAdminRoute() && adminOpen) {
+        // Real-time Ban & Instant Kickout Enforcement for Standalone Admin Software
+        if (isAdminBuildVariant() && adminOpen) {
           const isRevoked = uData.isAdminBanned === true || !isAuthorizedAdminUser({ ...uData, uid: snap.id });
           const incomingForceLogout = String(uData.forceAdminLogoutAt || '');
           const prevForceLogout = lastForceAdminLogoutRef.current;
@@ -2033,6 +1975,7 @@ export default function App() {
           }
 
           if (isRevoked || wasFreshlyKicked) {
+            revokeServerAdminSession(auth.currentUser?.uid).catch(() => {});
             localStorage.removeItem('amb_admin_mode');
             localStorage.removeItem('amb_standalone_admin_user');
             sessionStorage.removeItem('amb_admin_active_view');
@@ -2086,13 +2029,14 @@ export default function App() {
 
   // Real-time Session Kickout / Ban Listener for the active admin_sessions doc
   useEffect(() => {
-    if (!isStandaloneAdminRoute() || !adminOpen || !currentUser?.uid) return;
+    if (!isAdminBuildVariant() || !adminOpen || !currentUser?.uid) return;
     const activeSessionId = getOrCreateAdminSessionId();
     const sessRef = doc(db, 'admin_sessions', activeSessionId);
     const unsubSess = onSnapshot(sessRef, (snap) => {
       if (!snap.exists()) return;
       const sessData = snap.data() as any;
       if (sessData?.status === 'kicked' || sessData?.status === 'banned_kicked') {
+        revokeServerAdminSession(auth.currentUser?.uid).catch(() => {});
         localStorage.removeItem('amb_admin_mode');
         localStorage.removeItem('amb_standalone_admin_user');
         sessionStorage.removeItem('amb_admin_active_view');
@@ -2310,7 +2254,7 @@ export default function App() {
       // Immediately lock and require PIN after successful login
       setIsLocked(true);
       sessionStorage.removeItem('amb_session_unlocked');
-      if (isStandaloneAdminRoute() && isAuthorizedAdminUser(userData)) {
+      if (isAdminBuildVariant() && isAuthorizedAdminUser(userData)) {
         localStorage.setItem('amb_admin_mode', 'true');
         localStorage.setItem('amb_standalone_admin_user', JSON.stringify(userData));
         sessionStorage.setItem('amb_session_unlocked', 'true');
@@ -2365,11 +2309,16 @@ export default function App() {
     localStorage.removeItem('amb_standalone_admin_software');
     localStorage.removeItem('bnb_pending_otp_code');
     localStorage.removeItem('bnb_pending_otp_user');
+    clearStoredAdminToken();
+    if (isAdminBuildVariant()) {
+      revokeServerAdminSession(auth.currentUser?.uid).catch(() => {});
+    }
     sessionStorage.removeItem('amb_session_unlocked');
     sessionStorage.removeItem('amb_admin_active_view');
     sessionStorage.removeItem('amb_fresh_login_location_needed');
     sessionStorage.removeItem('bnb_pending_otp_code');
     sessionStorage.removeItem('bnb_pending_otp_user');
+    sessionStorage.removeItem('bnb_studio_user_preview');
     
     setCurrentUser(null);
     setIsLocked(false);
@@ -2405,20 +2354,39 @@ export default function App() {
     }
   };
 
-  // Admin Panel is strictly isolated to /admin; User Software (/) has zero admin entry points
-  const handleOpenAdmin = useCallback(() => {
-    if (!isStandaloneAdminRoute()) return;
-    if (!isAuthorizedAdminUser(currentUser)) return;
-    setDrawerOpen(false);
-    setAdminOpen(true);
-  }, [currentUser]);
-
-  const isStudioPreviewUserMode = isStudioUserPreviewActive() && isAuthorizedAdminUser(currentUser);
-  const isStandaloneAdminApp = isStandaloneAdminRoute();
+  // Admin Panel is strictly isolated to standalone Admin APK build (VITE_APP_VARIANT=admin); User Software has zero admin access
+  const isStandaloneAdminApp = isAdminBuildVariant();
   const isDeviceLocked = false;
+  const effectiveAdminBypass = isStandaloneAdminApp && adminBypassed;
 
-  const showMaintenance = !isStandaloneAdminApp && !isStudioPreviewUserMode && !!currentUser && !isLocked && appConfig.maintenanceMode && !adminBypassed;
-  const showUpdate = !isStandaloneAdminApp && !isStudioPreviewUserMode && !!currentUser && !isLocked && !showMaintenance && appConfig.forceUpdateActive && !adminBypassed && (() => {
+  if (!isStandaloneAdminApp && isAdminAccessBlockedUrl()) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center font-sans">
+        <div className="w-full max-w-sm bg-slate-900 border border-rose-500/40 rounded-3xl p-6 shadow-2xl space-y-4">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center">
+            <ShieldAlert className="w-9 h-9 text-rose-400" />
+          </div>
+          <h1 className="text-lg font-black text-white">৪০৩ • অ্যাক্সেস নিষিদ্ধ (Access Denied)</h1>
+          <p className="text-xs font-bold text-slate-300 leading-relaxed">
+            এই ইউজার সফটওয়্যারে এডমিন প্যানেল বা এডমিন রুট সম্পূর্ণভাবে বন্ধ রাখা হয়েছে।
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              window.history.replaceState({}, '', '/');
+              window.location.replace('/');
+            }}
+            className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl transition cursor-pointer"
+          >
+            ইউজার হোম পেজে ফিরে যান
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const showMaintenance = !isStandaloneAdminApp && !!currentUser && !isLocked && appConfig.maintenanceMode && !effectiveAdminBypass;
+  const showUpdate = !isStandaloneAdminApp && !!currentUser && !isLocked && !showMaintenance && appConfig.forceUpdateActive && !effectiveAdminBypass && (() => {
     try {
       const cur = parseFloat(CURRENT_APP_VERSION);
       const min = parseFloat(appConfig.minAppVersion || "2.0");
@@ -2431,7 +2399,6 @@ export default function App() {
   const isMandatoryNoticeActive = Boolean(
     currentUser &&
     !isStandaloneAdminApp &&
-    !isStudioPreviewUserMode &&
     !adminOpen &&
     !isLocked &&
     !isDeviceLocked &&
@@ -2452,18 +2419,14 @@ export default function App() {
       {showMaintenance ? (
         <MaintenanceScreen 
           appConfig={appConfig} 
-          currentUser={currentUser} 
-          onBypassAdmin={() => {}} 
         />
       ) : showUpdate ? (
         <ForceUpdateScreen 
           appConfig={appConfig} 
-          currentUser={currentUser} 
-          onBypassAdmin={() => {}} 
         />
       ) : (
         <>
-          {/* Route Switch Control: Strict Isolation between Standalone Admin Software (/admin) and User Software (/) */}
+          {/* Route Switch Control: Strict Isolation between Standalone Admin Software and User Software */}
           {isStandaloneAdminApp && adminOpen && currentUser && isAuthorizedAdminUser(currentUser) ? (
             <div key="admin-mode">
               <Suspense
@@ -2477,21 +2440,13 @@ export default function App() {
                   currentUser={currentUser} 
                   onBack={() => {
                     markAdminSessionOffline(currentUser).catch(() => {});
-                    setStudioUserPreviewActive(false);
+                    revokeServerAdminSession(auth.currentUser?.uid).catch(() => {});
                     localStorage.removeItem('amb_admin_mode');
                     localStorage.removeItem('amb_standalone_admin_user');
                     sessionStorage.removeItem('amb_admin_active_view');
                     setAdminOpen(false);
                     setCurrentUser(null);
                   }} 
-                  onSwitchToUserPreview={() => {
-                    if (!isAiStudioDevHost()) return;
-                    setStudioUserPreviewActive(true);
-                    sessionStorage.setItem('amb_session_unlocked', 'true');
-                    setAdminBypassed(true);
-                    setAdminOpen(false);
-                    setIsLocked(false);
-                  }}
                   appConfig={appConfig}
                   onChangeConfig={(newConfig) => {
                     setAppConfig(newConfig);
@@ -2540,8 +2495,6 @@ export default function App() {
                 user={currentUser} 
                 onLogout={handleLogout} 
                 onOpenDrawer={handleOpenDrawer}
-                onTriggerAdmin={handleOpenAdmin}
-                onTriggerBap={() => {}}
                 activeTab={activeTab}
                 setActiveTab={setActiveTab}
                 selectedAction={selectedAction}
@@ -2560,7 +2513,6 @@ export default function App() {
                 onClose={handleCloseDrawer}
                 user={currentUser}
                 onLogout={handleLogout}
-                onOpenAdmin={handleOpenAdmin}
                 onSelectTab={(tab) => { setActiveTab(tab); }}
                 onSelectAction={(actionName) => setSelectedAction(actionName)}
                 onTriggerDemoAuth={() => setShowDemoAuthPrompt(true)}
@@ -2601,23 +2553,6 @@ export default function App() {
                   appLanguage={appLanguage}
                 />
               )}
-
-              {/* AI Studio-Only Floating Return Button when Admin is previewing User Dashboard */}
-              {isStudioPreviewUserMode && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setStudioUserPreviewActive(false);
-                    setAdminOpen(true);
-                    setIsLocked(false);
-                  }}
-                  className="fixed bottom-20 right-3 z-[9999] px-3 py-2 bg-slate-900/95 hover:bg-slate-950 text-amber-300 border border-amber-400/60 rounded-full shadow-2xl text-[11px] font-black flex items-center gap-1.5 backdrop-blur-md cursor-pointer active:scale-95 transition"
-                  title="এডমিন প্যানেলে ফিরে যান (শুধুমাত্র AI Studio প্রিভিউ)"
-                >
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>এডমিন প্যানেলে ফিরুন</span>
-                </button>
-              )}
             </div>
           ) : (isRestoringPaymentSession || (typeof window !== 'undefined' && (window.location.pathname.toLowerCase().includes('/payment') || window.location.search.toLowerCase().includes('status=') || window.location.search.toLowerCase().includes('val_id=')))) ? (
             (() => {
@@ -2635,8 +2570,6 @@ export default function App() {
                       user={restoredUser} 
                       onLogout={handleLogout} 
                       onOpenDrawer={handleOpenDrawer}
-                      onTriggerAdmin={handleOpenAdmin}
-                      onTriggerBap={() => {}}
                       activeTab={activeTab}
                       setActiveTab={setActiveTab}
                       selectedAction={selectedAction}
@@ -2653,7 +2586,6 @@ export default function App() {
                       onClose={handleCloseDrawer}
                       user={restoredUser}
                       onLogout={handleLogout}
-                      onOpenAdmin={handleOpenAdmin}
                       onSelectTab={(tab) => { setActiveTab(tab); }}
                       onSelectAction={(actionName) => setSelectedAction(actionName)}
                       onTriggerDemoAuth={() => setShowDemoAuthPrompt(true)}
@@ -2684,8 +2616,8 @@ export default function App() {
                 </div>
               );
             })()
-          ) : isStandaloneAdminRoute() ? (
-            <div key="standalone-admin-login" className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4 font-sans">
+          ) : isAdminBuildVariant() ? (
+            <div key="standalone-admin-login" className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4 pt-safe pb-safe font-sans">
               <div className="w-full max-w-sm bg-slate-900 border border-emerald-500/30 rounded-3xl shadow-2xl overflow-hidden">
                 <div className="bg-gradient-to-r from-emerald-700 via-teal-700 to-slate-900 p-6 text-center border-b border-emerald-500/20">
                   <div className="w-14 h-14 mx-auto rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center mb-3 shadow-inner">
@@ -2726,7 +2658,10 @@ export default function App() {
                       setStandaloneAdminError('');
                       if (shouldRecordLogin) {
                         ensureAuth()
-                          .then(() => recordAdminLoginSession(finalAdmin))
+                          .then(async (authInfo) => {
+                            await registerServerAdminSession(finalAdmin, verifiedPinVal, authInfo?.uid);
+                            await recordAdminLoginSession(finalAdmin);
+                          })
                           .catch(() => {});
                       }
                     };
@@ -2907,23 +2842,6 @@ export default function App() {
                       <span>⚡ সরাসরি এডমিন প্যানেলে ঢুকুন</span>
                     )}
                   </button>
-                  {!isAdminBuildVariant() && (
-                    <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          localStorage.removeItem('amb_standalone_admin_software');
-                          localStorage.removeItem('amb_admin_mode');
-                          localStorage.removeItem('amb_standalone_admin_user');
-                          sessionStorage.removeItem('amb_admin_active_view');
-                          window.location.href = '/?app=user';
-                        }}
-                        className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer"
-                      >
-                        মেম্বার অ্যাপ প্রিভিউ দেখুন
-                      </button>
-                    </div>
-                  )}
                 </form>
               </div>
             </div>

@@ -1,17 +1,14 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { Clock, ShieldAlert, Settings, Wrench, AlertTriangle } from 'lucide-react';
-import { AppConfig, User } from '../types';
+import { AppConfig } from '../types';
 import { BNBLogo } from './BNBLogo';
 
 interface MaintenanceScreenProps {
   appConfig: AppConfig;
-  currentUser: User | null;
-  onBypassAdmin: () => void;
 }
 
-export default function MaintenanceScreen({ appConfig, currentUser, onBypassAdmin }: MaintenanceScreenProps) {
-  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'sub_admin';
+export default function MaintenanceScreen({ appConfig }: MaintenanceScreenProps) {
 
   return (
     <div 
@@ -157,7 +154,7 @@ export default function MaintenanceScreen({ appConfig, currentUser, onBypassAdmi
         )}
       </div>
 
-      {/* Bottom Section - Footer & Admin Escape Button */}
+      {/* Bottom Section - Footer */}
       <div className="w-full max-w-md pb-8 flex flex-col items-center space-y-4">
         {/* Helper bottom warning */}
         <div className="text-[11.5px] text-slate-300 font-bold max-w-xs leading-normal">

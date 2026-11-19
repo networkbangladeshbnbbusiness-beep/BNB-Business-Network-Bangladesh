@@ -244,7 +244,7 @@ export default function AdminTeamMonitorModal({
   return (
     <AnimatePresence>
       <div className="fixed inset-0 z-[99999] flex flex-col bg-slate-950/75 backdrop-blur-sm">
-        <div className="h-8 shrink-0 bg-[#004a2c] w-full" />
+        <div className="min-h-8 pt-safe shrink-0 bg-[#004a2c] w-full" />
 
         <motion.div
           initial={{ y: '100%' }}

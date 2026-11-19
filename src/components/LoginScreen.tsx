@@ -10,6 +10,7 @@ import { normalizeMemberId, normalizePhoneNumber, saveUserToLocalBackup, convert
 import ForgotPasswordModal from './ForgotPasswordModal';
 import { sendEmailOtpDirect, verifyEmailOtpUniversal } from '../lib/emailOtpService';
 import { apiUrl } from '../config/api';
+import { isStandaloneAdminRoute } from '../lib/adminRoute';
 
 interface LoginScreenProps {
   authUid?: string;
@@ -538,7 +539,7 @@ export default function LoginScreen({
         localStorage.setItem('amb_user_uid', userWithToken.uid);
         localStorage.setItem('amb_user_phone', userWithToken.phone || '');
         localStorage.setItem('amb_user_name', userWithToken.name || 'সদস্য');
-        localStorage.setItem('amb_user_role', userWithToken.role || 'user');
+        localStorage.setItem('amb_user_role', isStandaloneAdminRoute() ? (userWithToken.role || 'user') : 'user');
         localStorage.setItem('bnb_user_member_id', userWithToken.memberId || 'BNB00000000');
         localStorage.setItem('amb_active_session_token', newSessionToken);
         localStorage.setItem('amb_last_user', JSON.stringify(userWithToken));

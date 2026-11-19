@@ -148,9 +148,6 @@ export default function BNBCorporateGuide({
     setFeedbackSuccess(false);
 
     try {
-      // Save feedback in a subcollection or dedicated logs collection
-      const feedbackRef = doc(db, 'system_settings', 'app_config');
-      
       // Let's store user feedback directly in corporate_feedbacks Firestore collection
       const { collection, addDoc } = await import('firebase/firestore');
       const feedbackCollection = collection(db, 'corporate_feedbacks');

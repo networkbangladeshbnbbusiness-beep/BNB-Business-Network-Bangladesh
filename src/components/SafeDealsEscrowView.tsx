@@ -789,9 +789,9 @@ export const SafeDealsEscrowView = React.memo(function SafeDealsEscrowView({
     }
   };
 
-  // Cancel/Refund Transaction (Available to Seller freely OR Admin)
+  // Cancel/Refund Transaction (Available to Seller freely OR Standalone Admin)
   const handleCancelEscrow = (order: any) => {
-    const isAdminActor = liveUser.role === 'admin' || liveUser.role === 'sub_admin' || isStandaloneAdminRoute();
+    const isAdminActor = isStandaloneAdminRoute() && (liveUser.role === 'admin' || liveUser.role === 'sub_admin');
     if (!isAdminActor && !allowSellerCancel) {
       alert("বর্তমানে বিক্রেতা কর্তৃক সরাসরি লেনদেন বাতিল করা বন্ধ রাখা হয়েছে। অনুগ্রহ করে এডমিন সাপোর্টে যোগাযোগ করুন।");
       return;
