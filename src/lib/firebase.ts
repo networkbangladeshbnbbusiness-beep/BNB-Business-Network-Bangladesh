@@ -98,7 +98,6 @@ export async function ensureAuth() {
 // Validate Connection to Firestore on boot as mandated by Firebase Skill
 async function testConnection() {
   try {
-    await ensureAuth().catch(() => {});
     if (db) {
       await getDocFromServer(doc(db, 'system_settings', 'app_config'));
     }
